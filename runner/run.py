@@ -407,10 +407,16 @@ def run_verify(scratch, task_dir):
     return r.returncode == 0
 
 
+# install artifacts written during the run are not model-authored code
+LOC_EXCLUDE = [":(exclude)package-lock.json", ":(exclude)**/package-lock.json",
+               ":(exclude)yarn.lock", ":(exclude)pnpm-lock.yaml"]
+
+
 def loc_changed(scratch):
     subprocess.run(["git", "add", "-A"], cwd=scratch,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    r = subprocess.run(["git", "diff", "--cached", "--shortstat"], cwd=scratch,
+    r = subprocess.run(["git", "diff", "--cached", "--shortstat", "--", "."] + LOC_EXCLUDE,
+                       cwd=scratch,
                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     ins = dele = 0
     m = re.search(r"(\d+) insertion", r.stdout)
@@ -475,6 +481,10 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         cmd = build_cli_cmd(run["model"], run["effort"], prompt)
         out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir)
         tokens_in, tokens_out, turns = parse_usage(run["model"], out)
+        tdir = os.path.join(RUNNER_DIR, "results", "transcripts")
+        os.makedirs(tdir, exist_ok=True)
+        with open(os.path.join(tdir, run["run_id"] + ".txt"), "w") as tf:
+            tf.write(out)
 
     try:
         passed = run_verify(scratch, task_dir)

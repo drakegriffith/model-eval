@@ -6,8 +6,8 @@
 # "WINNING" is resolved from winning_effort[<model>] below (hybrid -> fable).
 
 winning_effort:
-  fable: high        # PLACEHOLDER — set from sweep-1 pass-rate analysis
-  sol: high          # PLACEHOLDER — set from sweep-1 pass-rate analysis
+  fable: medium      # sweep-1: 24/24 at both efforts; medium wins tiebreak (fewer tokens)
+  sol: low           # sweep-1: 24/24 at all three; low wins tiebreak (~half the tokens)
 
 defaults:
   timeout_t1_t2_s: 1200      # 20 min wall-clock for T1/T2 tasks
