@@ -37,6 +37,7 @@ Methodology contract: `ANALYSIS.md`. Repo: `~/code/model-gauntlet` (private).
 - One Fable t3 run hit a transient CLI error (2.3s, 0 tokens) and was re-run; disclosed.
 - Tasks authored by an AI-assisted pipeline; proven solvable but tier difficulty was mis-calibrated low → that IS finding #1.
 - Cost figures use list-price placeholders; not published as dollar claims.
+- **Context-window ("dumb zone") caveat:** practitioner experience (Matt Pocock's heuristic, consistent with published long-context degradation research) holds that model quality degrades past ~100k tokens of context. Fable never approached it (max reported input 19.6k). Sol's CLI reported >100k cumulative input on 65 of 88 runs (median 142k, max 353k) — though codex counts context resends across internal steps, so live context occupancy at any single moment is not observable from our data. If degradation applied, it biases against Sol, which still passed everything — the ceiling finding is unaffected, but cross-model judge-quality comparisons could carry this bias.
 
 ## Next (experiment 2 tease)
 T4 hard tier — increase difficulty until failures appear; that's where the effort

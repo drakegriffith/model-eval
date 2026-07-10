@@ -88,6 +88,8 @@ And when I pulled the raw bills, something weirder: the two vendors don't even *
 
 One more personality note. **[SHOW: split screen — Fable's 7 small commits vs Sol's single one-shot diff]** Claude works like a careful developer: six, seven small steps, checking as it goes. GPT one-shots the whole thing in a single pass. Completely different animals. Same destination.
 
+And one disclosure, because fairness cuts both ways. Engineers who run these models all day — Matt Pocock coined this — talk about the "dumb zone": past roughly 100 thousand tokens of context, models get measurably worse. By its own CLI's count, GPT crossed that line on 65 of its 88 runs. Claude never got near it — it peaked at under 20 thousand. **[SHOW: lower-third — "65/88 Sol runs >100k reported input · Fable max 19.6k"]** If the dumb zone hurt anyone in this experiment, it hurt GPT — and GPT still passed everything. So the tie stands. But when I compare quality scores between them, that asymmetry is on the record.
+
 ## PART 5 — RESULT #3: THE TWIST (6:30–8:15)
 
 For the build-from-scratch project I added two wrinkles.

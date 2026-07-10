@@ -48,4 +48,6 @@ Order rationale: chart 1 backs the headline (both hit ceiling), chart 2 backs th
 
 154 runs, full factorial (model x effort x harness), blocked by task, blind dual-judge (Claude + Codex judges, identities stripped). Stats: Wilson 95% CIs, McNemar exact paired tests, exact permutation tests on tokens. Honesty rule: gaps smaller than the experiment can detect get a confidence interval, not a verdict — n=24/arm only resolves differences of ~37pp or more.
 
+One disclosed asymmetry: 65 of 88 GPT runs reported >100k cumulative input tokens (the "dumb zone" where long-context degradation kicks in, per Matt Pocock's heuristic); Claude peaked at 19.6k. That bias runs against GPT — which still passed everything — so the tie stands, but quality-score comparisons carry the caveat.
+
 **Character count: 372**
