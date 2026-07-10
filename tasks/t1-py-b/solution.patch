@@ -1,0 +1,18 @@
+diff --git a/src/sessions/store.py b/src/sessions/store.py
+index 1560635..4280f2b 100644
+--- a/src/sessions/store.py
++++ b/src/sessions/store.py
+@@ -74,12 +74,7 @@ class SessionStore:
+         session = self.get(session_id)
+         if session.revoked:
+             return True
+-        # BUG: falls back to a naive UTC timestamp instead of an
+-        # aware one. Comparing a naive datetime against the store's
+-        # timezone-aware `expires_at` raises TypeError ("can't compare
+-        # offset-naive and offset-aware datetimes") instead of returning
+-        # a boolean.
+-        current = now if now is not None else datetime.utcnow()
++        current = now if now is not None else self._current_time()
+         return current > session.expires_at
+ 
+     def renew(

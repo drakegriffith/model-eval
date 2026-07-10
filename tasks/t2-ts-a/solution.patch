@@ -1,0 +1,79 @@
+diff --git a/src/eventBus.ts b/src/eventBus.ts
+index a10edcf..9dba7b6 100644
+--- a/src/eventBus.ts
++++ b/src/eventBus.ts
+@@ -6,24 +6,69 @@
+  * `Events` maps event names to the payload type delivered for that event,
+  * so `on`/`off`/`emit` are all checked against the same contract at the
+  * call site.
++ *
++ * Two additional subscription modes layer on top of the base contract:
++ *  - `once(event, handler)` — like `on`, but auto-unsubscribes after the
++ *    handler fires for the first time.
++ *  - `on('*', handler)` — a wildcard subscription that receives every
++ *    emitted event (of any real name) as `{ event, payload }`, fired after
++ *    that event's specific handlers.
+  */
+ 
+ export type Handler<T> = (payload: T) => void;
+ 
++/** The payload delivered to a wildcard ('*') handler for any given emit. */
++export type WildcardEvent<Events> = {
++  [K in keyof Events]: { event: K; payload: Events[K] };
++}[keyof Events];
++
++const WILDCARD = "*" as const;
++
+ export class EventBus<Events extends Record<string, unknown>> {
+   private handlers = new Map<keyof Events, Set<Handler<any>>>();
++  private wildcardHandlers = new Set<Handler<WildcardEvent<Events>>>();
++
++  on<K extends keyof Events>(event: K, handler: Handler<Events[K]>): void;
++  on(event: typeof WILDCARD, handler: Handler<WildcardEvent<Events>>): void;
++  on(event: keyof Events | typeof WILDCARD, handler: Handler<any>): void {
++    if (event === WILDCARD) {
++      this.wildcardHandlers.add(handler);
++      return;
++    }
++    const key = event as keyof Events;
++    if (!this.handlers.has(key)) this.handlers.set(key, new Set());
++    this.handlers.get(key)!.add(handler);
++  }
+ 
+-  on<K extends keyof Events>(event: K, handler: Handler<Events[K]>): void {
+-    if (!this.handlers.has(event)) this.handlers.set(event, new Set());
+-    this.handlers.get(event)!.add(handler);
++  off<K extends keyof Events>(event: K, handler: Handler<Events[K]>): void;
++  off(event: typeof WILDCARD, handler: Handler<WildcardEvent<Events>>): void;
++  off(event: keyof Events | typeof WILDCARD, handler: Handler<any>): void {
++    if (event === WILDCARD) {
++      this.wildcardHandlers.delete(handler);
++      return;
++    }
++    this.handlers.get(event as keyof Events)?.delete(handler);
+   }
+ 
+-  off<K extends keyof Events>(event: K, handler: Handler<Events[K]>): void {
+-    this.handlers.get(event)?.delete(handler);
++  /**
++   * Subscribes `handler` like `on`, but unsubscribes it (via the equivalent
++   * of `off`) immediately after it fires for the first time. Implemented by
++   * composition on top of `on`/`off` — no separate storage — so
++   * `listenerCount` still reflects a pending `once` subscription.
++   */
++  once<K extends keyof Events>(event: K, handler: Handler<Events[K]>): void;
++  once(event: typeof WILDCARD, handler: Handler<WildcardEvent<Events>>): void;
++  once(event: keyof Events | typeof WILDCARD, handler: Handler<any>): void {
++    const wrapped: Handler<any> = (payload) => {
++      this.off(event as any, wrapped as any);
++      handler(payload);
++    };
++    this.on(event as any, wrapped as any);
+   }
+ 
+   emit<K extends keyof Events>(event: K, payload: Events[K]): void {
+     this.handlers.get(event)?.forEach((h) => h(payload));
++    this.wildcardHandlers.forEach((h) => h({ event, payload } as WildcardEvent<Events>));
+   }
+ 
+   listenerCount<K extends keyof Events>(event: K): number {

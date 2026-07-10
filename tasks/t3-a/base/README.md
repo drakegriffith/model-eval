@@ -1,0 +1,1 @@
+This is a greenfield task: build the `splitcost` CLI from scratch as described in `../PROMPT.md` (the spec lives one directory up, alongside this scaffold) — there is no starter code here on purpose, so read the spec carefully and implement the full command-line contract yourself.

@@ -1,0 +1,207 @@
+diff --git a/cli.py b/cli.py
+new file mode 100644
+index 0000000..531f7bf
+--- /dev/null
++++ b/cli.py
+@@ -0,0 +1,201 @@
++#!/usr/bin/env python3
++"""splitcost — a group expense splitter CLI.
++
++Usage:
++    python3 cli.py balances <expenses.json> [--json]
++    python3 cli.py settle <expenses.json> [--json]
++
++See PROMPT.md (one directory up from this scaffold) for the full spec.
++"""
++
++import json
++import sys
++
++USAGE = "usage: cli.py <balances|settle> <expenses.json> [--json]"
++
++
++class CliError(Exception):
++    """Raised for any user-facing error; message is printed to stderr."""
++
++
++def format_amount(cents, signed=False):
++    """Format an integer-cent amount as a dollar string, e.g. +$18.00."""
++    sign = ""
++    if signed:
++        if cents > 0:
++            sign = "+"
++        elif cents < 0:
++            sign = "-"
++    abs_cents = abs(cents)
++    dollars = abs_cents // 100
++    remainder = abs_cents % 100
++    return f"{sign}${dollars}.{remainder:02d}"
++
++
++def load_expenses(path):
++    try:
++        with open(path, "r", encoding="utf-8") as f:
++            text = f.read()
++    except OSError as exc:
++        raise CliError(f"cannot read input file '{path}': {exc}") from exc
++
++    try:
++        data = json.loads(text)
++    except json.JSONDecodeError as exc:
++        raise CliError(f"malformed JSON in '{path}': {exc}") from exc
++
++    if not isinstance(data, dict) or "people" not in data or "expenses" not in data:
++        raise CliError(
++            f"malformed input in '{path}': expected an object with "
++            "'people' and 'expenses' keys"
++        )
++
++    people = data["people"]
++    expenses = data["expenses"]
++    if not isinstance(people, list) or not isinstance(expenses, list):
++        raise CliError(
++            f"malformed input in '{path}': 'people' and 'expenses' must be arrays"
++        )
++
++    return data
++
++
++def compute_balances(data):
++    people = data["people"]
++    people_set = set(people)
++    balances = {name: 0 for name in people}
++
++    for expense in data["expenses"]:
++        try:
++            payer = expense["payer"]
++            amount = expense["amountCents"]
++            participants = expense["participants"]
++        except (KeyError, TypeError) as exc:
++            raise CliError(
++                "malformed expense record: missing 'payer', 'amountCents', "
++                "or 'participants'"
++            ) from exc
++
++        if payer not in people_set:
++            raise CliError(
++                f"unknown participant referenced: payer '{payer}' is not in 'people'"
++            )
++
++        if not isinstance(amount, int) or isinstance(amount, bool):
++            raise CliError(f"invalid amountCents: {amount!r} is not an integer")
++        if amount < 0:
++            raise CliError(f"invalid amountCents: {amount} is negative")
++
++        if not isinstance(participants, list) or len(participants) == 0:
++            raise CliError(
++                "invalid expense: 'participants' must be a non-empty array"
++            )
++
++        for participant in participants:
++            if participant not in people_set:
++                raise CliError(
++                    f"unknown participant referenced: '{participant}' is not in 'people'"
++                )
++
++        count = len(participants)
++        base_share = amount // count
++        remainder = amount % count
++
++        balances[payer] += amount
++        for index, participant in enumerate(participants):
++            share = base_share + (1 if index < remainder else 0)
++            balances[participant] -= share
++
++    return balances
++
++
++def compute_settlements(balances):
++    """Greedy largest-debtor-vs-largest-creditor matching.
++
++    Returns a list of (debtor, creditor, amountCents) tuples in the order
++    they were matched (caller is responsible for sorting for display).
++    """
++    creditors = {name: bal for name, bal in balances.items() if bal > 0}
++    debtors = {name: -bal for name, bal in balances.items() if bal < 0}
++
++    transactions = []
++    while creditors and debtors:
++        creditor_name = min(creditors, key=lambda n: (-creditors[n], n))
++        debtor_name = min(debtors, key=lambda n: (-debtors[n], n))
++
++        amount = min(creditors[creditor_name], debtors[debtor_name])
++        transactions.append((debtor_name, creditor_name, amount))
++
++        creditors[creditor_name] -= amount
++        debtors[debtor_name] -= amount
++        if creditors[creditor_name] == 0:
++            del creditors[creditor_name]
++        if debtors[debtor_name] == 0:
++            del debtors[debtor_name]
++
++    return transactions
++
++
++def run_balances(data, json_mode):
++    balances = compute_balances(data)
++    people = data["people"]
++    if json_mode:
++        print(json.dumps({name: balances[name] for name in people}))
++    else:
++        for name in people:
++            print(f"{name}: {format_amount(balances[name], signed=True)}")
++    return 0
++
++
++def run_settle(data, json_mode):
++    balances = compute_balances(data)
++    transactions = compute_settlements(balances)
++    transactions.sort(key=lambda t: (t[0], t[1]))
++    if json_mode:
++        payload = [
++            {"from": debtor, "to": creditor, "amountCents": amount}
++            for debtor, creditor, amount in transactions
++        ]
++        print(json.dumps(payload))
++    else:
++        for debtor, creditor, amount in transactions:
++            print(f"{debtor} pays {creditor} {format_amount(amount)}")
++    return 0
++
++
++def main(argv):
++    if not argv:
++        print(USAGE, file=sys.stderr)
++        return 1
++
++    command = argv[0]
++    if command not in ("balances", "settle"):
++        print(f"unknown command: '{command}'\n{USAGE}", file=sys.stderr)
++        return 1
++
++    json_mode = False
++    positional = []
++    for arg in argv[1:]:
++        if arg == "--json":
++            json_mode = True
++        else:
++            positional.append(arg)
++
++    if not positional:
++        print(USAGE, file=sys.stderr)
++        return 1
++
++    path = positional[0]
++
++    try:
++        data = load_expenses(path)
++        if command == "balances":
++            return run_balances(data, json_mode)
++        return run_settle(data, json_mode)
++    except CliError as exc:
++        print(str(exc), file=sys.stderr)
++        return 1
++
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv[1:]))

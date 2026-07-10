@@ -1,0 +1,114 @@
+diff --git a/src/jobqueue/queue.py b/src/jobqueue/queue.py
+index 618aaaa..a886580 100644
+--- a/src/jobqueue/queue.py
++++ b/src/jobqueue/queue.py
+@@ -5,6 +5,18 @@ priority order, ties broken FIFO by enqueue order. Callers advance a job
+ through its lifecycle explicitly via `mark_done` / `mark_failed`; a popped
+ job's `status` stays "pending" until one of those is called — there is no
+ implicit "in_progress" state in this queue.
++
++Failed jobs are retried automatically with exponential backoff:
++`mark_failed` increments `attempts` and, while `attempts <= max_retries`,
++re-enqueues the job with a `ready_at` timestamp
++(`now + backoff_base_s * 2 ** (attempts - 1)`) that withholds it from
++`dequeue()` until the caller's clock reaches it. Once a job's attempts
++exceed `max_retries` it is moved into `dead_letters()` instead of the
++pending pool.
++
++There is no real wall-clock read or `time.sleep` anywhere in this module —
++all timing is driven by the optional `now: float` parameter callers pass to
++`dequeue()` / `mark_failed()`.
+ """
+ from __future__ import annotations
+ 
+@@ -20,33 +32,55 @@ class Job:
+     priority: int
+     attempts: int = 0
+     status: str = "pending"
++    ready_at: Optional[float] = None
+ 
+ 
+ class JobQueue:
+-    """A small in-memory priority job queue.
++    """A small in-memory priority job queue with retry + dead-letter support.
+ 
+     `dequeue()` pops the highest-priority pending job (ties broken FIFO by
+     enqueue order) and removes it from the pending pool; it stays reachable
+     via `get()`. `mark_done` / `mark_failed` update the job's terminal
+-    status; `mark_failed` does not requeue the job.
++    status.
++
++    `dequeue(now=...)` only considers jobs whose `ready_at` is `None` or
++    `<= now` eligible. `dequeue()` with no `now` (the default, `None`)
++    ignores `ready_at` entirely and behaves exactly as the base queue did,
++    for backward compatibility.
++
++    `mark_failed(job_id, now=...)` increments `attempts`; while
++    `attempts <= max_retries` the job is set back to `"pending"` with a
++    `ready_at` computed from `now` plus an exponential backoff delay and
++    re-added to the pending pool. Once `attempts` exceeds `max_retries` the
++    job is marked `"dead"` and moved into `dead_letters()` instead.
+     """
+ 
+-    def __init__(self):
++    def __init__(self, max_retries: int = 3, backoff_base_s: float = 1.0):
++        self.max_retries = max_retries
++        self.backoff_base_s = backoff_base_s
+         self._jobs: Dict[str, Job] = {}
+         self._pending_ids: List[str] = []
+         self._seq: Dict[str, int] = {}
+         self._counter = itertools.count()
++        self._dead_letters: List[Job] = []
+ 
+     def enqueue(self, job: Job) -> None:
+         self._jobs[job.id] = job
+         self._pending_ids.append(job.id)
+         self._seq[job.id] = next(self._counter)
+ 
+-    def dequeue(self) -> Optional[Job]:
+-        if not self._pending_ids:
++    def dequeue(self, now: Optional[float] = None) -> Optional[Job]:
++        eligible = [
++            jid
++            for jid in self._pending_ids
++            if now is None
++            or self._jobs[jid].ready_at is None
++            or self._jobs[jid].ready_at <= now
++        ]
++        if not eligible:
+             return None
+         best_id = max(
+-            self._pending_ids,
++            eligible,
+             key=lambda jid: (self._jobs[jid].priority, -self._seq[jid]),
+         )
+         self._pending_ids.remove(best_id)
+@@ -55,11 +89,26 @@ class JobQueue:
+     def mark_done(self, job_id: str) -> None:
+         self._jobs[job_id].status = "done"
+ 
+-    def mark_failed(self, job_id: str) -> None:
+-        self._jobs[job_id].status = "failed"
++    def mark_failed(self, job_id: str, now: Optional[float] = None) -> None:
++        job = self._jobs[job_id]
++        job.attempts += 1
++        if job.attempts <= self.max_retries:
++            base_now = now if now is not None else 0.0
++            delay = self.backoff_base_s * (2 ** (job.attempts - 1))
++            job.ready_at = base_now + delay
++            job.status = "pending"
++            self._seq[job.id] = next(self._counter)
++            self._pending_ids.append(job.id)
++        else:
++            job.status = "dead"
++            job.ready_at = None
++            self._dead_letters.append(job)
+ 
+     def pending_count(self) -> int:
+         return len(self._pending_ids)
+ 
+     def get(self, job_id: str) -> Optional[Job]:
+         return self._jobs.get(job_id)
++
++    def dead_letters(self) -> List[Job]:
++        return list(self._dead_letters)

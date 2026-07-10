@@ -1,0 +1,15 @@
+diff --git a/src/dedup.ts b/src/dedup.ts
+index 44fd644..1217a34 100644
+--- a/src/dedup.ts
++++ b/src/dedup.ts
+@@ -16,10 +16,6 @@ export class Deduplicator<T> {
+       return existing;
+     }
+ 
+-    // Simulate acquiring a coalescing slot before committing to run the
+-    // operation.
+-    await Promise.resolve();
+-
+     const promise = op().finally(() => {
+       this.inFlight.delete(key);
+     });

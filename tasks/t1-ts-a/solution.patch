@@ -1,0 +1,18 @@
+diff --git a/src/priceCache.ts b/src/priceCache.ts
+index 751d5de..60fbb6a 100644
+--- a/src/priceCache.ts
++++ b/src/priceCache.ts
+@@ -17,12 +17,7 @@ export interface CacheStats {
+ }
+ 
+ function cacheKey(productId: string, region: string): string {
+-  // BUG: the region is dropped from the cache key. Two different
+-  // regions for the same product collide on the same entry, so
+-  // switching regions returns a stale price from whichever region
+-  // happened to be fetched first instead of invalidating and
+-  // re-fetching.
+-  return productId;
++  return `${productId}:${region}`;
+ }
+ 
+ export class PriceCache {

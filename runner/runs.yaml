@@ -1,0 +1,55 @@
+# runs.yaml — the model-gauntlet experiment matrix.
+# Parsed by run.py's small stdlib YAML reader (subset: block maps/seqs, flow
+# {..}/[..], scalars). Keep it in that subset.
+#
+# WINNING_EFFORT: set after sweep 1 is analysed. Any config effort literal
+# "WINNING" is resolved from winning_effort[<model>] below (hybrid -> fable).
+
+winning_effort:
+  fable: high        # PLACEHOLDER — set from sweep-1 pass-rate analysis
+  sol: high          # PLACEHOLDER — set from sweep-1 pass-rate analysis
+
+defaults:
+  timeout_t1_t2_s: 1200      # 20 min wall-clock for T1/T2 tasks
+  timeout_t3_s: 3600         # 60 min wall-clock for T3 tasks
+  seed: 1337                 # deterministic task-shuffle seed for interleaving
+
+sweeps:
+  # sweep 1: bare (no harness), effort sweep, T1 + T2, reps 1-3.
+  - name: sweep1
+    harness: false
+    reps: [1, 2, 3]
+    tasks: [t1-py-a, t1-py-b, t1-ts-a, t1-ts-b, t2-py-a, t2-py-b, t2-ts-a, t2-ts-b]
+    configs:
+      - {model: fable, effort: high}
+      - {model: fable, effort: medium}
+      - {model: sol, effort: high}
+      - {model: sol, effort: medium}
+      - {model: sol, effort: low}
+
+  # sweep 2a: harness ON, winning effort, T2 only, reps 1-3.
+  - name: sweep2a
+    harness: true
+    reps: [1, 2, 3]
+    tasks: [t2-py-a, t2-py-b, t2-ts-a, t2-ts-b]
+    configs:
+      - {model: fable, effort: WINNING}
+      - {model: sol, effort: WINNING}
+
+  # sweep 2b: the hard T3 task, both models, bare vs harness, reps 1-2.
+  - name: sweep2b
+    harness_matrix: [false, true]
+    reps: [1, 2]
+    tasks: [t3-a]
+    configs:
+      - {model: fable, effort: WINNING}
+      - {model: sol, effort: WINNING}
+
+  # sweep 2c: hybrid — fable orchestrator delegates implementation to `codex exec`.
+  - name: sweep2c
+    harness: true
+    mode: hybrid
+    reps: [1, 2]
+    tasks: [t3-a]
+    configs:
+      - {model: hybrid, effort: WINNING}

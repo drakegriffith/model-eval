@@ -1,0 +1,18 @@
+diff --git a/src/catalog/paginate.py b/src/catalog/paginate.py
+index 52474ab..33a78e8 100644
+--- a/src/catalog/paginate.py
++++ b/src/catalog/paginate.py
+@@ -104,10 +104,9 @@ class Catalog:
+         source = self._items if items is None else items
+         total_items = len(source)
+ 
+-        # BUG: floor division drops a trailing partial page. If total_items
+-        # is not an exact multiple of page_size, the last (partial) page
+-        # becomes unreachable and its items silently vanish from pagination.
+-        total_pages = total_items // page_size
++        # Ceiling division: a trailing partial page must still count as a
++        # full, reachable page.
++        total_pages = (total_items + page_size - 1) // page_size
+ 
+         start = (page_number - 1) * page_size
+         end = start + page_size

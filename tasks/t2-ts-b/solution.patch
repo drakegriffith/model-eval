@@ -1,0 +1,92 @@
+diff --git a/src/cart.ts b/src/cart.ts
+index 68bf047..bd5aa0a 100644
+--- a/src/cart.ts
++++ b/src/cart.ts
+@@ -9,28 +9,84 @@ export interface LineItem {
+   quantity: number;
+ }
+ 
++// A bulk quantity discount: at `quantity >= minQuantity`, `offFraction` is
++// taken off that line (e.g. { minQuantity: 5, offFraction: 0.10 } == 10%
++// off once 5 or more units are in the cart for that product).
++export interface DiscountTier {
++  minQuantity: number;
++  offFraction: number;
++}
++
++// Rounds a non-negative number half-up to the nearest integer, e.g.
++// 4495.5 -> 4496 (not 4495 as a plain floor/truncation would give).
++function roundHalfUp(x: number): number {
++  return Math.floor(x + 0.5);
++}
++
++// Picks the single best-matching tier for a given quantity: the highest
++// minQuantity tier whose minQuantity <= quantity. Tiers are never
++// stacked/combined. Returns undefined if no tier qualifies.
++function bestTier(tiers: DiscountTier[], quantity: number): DiscountTier | undefined {
++  let best: DiscountTier | undefined;
++  for (const tier of tiers) {
++    if (tier.minQuantity <= quantity) {
++      if (!best || tier.minQuantity > best.minQuantity) {
++        best = tier;
++      }
++    }
++  }
++  return best;
++}
++
+ export class Cart {
+   private items = new Map<string, LineItem>();
++  private tiers = new Map<string, DiscountTier[]>();
+ 
+-  addItem(productId: string, unitPriceCents: number, quantity: number): void {
++  addItem(
++    productId: string,
++    unitPriceCents: number,
++    quantity: number,
++    discountTiers: DiscountTier[] = []
++  ): void {
+     const existing = this.items.get(productId);
+     if (existing) {
+       existing.quantity += quantity;
+     } else {
+       this.items.set(productId, { productId, unitPriceCents, quantity });
+     }
++    // Last-call-wins: whatever discountTiers this call passed (including
++    // the default empty array) replaces the line's tiers.
++    this.tiers.set(productId, discountTiers);
+   }
+ 
+   removeItem(productId: string): void {
+     this.items.delete(productId);
++    this.tiers.delete(productId);
+   }
+ 
+   lineItems(): LineItem[] {
+     return Array.from(this.items.values());
+   }
+ 
+-  // Sum of unitPriceCents * quantity across all line items, in cents.
++  // That line's total after applying the single best-matching discount
++  // tier (highest qualifying minQuantity), rounded half-up. With no
++  // qualifying tier this equals the flat unitPriceCents * quantity.
++  lineTotalCents(productId: string): number {
++    const item = this.items.get(productId);
++    if (!item) {
++      return 0;
++    }
++    const flat = item.unitPriceCents * item.quantity;
++    const tier = bestTier(this.tiers.get(productId) ?? [], item.quantity);
++    if (!tier) {
++      return flat;
++    }
++    return roundHalfUp(flat * (1 - tier.offFraction));
++  }
++
++  // Sum of each line's lineTotalCents() (i.e. post-discount) across all
++  // line items, in cents.
+   subtotalCents(): number {
+-    return this.lineItems().reduce((sum, li) => sum + li.unitPriceCents * li.quantity, 0);
++    return this.lineItems().reduce((sum, li) => sum + this.lineTotalCents(li.productId), 0);
+   }
+ }

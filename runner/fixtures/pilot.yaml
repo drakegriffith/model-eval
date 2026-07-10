@@ -1,0 +1,28 @@
+# pilot.yaml — mock pilot matrix for the model-gauntlet self-test.
+# Exercises the whole runner/judge/table pipeline against runner/fixtures/mock-task
+# WITHOUT spending any tokens (always driven by run.py --mock). Parsed by the same
+# stdlib YAML subset reader as runs.yaml (block maps/seqs, flow {..}/[..], scalars).
+#
+# Shape: 3 reps x 1 task x {bare,harness} x 4 configs = 24 matrix cells, covering
+# an effort ladder (fable high/med, sol med/low), a harness delta, and rep variance.
+
+defaults:
+  seed: 1337
+  timeout_t1_t2_s: 60
+  timeout_t3_s: 120
+
+winning_effort:
+  fable: high
+  sol: medium
+
+sweeps:
+  - name: pilot
+    mode: solo
+    tasks: [mock-task]
+    reps: [1, 2, 3]
+    harness_matrix: [false, true]
+    configs:
+      - {model: fable, effort: high}
+      - {model: fable, effort: medium}
+      - {model: sol, effort: medium}
+      - {model: sol, effort: low}

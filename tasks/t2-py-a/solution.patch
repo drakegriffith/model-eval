@@ -1,0 +1,85 @@
+diff --git a/src/validation/__init__.py b/src/validation/__init__.py
+index 6bb1ecd..af5cbce 100644
+--- a/src/validation/__init__.py
++++ b/src/validation/__init__.py
+@@ -1,3 +1,17 @@
+-from .core import Field, Schema, ValidationResult, validate_record
++from .core import (
++    Field,
++    Schema,
++    ValidationResult,
++    validate_batch,
++    validate_record,
++    validate_record_all,
++)
+ 
+-__all__ = ["Field", "Schema", "ValidationResult", "validate_record"]
++__all__ = [
++    "Field",
++    "Schema",
++    "ValidationResult",
++    "validate_batch",
++    "validate_record",
++    "validate_record_all",
++]
+diff --git a/src/validation/core.py b/src/validation/core.py
+index 0c4e98a..a9f8b04 100644
+--- a/src/validation/core.py
++++ b/src/validation/core.py
+@@ -79,3 +79,56 @@ def validate_record(record: Dict[str, Any], schema: Schema) -> ValidationResult:
+         if error is not None:
+             return ValidationResult(is_valid=False, errors=[error])
+     return ValidationResult(is_valid=True, errors=[])
++
++
++def validate_record_all(record: Dict[str, Any], schema: Schema) -> ValidationResult:
++    """Validate ``record`` against ``schema``, collecting every field error.
++
++    Unlike ``validate_record`` this does not stop at the first invalid
++    field — every field in ``schema`` (in schema order) is checked and every
++    resulting error is appended to ``.errors``.
++    """
++    errors: List[str] = []
++    for f in schema:
++        error = _field_error(f, record)
++        if error is not None:
++            errors.append(error)
++    return ValidationResult(is_valid=len(errors) == 0, errors=errors)
++
++
++def validate_batch(
++    records: List[Dict[str, Any]],
++    schema: Schema,
++    unique_fields: Optional[List[str]] = None,
++) -> List[ValidationResult]:
++    """Validate every record in ``records`` and flag cross-record duplicates.
++
++    Each record is checked independently with ``validate_record_all``. Then,
++    for every field name in ``unique_fields``, any value shared by two or
++    more records gets a duplicate-value error appended to the
++    ``ValidationResult`` of EVERY record involved in the collision (not just
++    the second occurrence). Missing/``None`` values are never treated as
++    duplicates of each other. Neither ``records`` nor its dicts are mutated.
++    """
++    if unique_fields is None:
++        unique_fields = []
++
++    results = [validate_record_all(dict(record), schema) for record in records]
++
++    for field_name in unique_fields:
++        indexes_by_value: Dict[Any, List[int]] = {}
++        for idx, record in enumerate(records):
++            if field_name not in record or record[field_name] is None:
++                continue
++            value = record[field_name]
++            indexes_by_value.setdefault(value, []).append(idx)
++
++        for value, indexes in indexes_by_value.items():
++            if len(indexes) < 2:
++                continue
++            message = f"duplicate value for '{field_name}': {value!r}"
++            for idx in indexes:
++                results[idx].errors.append(message)
++                results[idx].is_valid = False
++
++    return results
