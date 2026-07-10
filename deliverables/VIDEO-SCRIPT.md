@@ -132,7 +132,7 @@ I ran 154 controlled runs pitting Claude (Fable 5) against OpenAI's GPT (5.6 "So
 
 Result: a perfect 100% tie — and that's the finding. Benchmark saturation, a "think harder" dial that only raises the bill, vendors that can't agree on how to count a token, and one genuinely unreliable configuration: AI managing AI.
 
-📄 Full technical report + statistical appendix: [LINK]
+📄 Full technical report + statistical appendix: https://actualintelligencelabs.ai/research/claude-vs-gpt-154-run-experiment
 🧵 Chapters:
 0:00 Both models got a perfect score
 0:35 Why one-prompt comparisons are broken
