@@ -111,6 +111,8 @@ This section is the credibility, so I am going to be blunt about what this exper
 - **Cost figures use list-price placeholders.** I am not publishing dollar claims off vendor-incomparable token counts.
 - **One model may have operated in the "dumb zone."** Practitioners who run these models at scale — Matt Pocock has been the loudest on this — observe that output quality degrades once context grows past roughly 100k tokens, a pattern consistent with published long-context research ([Liu et al., 2024](https://arxiv.org/abs/2307.03172)). By its own CLI's accounting, GPT-5.6 exceeded 100k cumulative input tokens on 65 of its 88 runs (median 142k, max 353k); Claude peaked at 19.6k. Two honest qualifiers: codex counts context resends across internal steps, so live context occupancy at any moment is not observable from our data; and the bias runs *against* GPT, which passed everything anyway. The tie is therefore safe, but the blind-judge quality comparisons carry this asymmetry, and it is on the record.
 
+**[Download the full technical report (PDF)](https://actualintelligencelabs.ai/assets/docs/claude-vs-gpt-154-run-experiment-technical-report.pdf)** — the complete experimental design, every typeset formula (Wilson intervals, McNemar exact tests, the sign-flip permutation test, the power derivation), all tables and figures, and the limitations, in one document.
+
 ## What's next
 
 The most useful result of a ceiling is that it tells you exactly where to point the next experiment. Both models beat this tier, so the tier was too easy, so the tier goes up.
