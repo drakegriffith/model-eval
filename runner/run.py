@@ -29,6 +29,39 @@ from datetime import datetime, timezone
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # ~/code/model-gauntlet
 RUNNER_DIR = os.path.join(ROOT, "runner")
 
+# --- Kimi K3 (Moonshot) ---------------------------------------------------- #
+# K3 has no native agent CLI; we drive it through Codex's OpenAI-compatible
+# provider path. Its API key lives in a gitignored secrets file in the vault and
+# is read here at runtime only — never hard-coded, echoed, or committed.
+KIMI_KEY_FILE = os.path.expanduser("~/brain-actual-intelligence/.secrets/kimi.env")
+# Codex 0.144 only speaks the Responses API, which Moonshot doesn't serve; instead
+# we drive K3 through Claude Code against Moonshot's Anthropic-compatible endpoint.
+MOONSHOT_ANTHROPIC_URL = "https://api.moonshot.ai/anthropic"
+# List-price $/1M tokens. Cache-miss input is $3; cache-hit is $0.30. We charge
+# the cap at the conservative cache-miss rate.
+KIMI_PRICE_IN = 3.0
+KIMI_PRICE_OUT = 15.0
+
+
+def load_kimi_key():
+    """Return MOONSHOT_API_KEY from the gitignored secrets file, or None.
+
+    The value is never logged; callers inject it into a subprocess env only.
+    """
+    try:
+        with open(KIMI_KEY_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("MOONSHOT_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except FileNotFoundError:
+        return None
+    return None
+
+
+def kimi_dollars(tokens_in, tokens_out):
+    return tokens_in / 1e6 * KIMI_PRICE_IN + tokens_out / 1e6 * KIMI_PRICE_OUT
+
 DONE_GATE_SENTENCE = (
     "\n\n---\nYour work is judged solely by running `bash verify.sh` from the "
     "repository root; it must exit 0. Run it yourself and confirm a clean exit "
@@ -309,14 +342,29 @@ def build_cli_cmd(model, effort, prompt):
                 "--dangerously-bypass-approvals-and-sandbox",
                 "-m", "gpt-5.6-sol",
                 "-c", f"model_reasoning_effort={effort}", prompt]
+    if model == "kimi":
+        # Kimi K3 via Claude Code against Moonshot's Anthropic-compatible endpoint
+        # (base_url + key injected in run_cli). K3 always reasons and only supports
+        # effort "max", so no --effort flag. Same agent scaffold as fable => the
+        # fable-vs-kimi arm isolates the model cleanly.
+        return ["claude", "-p", prompt, "--output-format", "json",
+                "--model", "kimi-k3", "--dangerously-skip-permissions"]
     raise ValueError(f"unknown model {model}")
 
 
-def run_cli(cmd, scratch, timeout_s, task_dir):
+def run_cli(cmd, scratch, timeout_s, task_dir, model=None):
     """Run headlessly, killing the process group on timeout. Returns (out, reason, wall)."""
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)   # subscription auth only
     env.pop("OPENAI_API_KEY", None)
+    if model == "kimi":
+        key = load_kimi_key()
+        if not key:
+            return "", "kimi_key_missing", 0.0
+        # Point Claude Code at Moonshot's Anthropic-compatible endpoint for this run.
+        env["ANTHROPIC_BASE_URL"] = MOONSHOT_ANTHROPIC_URL
+        env["ANTHROPIC_API_KEY"] = key
+        env["ANTHROPIC_AUTH_TOKEN"] = key   # some Claude Code versions read this
     # verify.sh is copied into scratch; tasks whose test assets live beside the
     # canonical script (t3) resolve them through this instead of dirname $0
     env["GAUNTLET_TASK_DIR"] = os.path.abspath(task_dir)
@@ -343,7 +391,7 @@ def run_cli(cmd, scratch, timeout_s, task_dir):
 def parse_usage(model, out):
     """Return (tokens_in, tokens_out, turns) parsed from CLI JSON output."""
     ti = to = turns = 0
-    if model in ("fable", "hybrid"):
+    if model in ("fable", "hybrid", "kimi"):  # all go through claude -p --output-format json
         obj = None
         for line in reversed([l for l in out.splitlines() if l.strip()]):
             try:
@@ -479,7 +527,7 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     else:
         prompt = compose_prompt(task_dir, run["harness"], run["mode"])
         cmd = build_cli_cmd(run["model"], run["effort"], prompt)
-        out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir)
+        out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir, run["model"])
         tokens_in, tokens_out, turns = parse_usage(run["model"], out)
         tdir = os.path.join(RUNNER_DIR, "results", "transcripts")
         os.makedirs(tdir, exist_ok=True)
@@ -513,6 +561,9 @@ def main():
     ap.add_argument("--only", default=None, help="substring filter on run_id")
     ap.add_argument("--limit", type=int, default=None,
                     help="execute at most N pending runs this invocation (resume-friendly)")
+    ap.add_argument("--max-usd", type=float, default=None,
+                    help="hard cap on cumulative Kimi (real-money) spend; skip further "
+                         "kimi runs once reached. Fable/Sol are subscription ($0).")
     ap.add_argument("--mock", action="store_true",
                     help="mock pass: apply solution.patch instead of calling a CLI (no tokens)")
     ap.add_argument("--mock-fail", action="store_true",
@@ -548,12 +599,22 @@ def main():
             print(f"  [{mark}] {r['run_id']}  (mode={r['mode']})")
         return
 
+    kimi_spent = 0.0
     for i, r in enumerate(pending, 1):
+        if r["model"] == "kimi" and args.max_usd is not None and kimi_spent >= args.max_usd:
+            print(f"    [cap] kimi spend ${kimi_spent:.2f} >= --max-usd "
+                  f"${args.max_usd:.2f}; skipping {r['run_id']}", flush=True)
+            continue
         print(f"[{i}/{len(pending)}] {r['run_id']} ...", flush=True)
         row = execute_run(r, cfg, args.tasks_dir, args.scratch, args.results)
+        cost_note = ""
+        if r["model"] == "kimi":
+            kimi_spent += kimi_dollars(row["tokens_in"], row["tokens_out"])
+            cap = f"/{args.max_usd:.2f}" if args.max_usd is not None else ""
+            cost_note = f" kimi_spend=${kimi_spent:.3f}{cap}"
         print(f"    pass={row['pass']} reason={row['exit_reason']} "
               f"tok_in={row['tokens_in']} tok_out={row['tokens_out']} "
-              f"wall={row['wall_s']}s turns={row['turns']} loc={row['loc_changed']}",
+              f"wall={row['wall_s']}s turns={row['turns']} loc={row['loc_changed']}{cost_note}",
               flush=True)
 
 

@@ -1,0 +1,42 @@
+# Kimi K3 paper-grade slice. Mirrors the Fable/Sol sweep structure (runs.yaml) so
+# combined tables are apples-to-apples. K3 is max-effort-only => one effort column.
+# Sweeps run in file order; the kimi-only --max-usd cap skips further kimi runs once
+# hit, so the CORE arm (s1) is ordered first and banks before the pricey T3 (s2b).
+# Run:
+#   python3 runner/run.py --config runner/runs-kimi-paper.yaml \
+#     --results runner/results/results-kimi.jsonl --max-usd 12
+defaults:
+  timeout_t1_t2_s: 1200
+  timeout_t3_s: 3600
+  seed: 1337
+
+winning_effort:
+  kimi: max
+
+sweeps:
+  # --- Core: full T1+T2, bare, n=3 (matches Fable/Sol sweep-1 arm) --------- #
+  - name: kimi-s1
+    mode: solo
+    reps: [1, 2, 3]
+    tasks: [t1-py-a, t1-py-b, t1-ts-a, t1-ts-b, t2-py-a, t2-py-b, t2-ts-a, t2-ts-b]
+    harness: false
+    configs:
+      - {model: kimi, effort: max}
+
+  # --- Harness delta: T2 harnessed, n=3 (matches sweep-2a) ----------------- #
+  - name: kimi-s2a
+    mode: solo
+    reps: [1, 2, 3]
+    tasks: [t2-py-a, t2-py-b, t2-ts-a, t2-ts-b]
+    harness: true
+    configs:
+      - {model: kimi, effort: max}
+
+  # --- Greenfield: T3, bare vs harnessed, n=2 (matches sweep-2b; runs last) - #
+  - name: kimi-s2b
+    mode: solo
+    reps: [1, 2]
+    tasks: [t3-a]
+    harness_matrix: [false, true]
+    configs:
+      - {model: kimi, effort: max}

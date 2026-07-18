@@ -1,0 +1,1 @@
+{"run_id": "kimi-pilot--kimi--max--bare--t1-py-a--r1", "ts": "2026-07-17T18:26:59Z", "sweep": "kimi-pilot", "model": "kimi", "effort": "max", "harness": false, "task": "t1-py-a", "rep": 1, "pass": true, "tokens_in": 29728, "tokens_out": 942, "wall_s": 70.42, "turns": 7, "loc_changed": 7, "exit_reason": "ok"}

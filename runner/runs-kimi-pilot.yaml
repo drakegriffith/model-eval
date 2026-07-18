@@ -1,0 +1,23 @@
+# Kimi K3 pilot — a small, real, contamination-resistant first-party slice.
+# K3 is real money (Moonshot API); Fable/Sol run on subscription and live in the
+# main runs.yaml. Keep this cheap: two Python tasks (no npm), bare + harnessed,
+# n=1 = 4 runs. Gate spend with:  python3 runner/run.py \
+#   --config runner/runs-kimi-pilot.yaml --results runner/results/results.jsonl \
+#   --max-usd 4.50
+defaults:
+  timeout_t1_t2_s: 1200
+  timeout_t3_s: 3600
+  seed: 1337
+
+# K3 always reasons; reasoning_effort supports only "max" — single effort point.
+winning_effort:
+  kimi: max
+
+sweeps:
+  - name: kimi-pilot
+    mode: solo
+    reps: [1]
+    tasks: [t1-py-a, t2-py-a]
+    harness_matrix: [false, true]
+    configs:
+      - {model: kimi, effort: max}

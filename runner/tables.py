@@ -33,6 +33,10 @@ PRICES = {
     "opus":   {"in": 15.0, "out": 75.0},
     "sol":    {"in": 10.0, "out": 40.0},
     "hybrid": {"in": 15.0, "out": 75.0},
+    # Kimi K3 is BILLED (Moonshot API), not subscription. Cache-miss input $3.00,
+    # output $15.00 per 1M; cache-hit input is $0.30 (Moonshot reports >90% hit in
+    # coding workloads, so effective cost trends well below this row).
+    "kimi":   {"in": 3.0, "out": 15.0},
 }
 
 EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
