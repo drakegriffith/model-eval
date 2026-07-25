@@ -1,0 +1,521 @@
+[
+  {
+    "family": "claude",
+    "model_id": "claude-fable-5",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "out_tokens_by_tier": {
+      "low": 150,
+      "medium": 158,
+      "high": 258,
+      "xhigh": 267,
+      "max": 1372
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 25101,
+    "answer_correct_rate": 1.0,
+    "verdict": "REAL",
+    "spread": 9.15,
+    "monotone": 1.0,
+    "between_cv": 1.06,
+    "within_cv": 0.25
+  },
+  {
+    "family": "claude",
+    "model_id": "claude-haiku-4-5",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "out_tokens_by_tier": {
+      "low": 18640,
+      "medium": 9448,
+      "high": 8650,
+      "xhigh": 13038,
+      "max": 15816
+    },
+    "n_per_tier": [
+      2,
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 2,
+    "scaffold_in_median": 19618,
+    "answer_correct_rate": 0.64,
+    "verdict": "AMBIGUOUS",
+    "spread": 2.15,
+    "monotone": 0.5,
+    "between_cv": 0.29,
+    "within_cv": 0.36
+  },
+  {
+    "family": "claude",
+    "model_id": "claude-haiku-4-5-20251001",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "out_tokens_by_tier": {
+      "low": 13520,
+      "medium": 12816,
+      "high": 14104,
+      "xhigh": 20845,
+      "max": 10964
+    },
+    "n_per_tier": [
+      3,
+      2,
+      3,
+      4,
+      2
+    ],
+    "min_n": 2,
+    "scaffold_in_median": 19622,
+    "answer_correct_rate": 0.21,
+    "verdict": "AMBIGUOUS",
+    "spread": 1.9,
+    "monotone": 0.5,
+    "between_cv": 0.23,
+    "within_cv": 0.32
+  },
+  {
+    "family": "claude",
+    "model_id": "claude-opus-4-8",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "out_tokens_by_tier": {
+      "low": 167,
+      "medium": 124,
+      "high": 317,
+      "xhigh": 551,
+      "max": 1243
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 23783,
+    "answer_correct_rate": 1.0,
+    "verdict": "REAL",
+    "spread": 10.05,
+    "monotone": 0.75,
+    "between_cv": 0.85,
+    "within_cv": 0.22
+  },
+  {
+    "family": "claude",
+    "model_id": "claude-opus-5",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "out_tokens_by_tier": {
+      "low": 40,
+      "medium": 124,
+      "high": 204,
+      "xhigh": 177,
+      "max": 280
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 24754,
+    "answer_correct_rate": 1.0,
+    "verdict": "REAL",
+    "spread": 6.93,
+    "monotone": 0.75,
+    "between_cv": 0.49,
+    "within_cv": 0.14
+  },
+  {
+    "family": "claude",
+    "model_id": "claude-opus-5[1m]",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "out_tokens_by_tier": {
+      "low": 56,
+      "medium": 119,
+      "high": 161,
+      "xhigh": 221,
+      "max": 310
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 24762,
+    "answer_correct_rate": 1.0,
+    "verdict": "REAL",
+    "spread": 5.51,
+    "monotone": 1.0,
+    "between_cv": 0.5,
+    "within_cv": 0.19
+  },
+  {
+    "family": "claude",
+    "model_id": "claude-sonnet-5",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "out_tokens_by_tier": {
+      "low": 9,
+      "medium": 109,
+      "high": 277,
+      "xhigh": 470,
+      "max": 2565
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 27041,
+    "answer_correct_rate": 0.8,
+    "verdict": "REAL",
+    "spread": 274.82,
+    "monotone": 1.0,
+    "between_cv": 1.39,
+    "within_cv": 0.37
+  },
+  {
+    "family": "codex",
+    "model_id": "codex-auto-review",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "out_tokens_by_tier": {
+      "low": 139,
+      "medium": 175,
+      "high": 231,
+      "xhigh": 326
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 16821,
+    "answer_correct_rate": 1.0,
+    "verdict": "REAL",
+    "spread": 2.35,
+    "monotone": 1.0,
+    "between_cv": 0.32,
+    "within_cv": 0.08
+  },
+  {
+    "family": "codex",
+    "model_id": "gpt-5.3-codex-spark",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "out_tokens_by_tier": {
+      "low": 426,
+      "medium": 716,
+      "high": 1586,
+      "xhigh": 707
+    },
+    "n_per_tier": [
+      4,
+      4,
+      4,
+      4
+    ],
+    "min_n": 4,
+    "scaffold_in_median": 15469,
+    "answer_correct_rate": 1.0,
+    "verdict": "AMBIGUOUS",
+    "spread": 3.72,
+    "monotone": 0.67,
+    "between_cv": 0.51,
+    "within_cv": 0.36
+  },
+  {
+    "family": "codex",
+    "model_id": "gpt-5.4",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "out_tokens_by_tier": {
+      "low": 131,
+      "medium": 150,
+      "high": 240,
+      "xhigh": 259
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 16821,
+    "answer_correct_rate": 1.0,
+    "verdict": "REAL",
+    "spread": 1.98,
+    "monotone": 1.0,
+    "between_cv": 0.28,
+    "within_cv": 0.1
+  },
+  {
+    "family": "codex",
+    "model_id": "gpt-5.4-mini",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "out_tokens_by_tier": {
+      "low": 118,
+      "medium": 174,
+      "high": 197,
+      "xhigh": 484
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 16469,
+    "answer_correct_rate": 1.0,
+    "verdict": "REAL",
+    "spread": 4.09,
+    "monotone": 1.0,
+    "between_cv": 0.58,
+    "within_cv": 0.17
+  },
+  {
+    "family": "codex",
+    "model_id": "gpt-5.5",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "out_tokens_by_tier": {
+      "low": 111,
+      "medium": 120,
+      "high": 170,
+      "xhigh": 225
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 18206,
+    "answer_correct_rate": 1.0,
+    "verdict": "REAL",
+    "spread": 2.02,
+    "monotone": 1.0,
+    "between_cv": 0.29,
+    "within_cv": 0.07
+  },
+  {
+    "family": "codex",
+    "model_id": "gpt-5.6-luna",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "out_tokens_by_tier": {
+      "low": 90,
+      "medium": 83,
+      "high": 96,
+      "xhigh": 93,
+      "max": 115
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 16726,
+    "answer_correct_rate": 0.93,
+    "verdict": "AMBIGUOUS",
+    "spread": 1.38,
+    "monotone": 0.75,
+    "between_cv": 0.11,
+    "within_cv": 0.12
+  },
+  {
+    "family": "codex",
+    "model_id": "gpt-5.6-sol",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra"
+    ],
+    "out_tokens_by_tier": {
+      "low": 88,
+      "medium": 80,
+      "high": 78,
+      "xhigh": 73,
+      "max": 98,
+      "ultra": 98
+    },
+    "n_per_tier": [
+      4,
+      4,
+      4,
+      4,
+      4,
+      4
+    ],
+    "min_n": 4,
+    "scaffold_in_median": 20930,
+    "answer_correct_rate": 1.0,
+    "verdict": "AMBIGUOUS",
+    "spread": 1.34,
+    "monotone": 0.6,
+    "between_cv": 0.11,
+    "within_cv": 0.12
+  },
+  {
+    "family": "codex",
+    "model_id": "gpt-5.6-terra",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra"
+    ],
+    "out_tokens_by_tier": {
+      "low": 68,
+      "medium": 72,
+      "high": 76,
+      "xhigh": 98,
+      "max": 121,
+      "ultra": 128
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 17917,
+    "answer_correct_rate": 1.0,
+    "verdict": "REAL",
+    "spread": 1.89,
+    "monotone": 1.0,
+    "between_cv": 0.25,
+    "within_cv": 0.11
+  },
+  {
+    "family": "kimi",
+    "model_id": "kimi-k3",
+    "tiers_probed": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "out_tokens_by_tier": {
+      "low": 68,
+      "medium": 142,
+      "high": 147,
+      "xhigh": 445,
+      "max": 205
+    },
+    "n_per_tier": [
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "min_n": 3,
+    "scaffold_in_median": 30098,
+    "answer_correct_rate": 1.0,
+    "verdict": "AMBIGUOUS",
+    "spread": 6.58,
+    "monotone": 0.75,
+    "between_cv": 0.64,
+    "within_cv": 0.33
+  }
+]
