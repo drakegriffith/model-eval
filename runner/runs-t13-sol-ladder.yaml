@@ -1,0 +1,53 @@
+# runs-t13-sol-ladder.yaml — ticket 13 Stage 1: is sol's effort ladder real on
+# REAL gauntlet tasks?
+#
+# The endpoint probe measured sol flat across all six declared tiers (spread 1.34x,
+# between-tier CV 0.11 against within-tier 0.12 — signal below noise) on a single
+# fixed domino-tiling puzzle. Two mechanisms could produce that reading and the
+# probe cannot separate them: the prompt may be uncalibrated for sol, or the
+# probe's single-prompt design may be unable to block on task. Pooling the 07-10
+# real-task rows across tasks reproduces AMBIGUOUS with within-tier CV rising
+# 0.12 -> 0.43, so the blocking mechanism is demonstrably live.
+#
+# This sweep re-measures on the real harness, blocked on task.
+#
+#   tasks   t1-ts-b, t2-py-b  — the two lowest-noise blocks in the 07-10 data
+#                               (within-tier CV 0.14 / 0.08), spanning T1/T2 and
+#                               TS/PY so the verdict is not a single-task artefact
+#   tiers   low, high         — anchors against the 07-10 baseline; a shift here is
+#                               codex-cli 0.144.0 drift, not effort
+#           xhigh             — Drake's own config.toml default
+#           ultra             — the top tier the probe called flat
+#   reps    1-3               — n=3 is the floor; effort_verdict returns
+#                               UNREPLICATED below n=2 and a spread with no noise
+#                               estimate is not evidence
+#   harness false             — matches the 07-10 baseline arm exactly
+#
+# 2 tasks x 4 tiers x 3 reps = 24 runs, ~4.3M tokens, ~50 min, $0 (subscription).
+#
+# Run:
+#   python3 runner/run.py --config runner/runs-t13-sol-ladder.yaml
+# Verdict (unmodified classifier, per-task blocks — do NOT relax the >=1.5x /
+# upward / btwCV >= 2x winCV rule):
+#   python3 runner/effort_verdict.py   # after blocking these rows by task
+#
+# medium and max are omitted, not forgotten: four tiers span the declared range
+# and tier count is the only lever that fits the ceiling. If the ladder reads REAL
+# the gap can be filled; if it reads flat, two more tiers would not rescue it.
+
+defaults:
+  timeout_t1_t2_s: 1200
+  timeout_t3_s: 3600
+  seed: 1337
+
+sweeps:
+  - name: t13-sol
+    mode: solo
+    harness: false
+    reps: [1, 2, 3]
+    tasks: [t1-ts-b, t2-py-b]
+    configs:
+      - {model: sol, effort: low}
+      - {model: sol, effort: high}
+      - {model: sol, effort: xhigh}
+      - {model: sol, effort: ultra}

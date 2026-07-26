@@ -62,6 +62,104 @@ def load_kimi_key():
 def kimi_dollars(tokens_in, tokens_out):
     return tokens_in / 1e6 * KIMI_PRICE_IN + tokens_out / 1e6 * KIMI_PRICE_OUT
 
+
+# --------------------------------------------------------------------------- #
+# Model registry
+# --------------------------------------------------------------------------- #
+# Every model the runner can invoke, keyed by the canonical CLI id from
+# runner/CLI-FACTS.md. Three behaviours vary across the roster and nothing else
+# does: which CLI binary drives it (`family`), which effort tiers it will accept
+# (`efforts`), and whether a run costs real money (`metered`). Everything
+# downstream -- command construction, usage parsing, key injection, spend
+# metering -- dispatches on `family`, so adding a model is a row here rather than
+# a new branch in four functions.
+#
+# `efforts` is the DECLARED tier set (source: ~/.codex/models_cache.json for
+# codex, `claude --help` for claude). Declared is not the same as real -- whether
+# a tier moves spend is what effort_verdict.py decides -- but declared is enough
+# to reject a typo before a 4M-token sweep launches.
+CLAUDE_TIERS = ["low", "medium", "high", "xhigh", "max"]
+CODEX_TIERS = ["low", "medium", "high", "xhigh"]
+CODEX_TIERS_6 = ["low", "medium", "high", "xhigh", "max", "ultra"]
+
+MODELS = {
+    # claude family -- driven by `claude -p`, subscription auth
+    "claude-opus-5":             {"family": "claude", "efforts": CLAUDE_TIERS},
+    "claude-opus-5[1m]":         {"family": "claude", "efforts": CLAUDE_TIERS},
+    "claude-opus-4-8":           {"family": "claude", "efforts": CLAUDE_TIERS},
+    "claude-fable-5":            {"family": "claude", "efforts": CLAUDE_TIERS},
+    "claude-sonnet-5":           {"family": "claude", "efforts": CLAUDE_TIERS},
+    "claude-haiku-4-5":          {"family": "claude", "efforts": CLAUDE_TIERS},
+    "claude-haiku-4-5-20251001": {"family": "claude", "efforts": CLAUDE_TIERS},
+    # codex family -- driven by `codex exec`, subscription auth. sol and terra are
+    # the only two ids declaring six tiers; the rest stop at xhigh.
+    "gpt-5.6-sol":               {"family": "codex", "efforts": CODEX_TIERS_6},
+    "gpt-5.6-terra":             {"family": "codex", "efforts": CODEX_TIERS_6},
+    "gpt-5.6-luna":              {"family": "codex", "efforts": CLAUDE_TIERS},
+    "gpt-5.5":                   {"family": "codex", "efforts": CODEX_TIERS},
+    "gpt-5.4":                   {"family": "codex", "efforts": CODEX_TIERS},
+    "gpt-5.4-mini":              {"family": "codex", "efforts": CODEX_TIERS},
+    "gpt-5.3-codex-spark":       {"family": "codex", "efforts": CODEX_TIERS},
+    "codex-auto-review":         {"family": "codex", "efforts": CODEX_TIERS},
+    # kimi family -- Claude Code binary pointed at Moonshot's Anthropic-compatible
+    # endpoint, injected API key, real money. Separate family from `claude`
+    # precisely because those last two facts differ.
+    "kimi-k3":                   {"family": "kimi", "efforts": CLAUDE_TIERS,
+                                  "metered": True},
+}
+
+# Short names used by the existing runs.yaml files and already written into
+# results.jsonl. Kept so old configs and old rows stay readable; new configs may
+# name either an alias or a canonical id. `hybrid` is a MODE, not a model -- it
+# runs Fable as an orchestrator (see HYBRID_INSTRUCTION), and pointing it here
+# states that plainly instead of hiding it in a build_cli_cmd branch.
+ALIASES = {
+    "fable": "claude-fable-5",
+    "hybrid": "claude-fable-5",
+    "sol": "gpt-5.6-sol",
+    "kimi": "kimi-k3",
+}
+
+
+def resolve_model(model):
+    """Return (canonical_id, spec) for an alias or canonical CLI id.
+
+    Single resolution point: build_cli_cmd, parse_usage, run_cli and the spend
+    meter all come through here, so an alias is expanded once and by one rule.
+    Raises ValueError on an unknown name -- a typo must not reach a paid CLI.
+    """
+    mid = ALIASES.get(model, model)
+    spec = MODELS.get(mid)
+    if spec is None:
+        raise ValueError(
+            f"unknown model {model!r}; known ids: {', '.join(sorted(MODELS))}; "
+            f"aliases: {', '.join(sorted(ALIASES))}")
+    return mid, spec
+
+
+def model_family(model):
+    return resolve_model(model)[1]["family"]
+
+
+def is_metered(model):
+    """True when a run of this model costs real money (Kimi only today)."""
+    return bool(resolve_model(model)[1].get("metered"))
+
+
+def check_effort(model, effort):
+    """Reject an effort tier the model does not declare, before anything is spent.
+
+    Fail-closed on purpose: a misspelled tier that the CLI silently ignores would
+    produce a sweep of identical runs wearing different labels, which is exactly
+    the artefact the effort ladder exists to rule out.
+    """
+    mid, spec = resolve_model(model)
+    if effort and effort not in spec["efforts"]:
+        raise ValueError(
+            f"model {mid} does not declare effort {effort!r}; "
+            f"declared: {', '.join(spec['efforts'])}")
+
+
 DONE_GATE_SENTENCE = (
     "\n\n---\nYour work is judged solely by running `bash verify.sh` from the "
     "repository root; it must exit 0. Run it yourself and confirm a clean exit "
@@ -229,9 +327,28 @@ def parse_yaml(text):
 # Config -> run list
 # --------------------------------------------------------------------------- #
 def resolve_effort(effort, model, winning):
+    """Expand the literal "WINNING" against winning_effort in the config.
+
+    winning_effort may be keyed by alias (as the existing runs.yaml files do) or
+    by canonical id; both are tried so old configs keep resolving. hybrid inherits
+    fable's winning effort because hybrid IS fable orchestrating.
+    """
     if isinstance(effort, str) and effort.upper() == "WINNING":
-        key = "fable" if model == "hybrid" else model
-        return winning.get(key, "high")
+        if model == "hybrid":
+            return winning.get("hybrid", winning.get("fable", "high"))
+        if model in winning:
+            return winning[model]
+        try:
+            mid = resolve_model(model)[0]
+        except ValueError:
+            return "high"
+        if mid in winning:
+            return winning[mid]
+        # alias whose canonical id was used as the key, or vice versa
+        for alias, canonical in ALIASES.items():
+            if canonical == mid and alias in winning:
+                return winning[alias]
+        return "high"
     return effort
 
 
@@ -333,23 +450,34 @@ def prepare_scratch(task_dir, scratch, harness):
 
 
 def build_cli_cmd(model, effort, prompt):
-    if model in ("fable", "hybrid"):
-        return ["claude", "-p", prompt, "--output-format", "json",
-                "--model", "claude-fable-5", "--effort", effort,
-                "--dangerously-skip-permissions"]
-    if model == "sol":
-        return ["codex", "exec", "--json", "--skip-git-repo-check",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "-m", "gpt-5.6-sol",
-                "-c", f"model_reasoning_effort={effort}", prompt]
-    if model == "kimi":
-        # Kimi K3 via Claude Code against Moonshot's Anthropic-compatible endpoint
-        # (base_url + key injected in run_cli). K3 always reasons and only supports
-        # effort "max", so no --effort flag. Same agent scaffold as fable => the
-        # fable-vs-kimi arm isolates the model cleanly.
-        return ["claude", "-p", prompt, "--output-format", "json",
-                "--model", "kimi-k3", "--dangerously-skip-permissions"]
-    raise ValueError(f"unknown model {model}")
+    """The exact headless invocation for a model, per runner/CLI-FACTS.md.
+
+    Dispatches on registry family, so a new model id needs no change here. Effort
+    is validated against the model's declared tiers first.
+
+    kimi rides the `claude` binary (base_url + key are injected by run_cli) but is
+    a distinct family: it is metered, and it DOES take --effort. The previous
+    version passed no --effort for Kimi while labelling every Kimi run "max",
+    which is CLI-FACTS correction #3 -- the label was fiction and no Kimi ladder
+    was measurable.
+    """
+    mid, spec = resolve_model(model)
+    check_effort(mid, effort)
+    family = spec["family"]
+
+    if family in ("claude", "kimi"):
+        cmd = ["claude", "-p", prompt, "--output-format", "json",
+               "--model", mid, "--dangerously-skip-permissions"]
+        if effort:
+            cmd += ["--effort", effort]
+        return cmd
+    if family == "codex":
+        cmd = ["codex", "exec", "--json", "--skip-git-repo-check",
+               "--dangerously-bypass-approvals-and-sandbox", "-m", mid]
+        if effort:
+            cmd += ["-c", f"model_reasoning_effort={effort}"]
+        return cmd + [prompt]
+    raise ValueError(f"unknown family {family} for model {mid}")
 
 
 def run_cli(cmd, scratch, timeout_s, task_dir, model=None):
@@ -357,7 +485,7 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None):
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)   # subscription auth only
     env.pop("OPENAI_API_KEY", None)
-    if model == "kimi":
+    if model is not None and model_family(model) == "kimi":
         key = load_kimi_key()
         if not key:
             return "", "kimi_key_missing", 0.0
@@ -389,9 +517,20 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None):
 
 
 def parse_usage(model, out):
-    """Return (tokens_in, tokens_out, turns) parsed from CLI JSON output."""
+    """Return (tokens_in, tokens_out, turns) parsed from CLI JSON output.
+
+    Routed by registry family, not by alias: the two output shapes are properties
+    of the CLI binary (claude's single `result` object vs codex's JSONL event
+    stream), so every current and future id of a family parses the same way.
+
+    Known limitation, deliberately left alone: this does not add
+    cache_read_input_tokens for the claude families, so claude/kimi tokens_in is
+    a FLOOR while codex's cumulative figure is conservative-correct. Cross-family
+    per-run token comparisons are not apples-to-apples until that is fixed, which
+    is the token-ledger ticket's call, not this one's.
+    """
     ti = to = turns = 0
-    if model in ("fable", "hybrid", "kimi"):  # all go through claude -p --output-format json
+    if model_family(model) in ("claude", "kimi"):  # `claude -p --output-format json`
         obj = None
         for line in reversed([l for l in out.splitlines() if l.strip()]):
             try:
@@ -541,9 +680,14 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         exit_reason = exit_reason + "+verify_timeout"
 
     loc = loc_changed(scratch)
+    # `model` stays exactly as the config wrote it so existing rows, run_ids and
+    # the alias-keyed analysis in stats.py/tables.py keep working; `model_id`
+    # records which CLI id actually ran, which an alias row cannot otherwise tell
+    # you and which is what makes alias and id rows groupable as one model.
     row = {
         "run_id": run["run_id"], "ts": now_iso(), "sweep": run["sweep"],
-        "model": run["model"], "effort": run["effort"], "harness": run["harness"],
+        "model": run["model"], "model_id": resolve_model(run["model"])[0],
+        "effort": run["effort"], "harness": run["harness"],
         "task": run["task"], "rep": run["rep"], "pass": passed,
         "tokens_in": tokens_in, "tokens_out": tokens_out, "wall_s": wall_s,
         "turns": turns, "loc_changed": loc, "exit_reason": exit_reason,
@@ -584,6 +728,23 @@ def main():
     if args.only:
         runs = [r for r in runs if args.only in r["run_id"]]
 
+    # Validate the whole matrix before the first CLI call. An unknown model id or
+    # an undeclared effort tier is a config bug, and finding it 40 runs into a
+    # sweep means those 40 runs were spent on a matrix that was never going to
+    # finish. Fail closed, up front, at zero cost.
+    bad = []
+    for r in runs:
+        try:
+            resolve_model(r["model"])
+            check_effort(r["model"], r["effort"])
+        except ValueError as e:
+            bad.append(f"  {r['run_id']}: {e}")
+    if bad:
+        print(f"config rejected -- {len(bad)} invalid run(s):")
+        for b in dict.fromkeys(bad):
+            print(b)
+        sys.exit(2)
+
     done = existing_ids(args.results)
     pending = [r for r in runs if r["run_id"] not in done]
     skipped = len(runs) - len(pending)
@@ -601,14 +762,14 @@ def main():
 
     kimi_spent = 0.0
     for i, r in enumerate(pending, 1):
-        if r["model"] == "kimi" and args.max_usd is not None and kimi_spent >= args.max_usd:
+        if is_metered(r["model"]) and args.max_usd is not None and kimi_spent >= args.max_usd:
             print(f"    [cap] kimi spend ${kimi_spent:.2f} >= --max-usd "
                   f"${args.max_usd:.2f}; skipping {r['run_id']}", flush=True)
             continue
         print(f"[{i}/{len(pending)}] {r['run_id']} ...", flush=True)
         row = execute_run(r, cfg, args.tasks_dir, args.scratch, args.results)
         cost_note = ""
-        if r["model"] == "kimi":
+        if is_metered(r["model"]):
             kimi_spent += kimi_dollars(row["tokens_in"], row["tokens_out"])
             cap = f"/{args.max_usd:.2f}" if args.max_usd is not None else ""
             cost_note = f" kimi_spend=${kimi_spent:.3f}{cap}"
