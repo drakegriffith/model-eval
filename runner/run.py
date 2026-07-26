@@ -668,6 +668,18 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         cmd = build_cli_cmd(run["model"], run["effort"], prompt)
         out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir, run["model"])
         tokens_in, tokens_out, turns = parse_usage(run["model"], out)
+        # A CLI can exit 0 having never emitted a completed turn -- the stream
+        # simply stops mid-tool-call. run_cli only sees returncode 0 and calls
+        # that "ok", so the run lands in results.jsonl as a successful zero-token
+        # run. That row is poison for any spend measurement: it is not a model
+        # choosing to spend nothing, it is a run whose generation never finished,
+        # and averaging it into a tier cell drags the mean toward zero and
+        # inflates within-tier CV. Same class of truncation as a timeout, so it
+        # gets the same treatment -- a non-"ok" reason, which is the flag every
+        # analysis already gates on (ladder_from_results.py excludes it; the
+        # excluded count is printed, never silently dropped).
+        if exit_reason == "ok" and turns == 0:
+            exit_reason = "no_completion"
         tdir = os.path.join(RUNNER_DIR, "results", "transcripts")
         os.makedirs(tdir, exist_ok=True)
         with open(os.path.join(tdir, run["run_id"] + ".txt"), "w") as tf:

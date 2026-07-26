@@ -1,0 +1,83 @@
+# runs-t13-luna-spark.yaml — ticket 13 Stage 2: do luna and spark behave like sol did?
+#
+# Stage 1 settled sol: REAL on 2/2 task blocks, spread 4.1-5.0x, against the
+# endpoint probe's 1.34x with signal BELOW noise. The probe was wrong about sol,
+# for two independently sufficient reasons — an uncalibrated single prompt, and a
+# single-prompt design that structurally cannot block on task.
+#
+# That converts a guess into a prediction this sweep tests:
+#
+#   gpt-5.6-luna        probe read 1.38x, btwCV 0.11 vs winCV 0.12 — the SAME
+#                       flat signature as sol, from the same instrument.
+#                       PREDICTION: luna's ladder is real on real tasks too.
+#   gpt-5.3-codex-spark probe read 3.72x but NON-MONOTONE, peaking at `high` and
+#                       falling at `xhigh`, btwCV 0.51 vs winCV 0.36. A different
+#                       failure mode: spread without a ladder. Monotonicity is a
+#                       hard gate in effort_verdict, so spark can clear spread and
+#                       still be uncredited.
+#                       PREDICTION: none. This one is genuinely open.
+#
+# Design mirrors Stage 1 exactly except for the tier sets, so the two stages are
+# comparable row for row:
+#
+#   tasks   t1-ts-b, t2-py-b  — the same two lowest-noise blocks Stage 1 used
+#                               (07-10 within-tier CV 0.14 / 0.08), spanning
+#                               T1/T2 and TS/PY
+#   tiers   low, high         — the shared anchors. Both models run them, so the
+#                               cross-model comparison at these two tiers is
+#                               apples-to-apples.
+#           max / xhigh       — each model's OWN top declared tier. luna declares
+#                               low..max (no ultra); spark stops at xhigh. Running
+#                               a tier a model does not declare is rejected at
+#                               validation, and inventing one would measure the
+#                               CLI's fallback, not a ladder.
+#   reps    1-3               — n=3 floor; effort_verdict returns UNREPLICATED
+#                               below n=2 and a spread with no noise estimate is
+#                               not evidence
+#   harness false             — matches Stage 1 and the 07-10 baseline arm
+#
+# 2 models x 3 tiers x 2 tasks x 3 reps = 36 runs, ~4.2M tokens, ~1.2 h,
+# $0 (both are codex subscription; Kimi is Stage 3 and the only metered model in
+# the ticket).
+#
+# `medium` is omitted on both, as it was for sol: three tiers span each declared
+# range and tier count is the only lever that fits the ceiling. Filling the gap is
+# cheap AFTER a verdict; it cannot rescue a flat one.
+#
+# Canonical ids, not aliases — unlike sol these have no 07-10 rows to group with,
+# so there is nothing to keep readable and the id is the honest label. Separate
+# sweep names keep run_ids collision-free and let each model be classified alone.
+#
+# Run (expect interruption; run_id resume makes a re-run free):
+#   python3 runner/run.py --config runner/runs-t13-luna-spark.yaml
+#
+# Verdict — unmodified classifier, per-task blocks. Do NOT relax the >=1.5x /
+# upward / btwCV >= 2x winCV rule:
+#   python3 runner/ladder_from_results.py --sweep t13-luna  --pooled
+#   python3 runner/ladder_from_results.py --sweep t13-spark --pooled
+
+defaults:
+  timeout_t1_t2_s: 1200
+  timeout_t3_s: 3600
+  seed: 1337
+
+sweeps:
+  - name: t13-luna
+    mode: solo
+    harness: false
+    reps: [1, 2, 3]
+    tasks: [t1-ts-b, t2-py-b]
+    configs:
+      - {model: gpt-5.6-luna, effort: low}
+      - {model: gpt-5.6-luna, effort: high}
+      - {model: gpt-5.6-luna, effort: max}
+
+  - name: t13-spark
+    mode: solo
+    harness: false
+    reps: [1, 2, 3]
+    tasks: [t1-ts-b, t2-py-b]
+    configs:
+      - {model: gpt-5.3-codex-spark, effort: low}
+      - {model: gpt-5.3-codex-spark, effort: high}
+      - {model: gpt-5.3-codex-spark, effort: xhigh}
