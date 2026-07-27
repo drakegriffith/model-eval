@@ -26,6 +26,8 @@ import sys
 import time
 from datetime import datetime, timezone
 
+import usage_ledger
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # ~/code/model-gauntlet
 RUNNER_DIR = os.path.join(ROOT, "runner")
 
@@ -523,48 +525,18 @@ def parse_usage(model, out):
     of the CLI binary (claude's single `result` object vs codex's JSONL event
     stream), so every current and future id of a family parses the same way.
 
-    Known limitation, deliberately left alone: this does not add
-    cache_read_input_tokens for the claude families, so claude/kimi tokens_in is
-    a FLOOR while codex's cumulative figure is conservative-correct. Cross-family
-    per-run token comparisons are not apples-to-apples until that is fixed, which
-    is the token-ledger ticket's call, not this one's.
+    Delegates to usage_ledger.parse_usage_detailed, the single source of truth
+    for this formula (ticket 08). Fixed bug, corrected here 2026-07-27: this
+    used to sum only usage.input_tokens for the claude/kimi branch, which is the
+    LAST turn's fresh, uncached tokens -- cache_creation_input_tokens and
+    cache_read_input_tokens were dropped entirely, undercounting real
+    consumption by 30x-400x on cached multi-turn sessions (a real transcript
+    showed input_tokens=57 against cache_read_input_tokens=221097). Codex's
+    single turn.completed event already folds cached tokens into input_tokens,
+    so that branch was never buggy and is unchanged.
     """
-    ti = to = turns = 0
-    if model_family(model) in ("claude", "kimi"):  # `claude -p --output-format json`
-        obj = None
-        for line in reversed([l for l in out.splitlines() if l.strip()]):
-            try:
-                cand = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(cand, dict) and cand.get("type") == "result":
-                obj = cand
-                break
-        if obj is None:  # maybe whole blob is one JSON object
-            try:
-                obj = json.loads(out)
-            except json.JSONDecodeError:
-                obj = None
-        if isinstance(obj, dict):
-            u = obj.get("usage", {}) or {}
-            ti = int(u.get("input_tokens", 0) or 0)
-            to = int(u.get("output_tokens", 0) or 0)
-            turns = int(obj.get("num_turns", 0) or 0)
-    else:  # sol / codex JSONL
-        for line in out.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if ev.get("type") == "turn.completed":
-                u = ev.get("usage", {}) or {}
-                ti += int(u.get("input_tokens", 0) or 0)
-                to += int(u.get("output_tokens", 0) or 0)
-                turns += 1
-    return ti, to, turns
+    d = usage_ledger.parse_usage_detailed(model_family(model), out)
+    return d["tokens_in"], d["tokens_out"], d["turns"]
 
 
 def apply_mock(task_dir, scratch):
@@ -667,6 +639,7 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     mock = os.environ.get("GAUNTLET_MOCK")
     tokens_in = tokens_out = turns = 0
     wall_s = 0.0
+    usage_detail = None  # ticket 08: full cache-token breakdown for the ledger row
     if mock == "fail":
         exit_reason = "mock_fail"
     elif mock:  # "1" or any truthy -> mock pass
@@ -676,7 +649,10 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         prompt = compose_prompt(task_dir, run["harness"], run["mode"])
         cmd = build_cli_cmd(run["model"], run["effort"], prompt)
         out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir, run["model"])
-        tokens_in, tokens_out, turns = parse_usage(run["model"], out)
+        usage_detail = usage_ledger.parse_usage_detailed(model_family(run["model"]), out)
+        tokens_in = usage_detail["tokens_in"]
+        tokens_out = usage_detail["tokens_out"]
+        turns = usage_detail["turns"]
         # A CLI can exit 0 having never emitted a completed turn -- the stream
         # simply stops mid-tool-call. run_cli only sees returncode 0 and calls
         # that "ok", so the run lands in results.jsonl as a successful zero-token
@@ -714,6 +690,13 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "turns": turns, "loc_changed": loc, "exit_reason": exit_reason,
     }
     append_row(results_path, row)
+
+    # ticket 08: append-only usage.jsonl, joinable to results.jsonl by run_id.
+    # Prospective only -- does not touch or retrofit any prior row.
+    urow = usage_ledger.build_usage_row(row, model_family(run["model"]), usage_detail,
+                                        model_id=row["model_id"])
+    usage_ledger.append_usage_row(usage_ledger.USAGE_PATH, urow)
+
     return row
 
 
