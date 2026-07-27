@@ -15,6 +15,7 @@ MOCK mode (no tokens spent):
   GAUNTLET_MOCK=fail  -> do nothing (leaves base unchanged, verify.sh should fail)
 """
 import argparse
+import contextlib
 import json
 import os
 import random
@@ -23,9 +24,11 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 
+import sandbox_seal
 import usage_ledger
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # ~/code/model-gauntlet
@@ -482,8 +485,56 @@ def build_cli_cmd(model, effort, prompt):
     raise ValueError(f"unknown family {family} for model {mid}")
 
 
+@contextlib.contextmanager
+def staged_task_dir(task_dir):
+    """Yield a sanitised mirror of task_dir: acceptance/ and nothing else.
+
+    GAUNTLET_TASK_DIR used to point the model under test at the canonical task
+    directory, which holds solution.patch -- the reference answer -- alongside
+    the hidden acceptance suite. The model runs in a clean copy of base/, so
+    that variable was the signposted route to its own answer key, and one `cat`
+    away (ticket 16).
+
+    The variable cannot simply be dropped: t3-a and all three t4-* tasks
+    resolve acceptance/ through it, because prepare_scratch copies verify.sh
+    into the scratch dir and orphans it from its test assets. Removing it would
+    take away the model's ability to self-check, which is ticket 17's decision
+    to make, not this function's. So the model gets a directory that satisfies
+    verify.sh and contains no answer: the suite it is graded on, and none of
+    the patch that solves it.
+
+    __pycache__ is excluded -- a stale .pyc of the acceptance suite is the
+    source in all but name.
+    """
+    tmp = tempfile.mkdtemp(prefix="gauntlet-taskdir-")
+    try:
+        src = os.path.join(task_dir, "acceptance")
+        if os.path.isdir(src):
+            shutil.copytree(src, os.path.join(tmp, "acceptance"),
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        yield tmp
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def seal_enabled():
+    """False only when a run explicitly opts out via GAUNTLET_NO_SANDBOX=1."""
+    return os.environ.get("GAUNTLET_NO_SANDBOX") != "1"
+
+
 def run_cli(cmd, scratch, timeout_s, task_dir, model=None):
-    """Run headlessly, killing the process group on timeout. Returns (out, reason, wall)."""
+    """Run headlessly, killing the process group on timeout. Returns (out, reason, wall).
+
+    The command runs sealed (ticket 16): reads of this repo are denied except
+    the scratch dir it works in, so neither tasks/*/solution.patch nor the
+    canonical acceptance suites nor other runs' transcripts under
+    runner/results/ are reachable -- by GAUNTLET_TASK_DIR or by walking up from
+    cwd, since scratch lives inside the repo by default.
+
+    The seal is fail-closed: no sandbox-exec means no run, rather than a run
+    that silently measures an open-book attempt. GAUNTLET_NO_SANDBOX=1 is the
+    documented, loudly-warned opt-out, and it is recorded on the results row.
+    """
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)   # subscription auth only
     env.pop("OPENAI_API_KEY", None)
@@ -495,26 +546,37 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None):
         env["ANTHROPIC_BASE_URL"] = MOONSHOT_ANTHROPIC_URL
         env["ANTHROPIC_API_KEY"] = key
         env["ANTHROPIC_AUTH_TOKEN"] = key   # some Claude Code versions read this
-    # verify.sh is copied into scratch; tasks whose test assets live beside the
-    # canonical script (t3) resolve them through this instead of dirname $0
-    env["GAUNTLET_TASK_DIR"] = os.path.abspath(task_dir)
-    t0 = time.time()
-    proc = subprocess.Popen(cmd, cwd=scratch, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, start_new_session=True, env=env)
-    try:
-        out, _err = proc.communicate(timeout=timeout_s)
-        reason = "ok" if proc.returncode == 0 else "cli_error"
-    except subprocess.TimeoutExpired:
+
+    with contextlib.ExitStack() as stack:
+        # verify.sh is copied into scratch; tasks whose test assets live beside
+        # the canonical script (t3, t4) resolve them through this. It points at
+        # a sanitised mirror, never at the real task dir -- see staged_task_dir.
+        mirror = stack.enter_context(staged_task_dir(task_dir))
+        env["GAUNTLET_TASK_DIR"] = mirror
+        if seal_enabled():
+            prefix = stack.enter_context(sandbox_seal.sandbox_prefix(
+                deny_paths=[ROOT], allow_paths=[scratch, mirror]))
+            cmd = prefix + list(cmd)
+        else:
+            print("WARNING: GAUNTLET_NO_SANDBOX=1 -- model can read its own "
+                  "answer key; this row is marked sealed=false", file=sys.stderr)
+        t0 = time.time()
+        proc = subprocess.Popen(cmd, cwd=scratch, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, start_new_session=True, env=env)
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        try:
-            out, _err = proc.communicate(timeout=30)
-        except Exception:
-            out = ""
-        reason = "timeout"
+            out, _err = proc.communicate(timeout=timeout_s)
+            reason = "ok" if proc.returncode == 0 else "cli_error"
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                out, _err = proc.communicate(timeout=30)
+            except Exception:
+                out = ""
+            reason = "timeout"
     return out or "", reason, round(time.time() - t0, 2)
 
 
@@ -640,6 +702,11 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     tokens_in = tokens_out = turns = 0
     wall_s = 0.0
     usage_detail = None  # ticket 08: full cache-token breakdown for the ledger row
+    # ticket 16: whether the model ran sealed off from its own answer key. None
+    # for mock runs, where no model was invoked and the question is vacuous.
+    # Recorded per row so "was this result open-book?" is answerable from the
+    # corpus instead of reconstructed from commit dates.
+    sealed = None
     if mock == "fail":
         exit_reason = "mock_fail"
     elif mock:  # "1" or any truthy -> mock pass
@@ -648,6 +715,7 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     else:
         prompt = compose_prompt(task_dir, run["harness"], run["mode"])
         cmd = build_cli_cmd(run["model"], run["effort"], prompt)
+        sealed = seal_enabled()
         out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir, run["model"])
         usage_detail = usage_ledger.parse_usage_detailed(model_family(run["model"]), out)
         tokens_in = usage_detail["tokens_in"]
@@ -688,6 +756,7 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "task": run["task"], "rep": run["rep"], "pass": passed,
         "tokens_in": tokens_in, "tokens_out": tokens_out, "wall_s": wall_s,
         "turns": turns, "loc_changed": loc, "exit_reason": exit_reason,
+        "sealed": sealed,
     }
     append_row(results_path, row)
 
