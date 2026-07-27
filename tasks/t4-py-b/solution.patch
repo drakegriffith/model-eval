@@ -1,0 +1,96 @@
+diff --git a/src/layercfg/resolve.py b/src/layercfg/resolve.py
+index 13aacc6..de4f088 100644
+--- a/src/layercfg/resolve.py
++++ b/src/layercfg/resolve.py
+@@ -2,24 +2,29 @@
+ 
+ Layers are applied left to right: `layers[0]` is the base, each later layer
+ is an override on top of everything resolved so far. The result is a fresh
+-dict — the input layers are never mutated.
++dict — the input layers are never mutated, and nothing in the result aliases
++anything inside them.
+ 
+-Three of the layer rules are implemented here. The rest are specified in
+-`../PROMPT.md` and are not implemented yet:
++The six layer rules, all implemented here:
+ 
+-  IMPLEMENTED
+   1. Later wins.       A scalar in a later layer replaces the earlier value.
+   2. Dicts merge.      Two dict values at the same key merge recursively.
+-                       LISTS DO NOT MERGE — a list replaces a list wholesale.
+-  3. `key+` appends.   A key written `name+` in a layer appends its list to
+-                       whatever list was inherited under `name`. The output
+-                       key is always `name`; `name+` never appears in the
+-                       result.
+-
+-  NOT IMPLEMENTED YET
+-  4. `None` deletes.
+-  5. `__lock__` freezes a subtree.
+-  6. Precedence between 3, 4 and 5.
++                       LISTS DO NOT MERGE — a list replaces a list wholesale,
++                       and a dict landing on a non-dict discards it.
++  3. `key+` appends.   A key written `name+` appends its list to whatever list
++                       was inherited under `name`. The output key is always
++                       `name`; `name+` never appears in the result.
++  4. `None` deletes.   The key is removed, not set to None. Deleting an absent
++                       key is a no-op; a later layer may re-introduce it.
++  5. `__lock__`.       A dict carrying `__lock__: True` applies its own body
++                       normally, then freezes that path and every descendant
++                       against all later layers. The marker is always stripped
++                       from the output, at every depth, lock or not.
++  6. Precedence.       Lock is checked first, so against a locked path a later
++                       override, append and delete are all ignored silently.
++
++Locks are tracked as a set of key paths and live only for the duration of one
++`resolve()` call — a lock in one call never leaks into the next.
+ """
+ 
+ from copy import deepcopy
+@@ -30,22 +35,43 @@ LOCK_MARKER = "__lock__"
+ def resolve(layers: list[dict]) -> dict:
+     """Fold `layers` left to right into one effective config dict."""
+     out: dict = {}
++    locked: set[tuple] = set()
+     for layer in layers:
+-        _merge(out, layer)
++        _merge(out, layer, (), locked)
+     return out
+ 
+ 
+-def _merge(dst: dict, src: dict) -> None:
++def _is_locked(path: tuple, locked: set) -> bool:
++    """True if `path` or any of its ancestors has been locked."""
++    return any(path[:i] in locked for i in range(len(path) + 1))
++
++
++def _merge(dst: dict, src: dict, path: tuple, locked: set) -> None:
+     for key, value in src.items():
+         if key.endswith("+"):
+             name = key[:-1]
++            if _is_locked(path + (name,), locked):
++                continue
+             inherited = dst.get(name)
+             base = list(inherited) if isinstance(inherited, list) else []
+             dst[name] = base + deepcopy(list(value))
+             continue
+ 
+-        if isinstance(value, dict) and isinstance(dst.get(key), dict):
+-            _merge(dst[key], value)
++        here = path + (key,)
++        if _is_locked(here, locked):
++            continue
++
++        if value is None:
++            dst.pop(key, None)
++            continue
++
++        if isinstance(value, dict):
++            if not isinstance(dst.get(key), dict):
++                dst[key] = {}
++            body = {k: v for k, v in value.items() if k != LOCK_MARKER}
++            _merge(dst[key], body, here, locked)
++            if value.get(LOCK_MARKER):
++                locked.add(here)
+             continue
+ 
+         dst[key] = deepcopy(value)

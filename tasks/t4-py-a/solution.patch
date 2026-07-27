@@ -1,0 +1,37 @@
+diff --git a/src/ledger/book.py b/src/ledger/book.py
+index 62366f1..9d64dfc 100644
+--- a/src/ledger/book.py
++++ b/src/ledger/book.py
+@@ -32,8 +32,14 @@ class Entry:
+ 
+ class Book:
+     def __init__(self):
++        # The ledger itself: every posting ever made, in the order it was
++        # made. This is the authoritative record — entries() and balance()
++        # read it, and nothing ever removes from it.
++        self._journal: list[Entry] = []
+         # Index: (account, date) -> the most recent Entry posted for that
+-        # account on that date. Used by latest().
++        # account on that date. A lookup helper over _journal, used by
++        # latest(); it deliberately keeps only the newest row per account-day,
++        # so it must never be used as the source of truth for a sum.
+         self._latest: dict[tuple[str, str], Entry] = {}
+         self._next_id = 1
+ 
+@@ -47,6 +53,7 @@ class Book:
+             memo=memo,
+         )
+         self._next_id += 1
++        self._journal.append(entry)
+         self._latest[(account, date)] = entry
+         return entry
+ 
+@@ -65,7 +72,7 @@ class Book:
+ 
+     def entries(self, account: str | None = None) -> list[Entry]:
+         """Every posting ever made, oldest first. Filtered by account if given."""
+-        rows = sorted(self._latest.values(), key=lambda e: e.entry_id)
++        rows = sorted(self._journal, key=lambda e: e.entry_id)
+         if account is not None:
+             rows = [e for e in rows if e.account == account]
+         return rows

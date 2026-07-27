@@ -1,0 +1,135 @@
+diff --git a/src/cart.ts b/src/cart.ts
+index b4ab797..e021519 100644
+--- a/src/cart.ts
++++ b/src/cart.ts
+@@ -1,17 +1,15 @@
+-import { round2 } from "./money.js";
+-
+ export interface LineItem {
+   sku: string;
+-  unitPriceUsd: number;
++  unitPriceCents: number;
+   qty: number;
+ }
+ 
+-/** Extended price for one line. */
++/** Extended price for one line, in cents. Integers only — no rounding needed. */
+ export function lineTotal(item: LineItem): number {
+-  return round2(item.unitPriceUsd * item.qty);
++  return item.unitPriceCents * item.qty;
+ }
+ 
+-/** Sum of every line, before tax and shipping. */
++/** Sum of every line in cents, before tax and shipping. */
+ export function subtotal(items: LineItem[]): number {
+-  return round2(items.reduce((acc, item) => acc + lineTotal(item), 0));
++  return items.reduce((acc, item) => acc + lineTotal(item), 0);
+ }
+diff --git a/src/invoice.ts b/src/invoice.ts
+index 8043810..45dc7f6 100644
+--- a/src/invoice.ts
++++ b/src/invoice.ts
+@@ -1,4 +1,3 @@
+-import { round2 } from "./money.js";
+ import { subtotal, type LineItem } from "./cart.js";
+ import { taxFor } from "./tax.js";
+ 
+@@ -6,11 +5,11 @@ export interface Invoice {
+   id: string;
+   items: LineItem[];
+   taxRate: number;
+-  shippingUsd: number;
++  shippingCents: number;
+ }
+ 
+-/** Subtotal + tax on the subtotal + shipping. Shipping is not taxed. */
++/** Subtotal + tax on the subtotal + shipping, in cents. Shipping is not taxed. */
+ export function invoiceTotal(invoice: Invoice): number {
+   const sub = subtotal(invoice.items);
+-  return round2(sub + taxFor(sub, invoice.taxRate) + invoice.shippingUsd);
++  return sub + taxFor(sub, invoice.taxRate) + invoice.shippingCents;
+ }
+diff --git a/src/money.ts b/src/money.ts
+index 6003bdc..62fd07d 100644
+--- a/src/money.ts
++++ b/src/money.ts
+@@ -1,18 +1,29 @@
+ /**
+- * Money primitives. Everything in this package is currently denominated in
+- * floating-point US dollars, which is what the migration ticket is about.
++ * Money primitives. Every amount in this package is an integer number of
++ * cents. Dollars appear only at the `toCents` input boundary and in
++ * `formatUsd` output; nothing in between is ever a fractional value.
+  */
+ 
+-/** Round a dollar amount to two decimal places. */
+-export function round2(dollars: number): number {
+-  return Math.round(dollars * 100) / 100;
++/**
++ * Round half away from zero: 0.5 -> 1, 1.5 -> 2, -0.5 -> -1, -1.5 -> -2.
++ * This is the package's single rounding rule. Bare `Math.round` is not it —
++ * `Math.round(-0.5)` is -0 and `Math.round(-1.5)` is -1.
++ */
++export function roundHalfAwayFromZero(value: number): number {
++  return value < 0 ? -Math.round(-value) : Math.round(value);
++}
++
++/** The only dollars -> cents boundary. Returns an integer. */
++export function toCents(dollars: number): number {
++  return roundHalfAwayFromZero(dollars * 100);
+ }
+ 
+-/** Render a dollar amount as "$1,234.56" (negatives as "-$1,234.56"). */
+-export function formatUsd(dollars: number): string {
+-  const negative = dollars < 0;
+-  const fixed = Math.abs(round2(dollars)).toFixed(2);
+-  const [whole, frac] = fixed.split(".");
++/** Render integer cents as "$1,234.56" (negatives as "-$1,234.56"). */
++export function formatUsd(cents: number): string {
++  const negative = cents < 0;
++  const abs = Math.abs(cents);
++  const whole = String(Math.trunc(abs / 100));
++  const frac = String(abs % 100).padStart(2, "0");
+   const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+   return `${negative ? "-" : ""}$${grouped}.${frac}`;
+ }
+diff --git a/src/report.ts b/src/report.ts
+index 31b08d6..9c90bb9 100644
+--- a/src/report.ts
++++ b/src/report.ts
+@@ -1,15 +1,15 @@
+-import { round2, formatUsd } from "./money.js";
++import { formatUsd, roundHalfAwayFromZero } from "./money.js";
+ import { invoiceTotal, type Invoice } from "./invoice.js";
+ 
+-/** Sum of every invoice total. */
++/** Sum of every invoice total, in cents. */
+ export function grandTotal(invoices: Invoice[]): number {
+-  return round2(invoices.reduce((acc, inv) => acc + invoiceTotal(inv), 0));
++  return invoices.reduce((acc, inv) => acc + invoiceTotal(inv), 0);
+ }
+ 
+-/** Mean invoice total. An empty batch averages to zero. */
++/** Mean invoice total in cents. An empty batch averages to zero. */
+ export function averageTotal(invoices: Invoice[]): number {
+   if (invoices.length === 0) return 0;
+-  return round2(grandTotal(invoices) / invoices.length);
++  return roundHalfAwayFromZero(grandTotal(invoices) / invoices.length);
+ }
+ 
+ /** One-line human summary of a batch. */
+diff --git a/src/tax.ts b/src/tax.ts
+index 23e6fba..11fa1ff 100644
+--- a/src/tax.ts
++++ b/src/tax.ts
+@@ -1,6 +1,6 @@
+-import { round2 } from "./money.js";
++import { roundHalfAwayFromZero } from "./money.js";
+ 
+-/** Tax owed on a subtotal at `rate` (0.0825 = 8.25%). */
+-export function taxFor(subtotalUsd: number, rate: number): number {
+-  return round2(subtotalUsd * rate);
++/** Tax owed on a subtotal in cents at `rate` (0.0825 = 8.25%), in cents. */
++export function taxFor(subtotalCents: number, rate: number): number {
++  return roundHalfAwayFromZero(subtotalCents * rate);
+ }
