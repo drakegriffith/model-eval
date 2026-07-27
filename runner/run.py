@@ -4,8 +4,10 @@
 Copies each task's base/ into a throwaway git-inited scratch dir, optionally drops
 the benchmark harness (CLAUDE.md/AGENTS.md) in, composes the prompt, invokes the
 chosen CLI headlessly (per runner/CLI-FACTS.md) with a hard wall-clock timeout,
-then runs verify.sh OURSELVES as the authoritative pass/fail gate. Appends one
-JSONL row per run to runner/results/results.jsonl.
+then grades OURSELVES as the authoritative pass/fail gate -- in a disposable copy
+of the scratch tree with the task's canonical verify.sh and test suite overlaid,
+so the graded party cannot rewrite its own grade (ticket 18). Appends one JSONL
+row per run to runner/results/results.jsonl.
 
 Stdlib only. Both CLIs run on subscriptions — we never set ANTHROPIC_API_KEY /
 OPENAI_API_KEY.
@@ -16,6 +18,7 @@ MOCK mode (no tokens spent):
 """
 import argparse
 import contextlib
+import fnmatch
 import json
 import os
 import random
@@ -616,16 +619,200 @@ def apply_mock(task_dir, scratch):
     return False
 
 
-def run_verify(scratch, task_dir):
-    vs = os.path.join(scratch, "verify.sh")
-    if not os.path.exists(vs):
+# --------------------------------------------------------------------------- #
+# Grading (ticket 18) -- the model writes the code, the task dir writes the grade
+# --------------------------------------------------------------------------- #
+# run_verify used to execute scratch/verify.sh, in scratch, as the authoritative
+# gate. The model must be able to write to scratch -- that is its workspace -- so
+# the gate was a file the graded party could rewrite. Four doors were confirmed by
+# execution (ticket 18): overwrite verify.sh with `exit 0`; rewrite the graded
+# tests; ADD a tests/conftest.py that neuters what pytest collects; plant a
+# .venv/bin/python that exits 0, which verify.sh reuses. None of them touches the
+# model's source, which is the tell: the whole grading apparatus lived in a
+# directory the model owns.
+#
+# The rule that replaces it, and the only one worth stating: the grade takes the
+# MODEL'S SOURCE from scratch and everything else from the task dir. So grading
+# happens in a disposable copy of scratch with the apparatus overlaid from
+# canonical -- not in scratch itself, because loc_changed() runs afterwards and
+# restoring files in place would erase the model's real diff from the metric and
+# destroy the tamper evidence at the same time.
+#
+# "Apparatus" is three things: verify.sh, the graded test directories, and the
+# files that decide how the test runner behaves (its config, its dependency
+# manifests, its plugin hooks). Test directories are RESTORED, not replaced
+# wholesale, so a model-added test still runs -- some tasks ask the candidate to
+# write tests, and dropping those would change the task. Apparatus files are
+# different: they come from canonical or they do not exist, because an ADDED
+# pytest.ini or vitest.config.ts is a rewrite of the gate wearing a new filename.
+GRADED_TEST_DIRS = frozenset({"tests", "test", "__tests__", "spec"})
+
+APPARATUS_NAMES = frozenset({
+    "verify.sh",
+    # python: what pytest loads before it runs a single test
+    "conftest.py", "pytest.ini", "pyproject.toml", "setup.cfg", "setup.py",
+    "tox.ini", "sitecustomize.py", "usercustomize.py", "requirements.txt",
+    # node: what `npm test` resolves to, and what it installs first
+    "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "tsconfig.json",
+    # registry/index redirection -- a dependency source is a code source
+    ".npmrc", "pip.conf", ".pydistutils.cfg",
+})
+
+APPARATUS_GLOBS = ("vitest.config.*", "vite.config.*", "jest.config.*",
+                   "babel.config.*", "tsconfig.*.json", "*.pth")
+
+# Apparatus the canonical verify.sh CREATES on an honest run: `npm install` writes
+# a lock file into every working copy, none of the twelve tasks ships one, and
+# 103 of the 309 retained scratch trees therefore contain one. They are stripped
+# from the grading tree like any other model-owned apparatus -- a lock file can
+# redirect where a dependency comes from -- but they are never REPORTED, because
+# a flag that fires on every TypeScript run tells the corpus nothing. Same
+# distinction LOC_EXCLUDE already draws for loc_changed(): an install artifact is
+# not model-authored.
+GENERATED_APPARATUS = frozenset({"package-lock.json", "yarn.lock", "pnpm-lock.yaml"})
+
+# Not part of the grade at any price: the model's own dependency trees are
+# executables it installed and can replace (door 4), .git is prepare_scratch's
+# bookkeeping, and the caches are derived bytes that can shadow a restored source.
+NOT_GRADED_DIRS = frozenset({".git", ".venv", "venv", "node_modules",
+                             "__pycache__", ".pytest_cache", ".mypy_cache",
+                             ".ruff_cache", ".tox"})
+
+
+def _is_apparatus(name):
+    return (name in APPARATUS_NAMES
+            or any(fnmatch.fnmatch(name, g) for g in APPARATUS_GLOBS))
+
+
+def _graded_files(root):
+    """Yield (relpath, abspath) for files under root, skipping NOT_GRADED_DIRS."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in NOT_GRADED_DIRS]
+        for fn in filenames:
+            p = os.path.join(dirpath, fn)
+            yield os.path.relpath(p, root), p
+
+
+def canonical_grading_files(task_dir):
+    """relpath in the working copy -> the canonical file the grade must use.
+
+    Single definition of "apparatus", shared by tamper_report (which reports on
+    it) and grading_tree (which enforces it), so the two can never disagree about
+    what is being protected.
+    """
+    out = {}
+    vs = os.path.join(task_dir, "verify.sh")
+    if os.path.exists(vs):
+        out["verify.sh"] = vs
+    for rel, src in _graded_files(os.path.join(task_dir, "base")):
+        parts = rel.split(os.sep)
+        if any(p in GRADED_TEST_DIRS for p in parts[:-1]) or _is_apparatus(parts[-1]):
+            out[rel] = src
+    return out
+
+
+def _same_bytes(a, b):
+    try:
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            return fa.read() == fb.read()
+    except OSError:
         return False
-    env = dict(os.environ)
-    env["GAUNTLET_TASK_DIR"] = os.path.abspath(task_dir)
-    r = subprocess.run(["bash", "verify.sh"], cwd=scratch, env=env,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=600)
-    return r.returncode == 0
+
+
+def tamper_report(scratch, task_dir):
+    """Sorted "<how>:<path>" strings for every apparatus file the model altered.
+
+    Reported, not punished: the overlay already makes the grade honest, so this
+    exists to make the question "did anyone try?" answerable from results.jsonl
+    once the scratch trees are gone. Byte comparison, deliberately -- a
+    reformatted graded test is still a rewritten graded test, and no reference
+    solution in the suite touches one.
+    """
+    found = []
+    canon = canonical_grading_files(task_dir)
+    for rel, src in canon.items():
+        dst = os.path.join(scratch, rel)
+        if not os.path.isfile(dst):
+            found.append("deleted:" + rel)
+        elif not _same_bytes(src, dst):
+            found.append("modified:" + rel)
+    for rel, _path in _graded_files(scratch):
+        name = os.path.basename(rel)
+        if rel not in canon and _is_apparatus(name) and name not in GENERATED_APPARATUS:
+            found.append("added:" + rel)
+    return sorted(f.replace(os.sep, "/") for f in found)
+
+
+def _install_canonical(dst, src):
+    """Put src at dst, defeating whatever shape the model left there.
+
+    A graded path replaced by a directory, or by a file with its write bit
+    cleared, must not raise: a grader that crashes on tamper converts a cheat
+    into a lost run instead of a fail, which is a worse outcome than the bug.
+    """
+    parent = os.path.dirname(dst)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(parent, 0o755)
+    if os.path.islink(dst) or os.path.isfile(dst):
+        os.remove(dst)
+    elif os.path.isdir(dst):
+        shutil.rmtree(dst)
+    shutil.copy2(src, dst)
+    os.chmod(dst, 0o755 if dst.endswith("verify.sh") else 0o644)
+
+
+@contextlib.contextmanager
+def grading_tree(scratch, task_dir):
+    """Yield a throwaway working copy in which the grade is authoritative.
+
+    Built as: the model's tree minus its dependency trees, minus any apparatus
+    file it added, plus every canonical apparatus file overlaid on top. Lives
+    outside the repo, so it is unreachable from a model that is somehow still
+    running and invisible to loc_changed().
+    """
+    tmp = tempfile.mkdtemp(prefix="gauntlet-grade-")
+    tree = os.path.join(tmp, "work")
+    try:
+        try:
+            shutil.copytree(scratch, tree,
+                            ignore=shutil.ignore_patterns(*sorted(NOT_GRADED_DIRS)),
+                            ignore_dangling_symlinks=True)
+        except shutil.Error:
+            # Unreadable files are the model's own; the ones that matter are
+            # overlaid from canonical below and the rest fail the grade honestly.
+            pass
+        canon = canonical_grading_files(task_dir)
+        for rel, path in list(_graded_files(tree)):
+            if rel not in canon and _is_apparatus(os.path.basename(rel)):
+                with contextlib.suppress(OSError):
+                    os.remove(path)
+        for rel, src in canon.items():
+            _install_canonical(os.path.join(tree, rel), src)
+        yield tree
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_verify(scratch, task_dir):
+    """The authoritative gate. Runs the TASK's verify.sh, never the model's copy.
+
+    GAUNTLET_TASK_DIR points at the real task dir here, not at the sanitised
+    mirror run_cli hands the model (ticket 16): this is the runner's own
+    subprocess, after the model is gone, and t3/t4 resolve their hidden
+    acceptance suites through it.
+    """
+    if not os.path.exists(os.path.join(task_dir, "verify.sh")):
+        return False
+    with grading_tree(scratch, task_dir) as tree:
+        env = dict(os.environ)
+        env["GAUNTLET_TASK_DIR"] = os.path.abspath(task_dir)
+        r = subprocess.run(["bash", "verify.sh"], cwd=tree, env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=600)
+        return r.returncode == 0
 
 
 # install artifacts written during the run are not model-authored code
@@ -738,6 +925,12 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         with open(os.path.join(tdir, run["run_id"] + ".txt"), "w") as tf:
             tf.write(out)
 
+    # ticket 18: read the scratch tree BEFORE grading and record what the model
+    # did to the grading apparatus. The overlay in run_verify already makes the
+    # grade honest; this is so the corpus can answer "did anyone try?" without
+    # the scratch trees, which are not retained forever.
+    tamper_files = tamper_report(scratch, task_dir)
+
     try:
         passed = run_verify(scratch, task_dir)
     except subprocess.TimeoutExpired:
@@ -757,6 +950,7 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "tokens_in": tokens_in, "tokens_out": tokens_out, "wall_s": wall_s,
         "turns": turns, "loc_changed": loc, "exit_reason": exit_reason,
         "sealed": sealed,
+        "tampered": bool(tamper_files), "tamper_files": tamper_files,
     }
     append_row(results_path, row)
 
