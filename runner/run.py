@@ -31,6 +31,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 
+import broker
 import sandbox_seal
 import usage_ledger
 
@@ -172,6 +173,21 @@ DONE_GATE_SENTENCE = (
     "\n\n---\nYour work is judged solely by running `bash verify.sh` from the "
     "repository root; it must exit 0. Run it yourself and confirm a clean exit "
     "before you finish. Do not edit verify.sh or the tests."
+)
+
+# Ticket 17 section 5: "K is disclosed to the model in the prompt. A budget the
+# agent can plan against is the practitioner's situation and matches 03's
+# estimand; a hidden budget instead measures how a model behaves when its tools
+# begin failing for reasons it cannot see." So the cap is stated, and so is what
+# happens at exhaustion -- a model that does not know the run ends cannot budget
+# its last check.
+BROKER_INSTRUCTION_TMPL = (
+    "\n\n`verify.sh` is a metered feedback channel, not a local test run. It "
+    "reports a PASS/FAIL verdict and test counts only -- no test names, no file "
+    "paths, no assertion text -- and you may call it at most {k} times in this "
+    "run. Request {k1} ends the run immediately and it is scored as a failure, "
+    "so spend the budget deliberately. Any tests inside this working copy are "
+    "yours and are unmetered: run them directly as often as you like."
 )
 
 HYBRID_INSTRUCTION = (
@@ -417,7 +433,7 @@ def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def compose_prompt(task_dir, harness, mode):
+def compose_prompt(task_dir, harness, mode, k=None):
     parts = []
     for fname in ("PROMPT.md", "TICKET.md", "SPEC.md"):
         p = os.path.join(task_dir, fname)
@@ -426,12 +442,23 @@ def compose_prompt(task_dir, harness, mode):
                 parts.append(f"# {fname}\n\n{f.read().strip()}")
     prompt = "\n\n".join(parts)
     prompt += DONE_GATE_SENTENCE
+    if k is not None:
+        prompt += BROKER_INSTRUCTION_TMPL.format(k=k, k1=k + 1)
     if mode == "hybrid":
         prompt += HYBRID_INSTRUCTION
     return prompt
 
 
-def prepare_scratch(task_dir, scratch, harness):
+def prepare_scratch(task_dir, scratch, harness, verify_text=None):
+    """Build the model's working copy.
+
+    verify_text replaces the canonical verify.sh with the broker client shim
+    (ticket 17). It is written BEFORE the base commit, like the harness files
+    above, so it never appears in loc_changed()'s diff as model-authored work.
+    None keeps the pre-broker behaviour -- a straight copy of the canonical
+    script -- which is what the v1 corpus was produced under and what the
+    ticket-16 and ticket-18 tests exercise.
+    """
     if os.path.exists(scratch):
         shutil.rmtree(scratch)
     base = os.path.join(task_dir, "base")
@@ -440,7 +467,11 @@ def prepare_scratch(task_dir, scratch, harness):
     vsrc = os.path.join(task_dir, "verify.sh")
     if os.path.exists(vsrc):
         vdst = os.path.join(scratch, "verify.sh")
-        shutil.copy2(vsrc, vdst)
+        if verify_text is None:
+            shutil.copy2(vsrc, vdst)
+        else:
+            with open(vdst, "w", encoding="utf-8") as f:
+                f.write(verify_text)
         os.chmod(vdst, 0o755)
     # drop harness BEFORE the base commit so it is not counted as model LOC
     if harness:
@@ -489,8 +520,8 @@ def build_cli_cmd(model, effort, prompt):
 
 
 @contextlib.contextmanager
-def staged_task_dir(task_dir):
-    """Yield a sanitised mirror of task_dir: acceptance/ and nothing else.
+def staged_task_dir(task_dir, stage_acceptance=True):
+    """Yield a sanitised mirror of task_dir for the model's GAUNTLET_TASK_DIR.
 
     GAUNTLET_TASK_DIR used to point the model under test at the canonical task
     directory, which holds solution.patch -- the reference answer -- alongside
@@ -498,21 +529,29 @@ def staged_task_dir(task_dir):
     that variable was the signposted route to its own answer key, and one `cat`
     away (ticket 16).
 
-    The variable cannot simply be dropped: t3-a and all three t4-* tasks
-    resolve acceptance/ through it, because prepare_scratch copies verify.sh
-    into the scratch dir and orphans it from its test assets. Removing it would
-    take away the model's ability to self-check, which is ticket 17's decision
-    to make, not this function's. So the model gets a directory that satisfies
-    verify.sh and contains no answer: the suite it is graded on, and none of
-    the patch that solves it.
+    Ticket 16 could not empty the mirror: t3-a and all three t4-* tasks resolve
+    acceptance/ through this variable, because prepare_scratch copied verify.sh
+    into the scratch dir and orphaned it from its test assets. Mirroring the
+    suite was what kept local self-check alive, at the price of leaving the
+    suite readable AS SOURCE -- ticket 16 section 8's one open gap, recorded
+    there as an executable assertion rather than a paragraph.
 
-    __pycache__ is excluded -- a stale .pyc of the acceptance suite is the
-    source in all but name.
+    Ticket 17 closed it by removing the reason: self-check is now an RPC to the
+    broker, which needs no local copy of anything, so stage_acceptance=False is
+    the brokered default and the mirror is EMPTY. The directory still exists
+    and the variable is still set, so a script reaching through it fails to
+    find a suite rather than silently falling back to $SCRIPT_DIR and finding
+    the real one.
+
+    stage_acceptance=True is the ticket-16 behaviour, kept for the v1 protocol
+    (GAUNTLET_NO_BROKER=1) and for the tests that prove the gap was real.
+    __pycache__ is excluded there -- a stale .pyc of the acceptance suite is
+    the source in all but name.
     """
     tmp = tempfile.mkdtemp(prefix="gauntlet-taskdir-")
     try:
         src = os.path.join(task_dir, "acceptance")
-        if os.path.isdir(src):
+        if stage_acceptance and os.path.isdir(src):
             shutil.copytree(src, os.path.join(tmp, "acceptance"),
                             ignore=shutil.ignore_patterns("__pycache__"))
         yield tmp
@@ -525,7 +564,18 @@ def seal_enabled():
     return os.environ.get("GAUNTLET_NO_SANDBOX") != "1"
 
 
-def run_cli(cmd, scratch, timeout_s, task_dir, model=None):
+def broker_enabled():
+    """False only when a run explicitly opts out via GAUNTLET_NO_BROKER=1.
+
+    Same shape as seal_enabled, and for the same reason: the opt-out has to
+    exist (it is how the control arm reproduces the pre-broker condition) and
+    it has to be loud and recorded, because a `brokered: false` row is protocol
+    v1 and the pre-registration forbids pooling the two strata.
+    """
+    return os.environ.get("GAUNTLET_NO_BROKER") != "1"
+
+
+def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
     """Run headlessly, killing the process group on timeout. Returns (out, reason, wall).
 
     The command runs sealed (ticket 16): reads of this repo are denied except
@@ -537,6 +587,14 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None):
     The seal is fail-closed: no sandbox-exec means no run, rather than a run
     that silently measures an open-book attempt. GAUNTLET_NO_SANDBOX=1 is the
     documented, loudly-warned opt-out, and it is recorded on the results row.
+
+    `bk` is a live broker.Broker (ticket 17). Its socket is the model's only
+    route to acceptance feedback; the seal is widened by exactly that one
+    directory, and the mirror is emptied to match. Two exit reasons come out of
+    it and both are terminal for the row: `cap_exhausted` (the model asked for
+    request K+1 and the run was ended, scored a failure per the estimand) and
+    `broker_failed` (the counter faulted, so the run is uncounted and unusable
+    under the pre-registration).
     """
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)   # subscription auth only
@@ -552,13 +610,19 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None):
 
     with contextlib.ExitStack() as stack:
         # verify.sh is copied into scratch; tasks whose test assets live beside
-        # the canonical script (t3, t4) resolve them through this. It points at
-        # a sanitised mirror, never at the real task dir -- see staged_task_dir.
-        mirror = stack.enter_context(staged_task_dir(task_dir))
+        # the canonical script (t3, t4) resolved them through this. Brokered,
+        # the mirror is empty and the variable exists only so a stray reference
+        # fails closed rather than falling back to the real task dir.
+        mirror = stack.enter_context(
+            staged_task_dir(task_dir, stage_acceptance=bk is None))
         env["GAUNTLET_TASK_DIR"] = mirror
+        allow = [scratch, mirror]
+        if bk is not None:
+            env["GAUNTLET_BROKER_SOCK"] = bk.sock_path
+            allow.append(bk.dir)
         if seal_enabled():
             prefix = stack.enter_context(sandbox_seal.sandbox_prefix(
-                deny_paths=[ROOT], allow_paths=[scratch, mirror]))
+                deny_paths=[ROOT], allow_paths=allow))
             cmd = prefix + list(cmd)
         else:
             print("WARNING: GAUNTLET_NO_SANDBOX=1 -- model can read its own "
@@ -567,19 +631,35 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None):
         proc = subprocess.Popen(cmd, cwd=scratch, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, start_new_session=True, env=env)
+
+        def kill_group():
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+
+        if bk is not None:
+            # The broker can now end the run. Attaching after Popen is the
+            # whole reason attach() is separate from start(): the socket has to
+            # exist before the model launches, the pid only after.
+            bk.attach(kill_group)
         try:
             out, _err = proc.communicate(timeout=timeout_s)
             reason = "ok" if proc.returncode == 0 else "cli_error"
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            kill_group()
             try:
                 out, _err = proc.communicate(timeout=30)
             except Exception:
                 out = ""
             reason = "timeout"
+        # A broker verdict overrides the CLI's exit status, because the CLI's
+        # status is downstream of it: a killed model reports cli_error, and
+        # filing that would hide a cap termination inside the fault bucket the
+        # pre-registration re-runs from the spare pool.
+        if bk is not None:
+            if bk.failed:
+                reason = "broker_failed"
+            elif bk.exhausted:
+                reason = "cap_exhausted"
     return out or "", reason, round(time.time() - t0, 2)
 
 
@@ -720,7 +800,7 @@ def _same_bytes(a, b):
         return False
 
 
-def tamper_report(scratch, task_dir):
+def tamper_report(scratch, task_dir, installed=None):
     """Sorted "<how>:<path>" strings for every apparatus file the model altered.
 
     Reported, not punished: the overlay already makes the grade honest, so this
@@ -728,13 +808,26 @@ def tamper_report(scratch, task_dir):
     once the scratch trees are gone. Byte comparison, deliberately -- a
     reformatted graded test is still a rewritten graded test, and no reference
     solution in the suite touches one.
+
+    `installed` maps a relpath to the TEXT the runner itself put there, for
+    files that legitimately differ from canonical: the broker shim is written
+    over verify.sh on every brokered run, and diffing it against the canonical
+    script would flag `modified:verify.sh` on every honest run in the sweep --
+    the same false-positive failure the ticket-18 audit hit with
+    package-lock.json. The model rewriting the shim is still a finding, because
+    the comparison moves to the shim rather than being switched off.
     """
     found = []
+    installed = installed or {}
     canon = canonical_grading_files(task_dir)
     for rel, src in canon.items():
         dst = os.path.join(scratch, rel)
         if not os.path.isfile(dst):
             found.append("deleted:" + rel)
+        elif rel in installed:
+            with open(dst, "r", encoding="utf-8", errors="replace") as f:
+                if f.read() != installed[rel]:
+                    found.append("modified:" + rel)
         elif not _same_bytes(src, dst):
             found.append("modified:" + rel)
     for rel, _path in _graded_files(scratch):
@@ -796,23 +889,41 @@ def grading_tree(scratch, task_dir):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def run_verify(scratch, task_dir):
-    """The authoritative gate. Runs the TASK's verify.sh, never the model's copy.
+def graded_run(scratch, task_dir):
+    """Run the canonical grade over the model's source. Returns (rc, output).
 
-    GAUNTLET_TASK_DIR points at the real task dir here, not at the sanitised
-    mirror run_cli hands the model (ticket 16): this is the runner's own
-    subprocess, after the model is gone, and t3/t4 resolve their hidden
-    acceptance suites through it.
+    One definition of "the grade", shared by the authoritative gate below and
+    by the broker, so brokered feedback can never diverge from what the run is
+    finally scored on -- the model is told about the same measurement it will
+    be judged by, at lower resolution, K times.
+
+    GAUNTLET_TASK_DIR points at the real task dir here, not at the mirror
+    run_cli hands the model (ticket 16): both callers are the runner's own
+    subprocess, outside the model's sandbox, and t3/t4 resolve their hidden
+    acceptance suites through it. Output is captured rather than discarded
+    because the broker needs counts out of it; nothing forwards the text (see
+    broker.parse_counts).
     """
-    if not os.path.exists(os.path.join(task_dir, "verify.sh")):
-        return False
     with grading_tree(scratch, task_dir) as tree:
         env = dict(os.environ)
         env["GAUNTLET_TASK_DIR"] = os.path.abspath(task_dir)
+        env.pop("GAUNTLET_BROKER_SOCK", None)
         r = subprocess.run(["bash", "verify.sh"], cwd=tree, env=env,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=600)
-        return r.returncode == 0
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, errors="replace", timeout=600)
+        return r.returncode, r.stdout or ""
+
+
+def run_verify(scratch, task_dir):
+    """The authoritative gate. Runs the TASK's verify.sh, never the model's copy.
+
+    Not a brokered call and never counted against K (ticket 17 section 5): it
+    goes straight to graded_run, after the model is gone and the broker is
+    closed.
+    """
+    if not os.path.exists(os.path.join(task_dir, "verify.sh")):
+        return False
+    return graded_run(scratch, task_dir)[0] == 0
 
 
 # install artifacts written during the run are not model-authored code
@@ -854,6 +965,12 @@ def existing_ids(results_path):
     uses for analysis. A cli_error/timeout/etc. row means the CLI invocation itself
     never finished, so its run_id must stay pending and retry on the next sweep
     instead of silently blocking behind its own failed attempt.
+
+    `cap_exhausted` is the exception and belongs with "ok": it is not a fault,
+    it is the protocol working -- the model spent its K requests and the run was
+    ended and scored a failure (pre-registration section 7). Re-running it would
+    be retry-until-pass, which is exactly the optional stopping section 8 rules
+    out. `broker_failed` is a fault and does stay pending, like any CLI error.
     """
     ids = set()
     if not os.path.exists(results_path):
@@ -865,7 +982,7 @@ def existing_ids(results_path):
                 continue
             try:
                 row = json.loads(line)
-                if row.get("exit_reason") == "ok":
+                if row.get("exit_reason") in ("ok", "cap_exhausted"):
                     ids.add(row["run_id"])
             except Exception:
                 continue
@@ -883,8 +1000,6 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     tier3 = run["task"].startswith("t3")
     timeout_s = defaults.get("timeout_t3_s", 3600) if tier3 else defaults.get("timeout_t1_t2_s", 1200)
 
-    prepare_scratch(task_dir, scratch, run["harness"])
-
     mock = os.environ.get("GAUNTLET_MOCK")
     tokens_in = tokens_out = turns = 0
     wall_s = 0.0
@@ -894,48 +1009,94 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     # Recorded per row so "was this result open-book?" is answerable from the
     # corpus instead of reconstructed from commit dates.
     sealed = None
-    if mock == "fail":
-        exit_reason = "mock_fail"
-    elif mock:  # "1" or any truthy -> mock pass
-        ok = apply_mock(task_dir, scratch)
-        exit_reason = "mock" if ok else "mock_patch_failed"
-    else:
-        prompt = compose_prompt(task_dir, run["harness"], run["mode"])
-        cmd = build_cli_cmd(run["model"], run["effort"], prompt)
-        sealed = seal_enabled()
-        out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir, run["model"])
-        usage_detail = usage_ledger.parse_usage_detailed(model_family(run["model"]), out)
-        tokens_in = usage_detail["tokens_in"]
-        tokens_out = usage_detail["tokens_out"]
-        turns = usage_detail["turns"]
-        # A CLI can exit 0 having never emitted a completed turn -- the stream
-        # simply stops mid-tool-call. run_cli only sees returncode 0 and calls
-        # that "ok", so the run lands in results.jsonl as a successful zero-token
-        # run. That row is poison for any spend measurement: it is not a model
-        # choosing to spend nothing, it is a run whose generation never finished,
-        # and averaging it into a tier cell drags the mean toward zero and
-        # inflates within-tier CV. Same class of truncation as a timeout, so it
-        # gets the same treatment -- a non-"ok" reason, which is the flag every
-        # analysis already gates on (ladder_from_results.py excludes it; the
-        # excluded count is printed, never silently dropped).
-        if exit_reason == "ok" and turns == 0:
-            exit_reason = "no_completion"
-        tdir = os.path.join(RUNNER_DIR, "results", "transcripts")
-        os.makedirs(tdir, exist_ok=True)
-        with open(os.path.join(tdir, run["run_id"] + ".txt"), "w") as tf:
-            tf.write(out)
+    # ticket 17: the same three questions for the acceptance cap. brokered=false
+    # is a protocol-v1 row and the pre-registration forbids pooling it with v2,
+    # so it is a field rather than an assumption about commit dates.
+    brokered = None
+    k_cap = None
+    acceptance_requests = None
+    installed = None
+
+    with contextlib.ExitStack() as stack:
+        bk = None
+        if not mock and broker_enabled():
+            brokered = True
+            k_cap = broker.resolve_k(defaults.get("k_acceptance"))
+            # Started before prepare_scratch so the shim can carry the socket
+            # path and still land in the base commit -- outside loc_changed()'s
+            # diff, like the harness files. A broker that will not start raises
+            # here, before a token is spent: no counter, no run.
+            bk = stack.enter_context(broker.acceptance_broker(
+                scratch, task_dir, k_cap, graded_run))
+            installed = {"verify.sh": broker.shim_text(bk.sock_path, k_cap,
+                                                       sys.executable)}
+        elif not mock:
+            brokered = False
+            print("WARNING: GAUNTLET_NO_BROKER=1 -- acceptance feedback is "
+                  "uncapped and the canonical suite is readable as source; "
+                  "this row is marked brokered=false (protocol v1)",
+                  file=sys.stderr)
+
+        prepare_scratch(task_dir, scratch, run["harness"],
+                        verify_text=(installed or {}).get("verify.sh"))
+
+        if mock == "fail":
+            exit_reason = "mock_fail"
+        elif mock:  # "1" or any truthy -> mock pass
+            ok = apply_mock(task_dir, scratch)
+            exit_reason = "mock" if ok else "mock_patch_failed"
+        else:
+            prompt = compose_prompt(task_dir, run["harness"], run["mode"],
+                                    k=k_cap)
+            cmd = build_cli_cmd(run["model"], run["effort"], prompt)
+            sealed = seal_enabled()
+            out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir,
+                                               run["model"], bk=bk)
+            usage_detail = usage_ledger.parse_usage_detailed(model_family(run["model"]), out)
+            tokens_in = usage_detail["tokens_in"]
+            tokens_out = usage_detail["tokens_out"]
+            turns = usage_detail["turns"]
+            # A CLI can exit 0 having never emitted a completed turn -- the
+            # stream simply stops mid-tool-call. run_cli only sees returncode 0
+            # and calls that "ok", so the run lands in results.jsonl as a
+            # successful zero-token run. That row is poison for any spend
+            # measurement: it is not a model choosing to spend nothing, it is a
+            # run whose generation never finished, and averaging it into a tier
+            # cell drags the mean toward zero and inflates within-tier CV. Same
+            # class of truncation as a timeout, so it gets the same treatment --
+            # a non-"ok" reason, which is the flag every analysis already gates
+            # on (ladder_from_results.py excludes it; the excluded count is
+            # printed, never silently dropped).
+            if exit_reason == "ok" and turns == 0:
+                exit_reason = "no_completion"
+            tdir = os.path.join(RUNNER_DIR, "results", "transcripts")
+            os.makedirs(tdir, exist_ok=True)
+            with open(os.path.join(tdir, run["run_id"] + ".txt"), "w") as tf:
+                tf.write(out)
+        if bk is not None:
+            acceptance_requests = bk.requests
 
     # ticket 18: read the scratch tree BEFORE grading and record what the model
     # did to the grading apparatus. The overlay in run_verify already makes the
     # grade honest; this is so the corpus can answer "did anyone try?" without
     # the scratch trees, which are not retained forever.
-    tamper_files = tamper_report(scratch, task_dir)
+    tamper_files = tamper_report(scratch, task_dir, installed=installed)
 
     try:
         passed = run_verify(scratch, task_dir)
     except subprocess.TimeoutExpired:
         passed = False
         exit_reason = exit_reason + "+verify_timeout"
+
+    # Pre-registration section 7: "Runs terminated by the cap are scored as
+    # failures." The verifier outcome at the moment of termination is still
+    # recorded, under its own name -- scoring the run a failure is a protocol
+    # rule, and quietly discarding what the grader actually said would make the
+    # rule unauditable. Nothing downstream may read pass_at_cap as pi.
+    pass_at_cap = None
+    if exit_reason == "cap_exhausted":
+        pass_at_cap = passed
+        passed = False
 
     loc = loc_changed(scratch)
     # `model` stays exactly as the config wrote it so existing rows, run_ids and
@@ -950,6 +1111,14 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "tokens_in": tokens_in, "tokens_out": tokens_out, "wall_s": wall_s,
         "turns": turns, "loc_changed": loc, "exit_reason": exit_reason,
         "sealed": sealed,
+        # ticket 17. acceptance_requests is the design parameter K governs, and
+        # it is counted by the broker rather than inferred from CLI telemetry --
+        # which is what makes it comparable across families, unlike `turns`
+        # (structurally 1 on all 148 Codex rows, and barred from citation).
+        "brokered": brokered, "k_cap": k_cap,
+        "acceptance_requests": acceptance_requests,
+        "cap_exhausted": exit_reason == "cap_exhausted",
+        "pass_at_cap": pass_at_cap,
         "tampered": bool(tamper_files), "tamper_files": tamper_files,
     }
     append_row(results_path, row)
@@ -1012,6 +1181,17 @@ def main():
             print(b)
         sys.exit(2)
 
+    # Same posture, same reason: a K outside the pre-registered range makes every
+    # row of the sweep unreportable, and finding that at analysis time is finding
+    # it after the spend.
+    k_cap = None
+    if not os.environ.get("GAUNTLET_MOCK") and broker_enabled():
+        try:
+            k_cap = broker.resolve_k((cfg.get("defaults", {}) or {}).get("k_acceptance"))
+        except ValueError as e:
+            print(f"config rejected -- {e}")
+            sys.exit(2)
+
     done = existing_ids(args.results)
     pending = [r for r in runs if r["run_id"] not in done]
     skipped = len(runs) - len(pending)
@@ -1019,7 +1199,8 @@ def main():
         pending = pending[:args.limit]
 
     print(f"total={len(runs)} pending={len(pending)} already_done={skipped} "
-          f"mock={os.environ.get('GAUNTLET_MOCK', '0')}")
+          f"mock={os.environ.get('GAUNTLET_MOCK', '0')} "
+          f"K={k_cap if k_cap is not None else 'off'}")
 
     if args.dry_run:
         for r in runs:
@@ -1040,9 +1221,13 @@ def main():
             kimi_spent += kimi_dollars(row["tokens_in"], row["tokens_out"])
             cap = f"/{args.max_usd:.2f}" if args.max_usd is not None else ""
             cost_note = f" kimi_spend=${kimi_spent:.3f}{cap}"
+        acc = ""
+        if row["acceptance_requests"] is not None:
+            acc = f" acc={row['acceptance_requests']}/{row['k_cap']}"
         print(f"    pass={row['pass']} reason={row['exit_reason']} "
               f"tok_in={row['tokens_in']} tok_out={row['tokens_out']} "
-              f"wall={row['wall_s']}s turns={row['turns']} loc={row['loc_changed']}{cost_note}",
+              f"wall={row['wall_s']}s turns={row['turns']} "
+              f"loc={row['loc_changed']}{acc}{cost_note}",
               flush=True)
 
 

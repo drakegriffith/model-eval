@@ -33,6 +33,7 @@ import pytest
 
 RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RUNNER_DIR)
+import broker  # noqa: E402
 import run as runner  # noqa: E402
 
 PROBE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "cheat_probe.py")
@@ -207,12 +208,21 @@ def test_grader_still_reads_the_real_acceptance_suite(repo):
 
 
 def test_mirror_is_cleaned_up_and_contains_no_answer(repo):
-    """The mirror is a temp dir with a lifetime; it must hold the suite, never
-    the patch, and must not outlive the run."""
+    """The mirror is a temp dir with a lifetime; it must never hold the patch
+    and must not outlive the run.
+
+    Two shapes now. Under the v1 protocol (GAUNTLET_NO_BROKER=1) it still
+    stages the suite, which is what kept local self-check alive at the cost of
+    ticket 16 section 8's gap. Brokered, self-check is an RPC and the mirror is
+    empty -- asserted here so "empty" stays a property rather than a comment."""
     with runner.staged_task_dir(repo["task_dir"]) as mirror:
         assert os.path.isdir(os.path.join(mirror, "acceptance"))
         assert not os.path.exists(os.path.join(mirror, "solution.patch"))
         assert sorted(os.listdir(mirror)) == ["acceptance"]
+    assert not os.path.exists(mirror)
+
+    with runner.staged_task_dir(repo["task_dir"], stage_acceptance=False) as mirror:
+        assert os.listdir(mirror) == []
     assert not os.path.exists(mirror)
 
 
@@ -239,25 +249,39 @@ def test_timeout_still_kills_the_whole_process_group_under_the_seal(repo, monkey
 
 
 # --------------------------------------------------------------------------- #
-# The residual gap, written as an assertion rather than a paragraph.
+# The gap this file used to record, now closed. Kept here rather than moved,
+# because the inversion IS the record of what changed.
 # --------------------------------------------------------------------------- #
-def test_mirrored_acceptance_stays_readable_documented_gap_ticket_17(repo, monkeypatch):
-    """KNOWN AND DELIBERATE: the model can still read the acceptance suite's
-    SOURCE, through the mirror it is handed so verify.sh can run.
+def test_mirrored_acceptance_is_no_longer_readable_ticket_17_closed(repo, monkeypatch):
+    """INVERTED 2026-07-27. This assertion previously ran the other way.
 
-    This is not an oversight and not fixable here. Self-check runs the suite as
-    the model's own child process, at the model's own uid, inside the model's
-    own sandbox -- so any rule that hides those bytes from the model hides them
-    from pytest too. Sealing the suite as source therefore REQUIRES removing
-    local self-check, which is Option A of ticket 17 and Drake's decision, not
-    this ticket's.
+    Ticket 16 could not seal the acceptance suite as SOURCE, and said why:
+    self-check ran the suite as the model's own child process, at the model's
+    own uid, inside the model's own sandbox, so any rule hiding those bytes from
+    the model hid them from pytest too. The mirror existed to keep self-check
+    alive and the suite's source rode along with it. The old test asserted
+    `got["canary"]` was TRUE and named this ticket in its failure message.
 
-    Asserted, not merely described, so the gap is checkable and so that whoever
-    closes 17 gets a red test here telling them exactly which assertion to flip.
+    Ticket 17 closed it by removing the requirement rather than defeating the
+    constraint: self-check is now an RPC to the runner-owned broker, which
+    returns counts only, so nothing local needs to read the suite and the mirror
+    is empty. The constraint was never beaten -- it was made irrelevant.
+
+    Self-check being genuinely preserved is asserted in
+    tests/test_acceptance_broker.py::test_self_check_still_grades_through_the_broker,
+    and the v1 mirror shape is still exercised above, so a regression on either
+    side shows up as a red test rather than as silence.
     """
-    got = via_run_cli(repo, monkeypatch)["env_acceptance"]
+    monkeypatch.setattr(runner, "ROOT", repo["root"])
+    bk = broker.Broker(repo["scratch"], repo["task_dir"], 1, runner.graded_run).start()
+    try:
+        out, reason, _wall = runner.run_cli(probe_cmd(), repo["scratch"], 300,
+                                            repo["task_dir"], bk=bk)
+    finally:
+        bk.close()
 
-    assert got["canary"], (
-        "acceptance source is no longer readable via the mirror -- if that was "
-        "intentional, ticket 17 has been decided and this test should be "
-        "inverted; if not, self-check is silently broken")
+    assert reason == "ok", out
+    got = json.loads(out)["env_acceptance"]
+    assert not got["canary"], (
+        f"acceptance source is readable again at {got['path']} -- the broker's "
+        "mirror is supposed to be empty; ticket 16 section 8's gap has reopened")
