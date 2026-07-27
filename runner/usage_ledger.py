@@ -46,8 +46,8 @@ def parse_usage_detailed(family, out):
     total tokens processed -- comparable across families:
 
     - claude/kimi: `claude -p --output-format json`'s one "result" event holds
-      cumulative usage for the whole session, but usage.input_tokens itself is
-      only the freshest turn's uncached tokens. tokens_in = input_tokens +
+      cumulative usage for the whole session. Each of the three fields is a sum
+      over the session's model requests, so tokens_in = input_tokens +
       cache_creation_input_tokens + cache_read_input_tokens.
     - codex: each `turn.completed` event's usage.input_tokens already folds
       cached_input_tokens in (it is a subset, not additional), so tokens_in is
@@ -55,6 +55,16 @@ def parse_usage_detailed(family, out):
       again would double-count. Every archived run had exactly one
       turn.completed event; summing is here for the (unverified) case codex
       ever emits more than one.
+
+    Both families therefore report the SAME quantity -- the sum over model
+    requests of the full context sent at each request. Ticket 20 measured this
+    against both CLIs' per-request session logs (204/204 rows) and ruled the
+    unit shared; see runner/token_units.py. Two readings recorded during ticket
+    08 do not survive that measurement and are corrected here: codex's single
+    turn.completed is a CUMULATIVE total, not one session context counted once
+    (its `total_token_usage` is a running sum of `last_token_usage`), and
+    claude's usage.input_tokens is the sum of fresh input across requests, not
+    the freshest turn's alone. Neither correction changes this formula.
     """
     ti = to = turns = cache_read = cache_creation = 0
     if family in ("claude", "kimi"):
@@ -167,7 +177,8 @@ def usd_estimate(model_id, tokens_in, tokens_out, cache_read_tokens=0,
 # --------------------------------------------------------------------------- #
 # Row construction
 # --------------------------------------------------------------------------- #
-def build_usage_row(row, family, usage_detail=None, model_id=None):
+def build_usage_row(row, family, usage_detail=None, model_id=None,
+                    kind="worker", judged_run_id=None):
     """Build one usage.jsonl row from a results.jsonl-shaped `row`.
 
     `usage_detail` is parse_usage_detailed's output when tokens were parsed
@@ -185,6 +196,13 @@ def build_usage_row(row, family, usage_detail=None, model_id=None):
     via run.resolve_model) -- pre-registry archived rows only carry an alias
     ("sol") in `model`, and scaffold/pricing lookups below are keyed by
     canonical id, so a caller that skips this silently loses those lookups.
+
+    `kind` separates worker runs from judge-panel calls (ticket 20 item 3).
+    Both shapes carry the SAME keys so a consumer never has to know which it is
+    holding: a judge row sets kind="judge" and `judged_run_id` to the worker
+    run whose diff it scored, and keeps its own unique `run_id`. Rows written
+    before this field existed have no `kind` and are worker rows by definition
+    -- read them with row.get("kind", "worker").
     """
     model_id = model_id or row.get("model_id") or row.get("model")
     stored_ti = row.get("tokens_in", 0) or 0
@@ -213,6 +231,8 @@ def build_usage_row(row, family, usage_detail=None, model_id=None):
     return {
         "run_id": row["run_id"],
         "ts": row.get("ts"),
+        "kind": kind,
+        "judged_run_id": judged_run_id,
         "model": row.get("model"),
         "model_id": model_id,
         "family": family,

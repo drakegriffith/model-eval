@@ -23,6 +23,9 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import usage_ledger  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER_DIR = os.path.join(ROOT, "runner")
 
@@ -111,18 +114,24 @@ def extract_json(text):
         return None
 
 
-def call_claude_judge(prompt):
+CLAUDE_JUDGE_MODEL = "claude-opus-4-8"
+
+
+def run_claude_judge(prompt):
+    """Raw stdout from the claude head. Separate from parsing so the same bytes
+    feed both the score extraction and the token ledger (ticket 20 item 3)."""
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)
     r = subprocess.run(
         ["claude", "-p", prompt, "--output-format", "json",
-         "--model", "claude-opus-4-8", "--dangerously-skip-permissions"],
+         "--model", CLAUDE_JUDGE_MODEL, "--dangerously-skip-permissions"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
         env=env, timeout=900)
-    return extract_json(r.stdout)
+    return r.stdout
 
 
-def call_codex_judge(prompt):
+def run_codex_judge(prompt):
+    """Raw stdout from the codex head. See run_claude_judge."""
     env = dict(os.environ)
     env.pop("OPENAI_API_KEY", None)
     r = subprocess.run(
@@ -130,7 +139,60 @@ def call_codex_judge(prompt):
          "--dangerously-bypass-approvals-and-sandbox", prompt],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         text=True, env=env, timeout=900)
-    return extract_json(r.stdout)
+    return r.stdout
+
+
+def call_claude_judge(prompt):
+    return extract_json(run_claude_judge(prompt))
+
+
+def call_codex_judge(prompt):
+    return extract_json(run_codex_judge(prompt))
+
+
+# --------------------------------------------------------------------------- #
+# Metering -- ticket 20 item 3. Judge calls were unledgered, which is why
+# ticket 01's retired 70/20/10 split had to guess at them. One usage.jsonl row
+# per judge CALL, same schema as run.py's worker rows, joinable by
+# judged_run_id. Ticket 06 sizes the panel off these measured rows, not a
+# percentage of worker spend.
+# --------------------------------------------------------------------------- #
+def judge_model_id(family, raw, declared):
+    """The model id the CLI itself reports, falling back to what we asked for.
+
+    The claude head names the model it actually served in `modelUsage`; the
+    codex head names no model anywhere in its JSONL and we invoke it without
+    --model, so its id is genuinely unknown and is recorded as None rather
+    than guessed at.
+    """
+    if family == "claude":
+        try:
+            keys = list((json.loads(raw).get("modelUsage") or {}).keys())
+        except (json.JSONDecodeError, AttributeError):
+            keys = []
+        if len(keys) == 1:
+            return keys[0]
+    return declared
+
+
+def meter_judge_call(judged_run_id, head, family, declared_model, raw, usage_path):
+    """Append one usage row for a judge call. Returns the row, or None when the
+    CLI's usage could not be read -- an unreadable call is not a free call, and
+    a 0-token row would be a fabricated measurement.
+    """
+    detail = usage_ledger.parse_usage_detailed(family, raw)
+    if not detail or (detail["tokens_in"] == 0 and detail["tokens_out"] == 0):
+        print(f"WARN: judge head {head} on {judged_run_id}: usage unreadable, "
+              f"NOT ledgered (call still happened)", file=sys.stderr)
+        return None
+    model_id = judge_model_id(family, raw, declared_model)
+    row = usage_ledger.build_usage_row(
+        {"run_id": f"judge-{head}--{judged_run_id}", "ts": now_iso(),
+         "model": model_id, "tokens_in": 0, "tokens_out": 0},
+        family, usage_detail=detail, model_id=model_id,
+        kind="judge", judged_run_id=judged_run_id)
+    usage_ledger.append_usage_row(usage_path, row)
+    return row
 
 
 MOCK_SCORES = {
@@ -176,7 +238,7 @@ def already_judged(out_path):
     return ids
 
 
-def judge_one(run_id, scratch_root, tasks_dir, out_path, mock):
+def judge_one(run_id, scratch_root, tasks_dir, out_path, mock, usage_path=None):
     scratch = os.path.abspath(os.path.join(scratch_root, run_id))
     tasks_dir = os.path.abspath(tasks_dir)
     if not os.path.isdir(scratch):
@@ -187,10 +249,17 @@ def judge_one(run_id, scratch_root, tasks_dir, out_path, mock):
     rubric = RUBRIC % {"prompt": prompt_text, "diff": diff}
 
     if mock:
+        # No CLI ran, so no tokens were spent and nothing is ledgered.
         j_claude, j_codex = MOCK_SCORES, MOCK_SCORES
     else:
-        j_claude = call_claude_judge(rubric)
-        j_codex = call_codex_judge(rubric)
+        raw_claude = run_claude_judge(rubric)
+        raw_codex = run_codex_judge(rubric)
+        j_claude, j_codex = extract_json(raw_claude), extract_json(raw_codex)
+        if usage_path:
+            meter_judge_call(run_id, "claude", "claude", CLAUDE_JUDGE_MODEL,
+                             raw_claude, usage_path)
+            meter_judge_call(run_id, "codex", "codex", None,
+                             raw_codex, usage_path)
 
     row = {"run_id": run_id, "ts": now_iso(),
            "judge_claude": j_claude, "judge_codex": j_codex}
@@ -216,6 +285,9 @@ def main():
     ap.add_argument("--scratch", default=os.path.join(ROOT, ".scratch"))
     ap.add_argument("--tasks-dir", default=os.path.join(ROOT, "tasks"))
     ap.add_argument("--out", default=os.path.join(RUNNER_DIR, "results", "judgments.jsonl"))
+    ap.add_argument("--usage", default=os.path.join(RUNNER_DIR, "results", "usage.jsonl"),
+                    help="append one usage row per judge call (ticket 20 item 3); "
+                         "set empty to disable")
     args = ap.parse_args()
 
     mock = args.mock or bool(os.environ.get("GAUNTLET_MOCK"))
@@ -228,7 +300,8 @@ def main():
               f"to_judge={len(todo)} mock={mock}")
         n = 0
         for rid in todo:
-            if judge_one(rid, args.scratch, args.tasks_dir, args.out, mock):
+            if judge_one(rid, args.scratch, args.tasks_dir, args.out, mock,
+                         usage_path=args.usage or None):
                 n += 1
         print(f"done: judged {n} run(s)")
         if n < len(todo):
@@ -239,7 +312,8 @@ def main():
 
     if not args.run_id:
         ap.error("provide a run_id or --from-results")
-    if not judge_one(args.run_id, args.scratch, args.tasks_dir, args.out, mock):
+    if not judge_one(args.run_id, args.scratch, args.tasks_dir, args.out, mock,
+                     usage_path=args.usage or None):
         sys.exit(1)
 
 
