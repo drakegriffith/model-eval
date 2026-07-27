@@ -1,0 +1,121 @@
+# runs-t13-haiku-kimi.yaml — ticket 13 Stage 3: the last three uncredited models,
+# and the first data in this ticket from outside the codex binary.
+#
+# Stages 1-2 measured sol, luna and spark. All three are `family: codex`, driven
+# by the same `codex exec` binary, so everything the ticket has concluded so far
+# rests on one instrument. Stage 3 is the first cross-family evidence:
+#
+#   claude-haiku-4-5             `family: claude`, subscription. The probe read it
+#   claude-haiku-4-5-20251001    at 8k-21k output tokens, NON-MONOTONE — the toy
+#                                puzzle is beyond it, so the probe measured failure
+#                                to converge, not reasoning budget. Two ids are run
+#                                because CLI-FACTS lists both and they are not known
+#                                to be the same weights; if they are, the two ladders
+#                                should agree, which is itself worth recording.
+#   kimi-k3                      `family: kimi`, METERED — the only real money in the
+#                                whole ticket. Its ladder has never been measurable:
+#                                until Stage 0 fixed CLI-FACTS correction #3, run.py
+#                                passed NO --effort to Kimi while labelling every run
+#                                "max". Every prior Kimi row is therefore one tier
+#                                wearing five labels. This is the first honest look.
+#
+# PREDICTIONS on record before the runs:
+#   - Both Haiku ids: open. The probe's non-monotone reading is uninformative here
+#     (wrong prompt), and Haiku may simply fail T1/T2 tasks. A ladder verdict is
+#     about token SPEND, not correctness, so a low pass rate does not invalidate a
+#     reading — but it must be reported alongside it.
+#   - kimi-k3: open. No prior measurement exists to predict from.
+#   - t1-ts-b reads AMBIGUOUS and t2-py-b reads REAL, for all three models. That
+#     held for BOTH Stage 2 models and is a task property, not a model one. The
+#     block set is deliberately NOT tuned around it — tuning blocks on one model's
+#     noise is exactly what Stage 2 showed does not transfer.
+#
+# Design mirrors Stages 1-2 so the rows stay comparable:
+#
+#   tasks   t1-ts-b, t2-py-b  — the same two blocks used in Stage 1 and Stage 2
+#   tiers   low, high         — the shared anchors every stage runs
+#           max               — each model's OWN top declared tier. All three
+#                               declare low/medium/high/xhigh/max (CLAUDE_TIERS in
+#                               run.py's registry), so unlike Stage 2 the top tier
+#                               is the same string for all three and the whole
+#                               stage is apples-to-apples at all three tiers.
+#   reps    1-3               — n=3 floor; effort_verdict returns UNREPLICATED
+#                               below n=2 and a spread with no noise estimate is
+#                               not evidence
+#   harness false             — matches Stages 1-2 and the 07-10 baseline arm
+#
+# 3 models x 3 tiers x 2 tasks x 3 reps = 54 runs, ~2.0M tokens, ~1.0 h,
+# $2.74 (kimi-k3 only; both Haiku ids are subscription).
+#
+# `medium` and `xhigh` are omitted, as `medium` was for sol/luna/spark: three tiers
+# span the declared range and tier count is the only lever that fits the ceiling.
+# Filling the gap is cheap AFTER a verdict; it cannot rescue a flat one.
+#
+# Canonical ids, not aliases. The `kimi` alias has pre-Stage-0 rows in results.jsonl
+# that are mislabelled by construction (see CLI-FACTS #3 above), so grouping with
+# them would be actively misleading — the opposite of the Stage 1 case, where the
+# alias `sol` was used precisely to stay groupable with a trustworthy baseline.
+# Separate sweep names keep run_ids collision-free and let each model be classified
+# alone; ladder_from_results matches --sweep exactly, so t13-haiku and t13-haiku-pin
+# do not bleed into each other.
+#
+# SMOKE FIRST — a bad model id writes 54 rows that run_id resume then silently
+# skips. One run per model, full run_id (--only is a SUBSTRING match on run_id, so
+# a bare sweep name would match more than intended):
+#   python3 runner/run.py --config runner/runs-t13-haiku-kimi.yaml --limit 1 \
+#     --only t13-haiku--claude-haiku-4-5--low--bare--t1-ts-b--r1
+#   python3 runner/run.py --config runner/runs-t13-haiku-kimi.yaml --limit 1 \
+#     --only t13-haiku-pin--claude-haiku-4-5-20251001--low--bare--t1-ts-b--r1
+#   python3 runner/run.py --config runner/runs-t13-haiku-kimi.yaml --limit 1 --max-usd 2.74 \
+#     --only t13-kimi--kimi-k3--low--bare--t1-ts-b--r1
+#
+# Run (expect interruption; run_id resume makes a re-run free). --max-usd is the
+# AUTHORISED ceiling, not an estimate — if it binds, the sweep stops and that is
+# reported rather than overspent:
+#   python3 runner/run.py --config runner/runs-t13-haiku-kimi.yaml --max-usd 2.74
+#
+# Verdict — unmodified classifier, per-task blocks. Do NOT relax the >=1.5x /
+# upward / btwCV >= 2x winCV rule:
+#   python3 runner/ladder_from_results.py --sweep t13-haiku     --pooled
+#   python3 runner/ladder_from_results.py --sweep t13-haiku-pin --pooled
+#   python3 runner/ladder_from_results.py --sweep t13-kimi      --pooled
+#
+# Watch the `excluded` line for exit_reason=no_completion. run.py labels truncated
+# zero-token runs that way since Stage 2; a cell thinned by one is re-run, not
+# accepted.
+
+defaults:
+  timeout_t1_t2_s: 1200
+  timeout_t3_s: 3600
+  seed: 1337
+
+sweeps:
+  - name: t13-haiku
+    mode: solo
+    harness: false
+    reps: [1, 2, 3]
+    tasks: [t1-ts-b, t2-py-b]
+    configs:
+      - {model: claude-haiku-4-5, effort: low}
+      - {model: claude-haiku-4-5, effort: high}
+      - {model: claude-haiku-4-5, effort: max}
+
+  - name: t13-haiku-pin
+    mode: solo
+    harness: false
+    reps: [1, 2, 3]
+    tasks: [t1-ts-b, t2-py-b]
+    configs:
+      - {model: claude-haiku-4-5-20251001, effort: low}
+      - {model: claude-haiku-4-5-20251001, effort: high}
+      - {model: claude-haiku-4-5-20251001, effort: max}
+
+  - name: t13-kimi
+    mode: solo
+    harness: false
+    reps: [1, 2, 3]
+    tasks: [t1-ts-b, t2-py-b]
+    configs:
+      - {model: kimi-k3, effort: low}
+      - {model: kimi-k3, effort: high}
+      - {model: kimi-k3, effort: max}

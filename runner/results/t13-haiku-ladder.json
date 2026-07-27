@@ -1,0 +1,77 @@
+[
+  {
+    "block": "t1-ts-b",
+    "n_runs": 9,
+    "tiers": [
+      "low",
+      "high",
+      "max"
+    ],
+    "n_per_tier": [
+      3,
+      3,
+      3
+    ],
+    "out_tokens_by_tier": {
+      "low": 1946,
+      "high": 1844,
+      "max": 1804
+    },
+    "pass_rate": 1.0,
+    "verdict": "NO-OP",
+    "spread": 1.08,
+    "monotone": 0.5,
+    "between_cv": 0.03,
+    "within_cv": 0.04
+  },
+  {
+    "block": "t2-py-b",
+    "n_runs": 9,
+    "tiers": [
+      "low",
+      "high",
+      "max"
+    ],
+    "n_per_tier": [
+      3,
+      3,
+      3
+    ],
+    "out_tokens_by_tier": {
+      "low": 3737,
+      "high": 3964,
+      "max": 3727
+    },
+    "pass_rate": 1.0,
+    "verdict": "NO-OP",
+    "spread": 1.06,
+    "monotone": 0.5,
+    "between_cv": 0.03,
+    "within_cv": 0.05
+  },
+  {
+    "block": "POOLED (no task block)",
+    "n_runs": 18,
+    "tiers": [
+      "low",
+      "high",
+      "max"
+    ],
+    "n_per_tier": [
+      6,
+      6,
+      6
+    ],
+    "out_tokens_by_tier": {
+      "low": 2841,
+      "high": 2904,
+      "max": 2766
+    },
+    "pass_rate": 1.0,
+    "verdict": "NO-OP",
+    "spread": 1.05,
+    "monotone": 1.0,
+    "between_cv": 0.02,
+    "within_cv": 0.35
+  }
+]
