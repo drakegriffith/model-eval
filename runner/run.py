@@ -627,6 +627,13 @@ def append_row(results_path, row):
 
 
 def existing_ids(results_path):
+    """run_ids that count as done -- i.e. resumed sweeps should skip them.
+
+    Gate is exit_reason == "ok", the same completeness gate ladder_from_results.py
+    uses for analysis. A cli_error/timeout/etc. row means the CLI invocation itself
+    never finished, so its run_id must stay pending and retry on the next sweep
+    instead of silently blocking behind its own failed attempt.
+    """
     ids = set()
     if not os.path.exists(results_path):
         return ids
@@ -636,7 +643,9 @@ def existing_ids(results_path):
             if not line:
                 continue
             try:
-                ids.add(json.loads(line)["run_id"])
+                row = json.loads(line)
+                if row.get("exit_reason") == "ok":
+                    ids.add(row["run_id"])
             except Exception:
                 continue
     return ids
