@@ -1,0 +1,78 @@
+diff --git a/src/relay/driver.py b/src/relay/driver.py
+index 0267fbd..e2cde70 100644
+--- a/src/relay/driver.py
++++ b/src/relay/driver.py
+@@ -3,20 +3,16 @@
+ The protocol is in `protocol.py` and in `../../PROMPT.md`. In short: a stage
+ RAISES `Done` to succeed and RETURNS a retry hint when it is not finished.
+ 
+-Two of the six rules are implemented here:
+-
+-  IMPLEMENTED
+-  1. Raising `Done` is success; a returned value is a retry hint that goes
+-     straight back into the same stage.
+-  2. `max_attempts` counts TOTAL invocations, not retries, and running out is
+-     exhaustion rather than an error.
+-
+-  NOT IMPLEMENTED YET
+-  3. A returned `None` aborts the whole pipeline.
+-  4. Everything that is not `Done` or `Abort` propagates unchanged; `Abort`
+-     is reported rather than re-raised.
+-  5. `Done` payloads are the only data that crosses a stage boundary.
+-  6. `drain` — the first non-`done` stage stops the pipeline.
++All six rules are implemented. The three that fight the idiomatic prior,
++restated where they bite:
++
++  3. A RETURNED None aborts the pipeline; a RAISED Done(None) — or a bare
++     Done() — is success. The overload is intentional and the two must not be
++     conflated.
++  4. Only Done and Abort are caught. Everything else propagates untouched, so
++     there is no `except Exception` anywhere in this file.
++  5. Only Done payloads cross a stage boundary. A retry hint is an argument
++     to the stage that produced it and never leaves it.
+ """
+ 
+ from .protocol import Abort, Done
+@@ -29,12 +25,39 @@ def run_stage(fn, seed, max_attempts):
+     while attempts < max_attempts:
+         attempts += 1
+         try:
+-            arg = fn(arg)
++            result = fn(arg)
+         except Done as d:
++            # Rule 1. Raising is the success path.
+             return {"status": "done", "payload": d.payload, "attempts": attempts}
++        except Abort as a:
++            # Rule 4. Abort is reported, not re-raised.
++            return {"status": "aborted", "payload": a.reason, "attempts": attempts}
++        # Rule 3. A RETURNED None aborts; a Done(None) does not reach here.
++        if result is None:
++            return {"status": "aborted", "payload": None, "attempts": attempts}
++        # Rule 1. Anything else is a retry hint for this same stage.
++        arg = result
++    # Rule 2. Out of invocations, holding the last hint.
+     return {"status": "exhausted", "payload": arg, "attempts": attempts}
+ 
+ 
+ def drain(stages, seed, max_attempts):
+-    """Run `stages` in order under the house protocol. Not implemented yet."""
+-    raise NotImplementedError("drain is rule 5 and rule 6; see PROMPT.md")
++    """Run `stages` in order under the house protocol. See PROMPT.md rule 6."""
++    payload = seed
++    attempts = []
++    for fn in stages:
++        report = run_stage(fn, payload, max_attempts)
++        attempts.append(report["attempts"])
++        if report["status"] != "done":
++            # Rule 6. The first stage that does not finish stops the pipeline
++            # and the rest are never invoked.
++            return {
++                "status": report["status"],
++                "payload": report["payload"],
++                "attempts": attempts,
++                "stages": len(attempts),
++            }
++        # Rule 5. Only the Done payload crosses the boundary.
++        payload = report["payload"]
++    return {"status": "done", "payload": payload,
++            "attempts": attempts, "stages": len(attempts)}

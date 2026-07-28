@@ -1,0 +1,81 @@
+diff --git a/src/sched/merge.ts b/src/sched/merge.ts
+index 07a5dbf..65d13a4 100644
+--- a/src/sched/merge.ts
++++ b/src/sched/merge.ts
+@@ -3,21 +3,18 @@
+  *
+  * SCHED-88 ends are INCLUSIVE — `{start: 540, end: 599}` covers minute 599 and
+  * is sixty minutes long. Every rule is in `../../CONVENTIONS.md` and in
+- * `../../PROMPT.md`.
++ * `../../PROMPT.md`. The three that fight the idiomatic prior, restated where
++ * they bite:
+  *
+- *   IMPLEMENTED
+- *   1. Inclusive ends: `duration` is `end - start + 1`.
+- *   2. Overlap is `a.start <= b.end && b.start <= a.end`.
+- *
+- *   NOT IMPLEMENTED YET
+- *   3. `sortIntervals` — the vendored comparator returns POSITIVE for
+- *      "sorts first", so it cannot be handed to `sort` directly.
+- *   4. `merge` — adjacent intervals merge, not just overlapping ones.
+- *   5. `format` — the display convention renders the end EXCLUSIVE.
+- *   6. Neither function may mutate or alias its input.
++ *   3. `compare` returns POSITIVE for "sorts first", so it goes through
++ *      `ascending()` and never straight into `sort`. It also carries the
++ *      equal-start tie-break, which a hand-rolled comparator would lose.
++ *   4. Adjacency merges: `a.end + 1 === b.start` leaves no minute between
++ *      them, so they are one interval.
++ *   5. Display renders the end EXCLUSIVE, and 1439 renders as 24:00.
+  */
+ 
+-import type { Interval } from "../legacy/order.js";
++import { ascending, compare, type Interval } from "../legacy/order.js";
+ 
+ export type { Interval };
+ 
+@@ -31,17 +28,36 @@ export function overlaps(a: Interval, b: Interval): boolean {
+   return a.start <= b.end && b.start <= a.end;
+ }
+ 
+-/** Sort ascending by the SCHED-88 rank order. Not implemented yet. */
+-export function sortIntervals(_xs: Interval[]): Interval[] {
+-  throw new Error("sortIntervals is rule 3; see PROMPT.md");
++/** Sort ascending by the SCHED-88 rank order. Fresh array, fresh objects. */
++export function sortIntervals(xs: Interval[]): Interval[] {
++  return xs
++    .map((iv) => ({ start: iv.start, end: iv.end }))
++    .sort(ascending(compare));
++}
++
++/** Merge overlapping AND adjacent intervals into the minimal covering set. */
++export function merge(xs: Interval[]): Interval[] {
++  const sorted = sortIntervals(xs);
++  const out: Interval[] = [];
++  for (const iv of sorted) {
++    const last = out[out.length - 1];
++    // Rule 4: overlapping, or adjacent with no minute between them.
++    if (last !== undefined && iv.start <= last.end + 1) {
++      if (iv.end > last.end) last.end = iv.end;
++      continue;
++    }
++    out.push({ start: iv.start, end: iv.end });
++  }
++  return out;
+ }
+ 
+-/** Merge overlapping and adjacent intervals. Not implemented yet. */
+-export function merge(_xs: Interval[]): Interval[] {
+-  throw new Error("merge is rule 4; see PROMPT.md");
++function hhmm(minutes: number): string {
++  const h = Math.floor(minutes / 60);
++  const m = minutes % 60;
++  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+ }
+ 
+-/** Render an interval as HH:MM-HH:MM. Not implemented yet. */
+-export function format(_iv: Interval): string {
+-  throw new Error("format is rule 5; see PROMPT.md");
++/** Render as HH:MM-HH:MM with the end shown EXCLUSIVE (rule 5). */
++export function format(iv: Interval): string {
++  return `${hhmm(iv.start)}-${hhmm(iv.end + 1)}`;
+ }

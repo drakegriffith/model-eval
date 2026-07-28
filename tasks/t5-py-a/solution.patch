@@ -1,0 +1,104 @@
+diff --git a/src/vaultstore/adapter.py b/src/vaultstore/adapter.py
+index bcd05ba..3d31df2 100644
+--- a/src/vaultstore/adapter.py
++++ b/src/vaultstore/adapter.py
+@@ -7,39 +7,71 @@ imports `legacy`) and a list of ops shaped:
+     {"op": "set",    "key": "region", "value": "us-east"}
+     {"op": "delete", "key": "region"}
+ 
+-and returns a report dict. The eight rules the report must obey are in
+-`PROMPT.md`. Three of them are implemented here:
+-
+-  IMPLEMENTED
+-  1. One commit, at the end. Ops are staged in list order and committed once.
+-  2. `put` returns REJECTS, not writes. A nonzero return means the op was
+-     rejected, stages nothing, and does not abort the batch.
+-  8. Report keys are echoed verbatim from the op, never normalised.
+-
+-  NOT IMPLEMENTED YET
+-  3. `append` deletes — `delete` ops are ignored entirely right now.
+-  4. `append` sees committed records only.
+-  5. `flush()` is the abort path.
+-  6. `fetch` returns `(found, value)` and `final` is read back after commit.
+-  7. Read back, never remember.
++and returns a report dict. All eight rules from `PROMPT.md` are implemented
++here. The four that fight the idiomatic prior, restated where they bite:
++
++  2. `put` returns REJECTS. `0` is success.
++  3. `append` DELETES; `None` back means nothing was there, which is a skip.
++  5. `flush` DISCARDS, so it is the abort path and nothing else.
++  7. `fetch` after the commit is the only source of truth for `final` — the
++     store folds keys and truncates long strings without saying so.
+ """
+ 
++_ABORTED = {"applied": 0, "rejected": [], "skipped": [], "removed": {},
++            "final": {}, "aborted": True}
++
+ 
+ def apply_ops(store, ops):
+     """Apply `ops` to `store` and return the report described in PROMPT.md."""
+-    report = {
+-        "applied": 0,
+-        "rejected": [],
+-        "skipped": [],
+-        "removed": {},
+-        "final": {},
+-        "aborted": False,
+-    }
++    rejected = []
++    skipped = []
++    removed = {}
++    named = []
++    staged = 0
+ 
+     for op in ops:
+-        if op["op"] == "set":
+-            if store.put(op["key"], op["value"]) != 0:
+-                report["rejected"].append(op["key"])
++        kind = op["op"]
++
++        # Rule 5. flush() discards; it is the abort path, not a write.
++        if kind not in ("set", "delete"):
++            store.flush()
++            return dict(_ABORTED, rejected=[], skipped=[], removed={}, final={})
++
++        key = op["key"]
++        if key not in named:
++            named.append(key)
+ 
+-    report["applied"] = store.commit()
+-    return report
++        if kind == "set":
++            # Rule 2. A nonzero return is the REJECT COUNT, not a write count.
++            if store.put(key, op["value"]) != 0:
++                rejected.append(key)
++            else:
++                staged += 1
++        else:
++            # Rule 3/4. append() deletes, and only sees the committed area.
++            was = store.append(key)
++            if was is None:
++                skipped.append(key)
++            else:
++                removed[key] = was
++                staged += 1
++
++    # Rule 1. One commit, and only if something is actually staged —
++    # committing an empty stage raises EmptyCommit.
++    applied = store.commit() if staged else 0
++
++    # Rule 6/7. Read back; never trust what was staged.
++    final = {}
++    for key in named:
++        found, value = store.fetch(key)
++        if found:
++            final[key] = value
++
++    return {
++        "applied": applied,
++        "rejected": rejected,
++        "skipped": skipped,
++        "removed": removed,
++        "final": final,
++        "aborted": False,
++    }
