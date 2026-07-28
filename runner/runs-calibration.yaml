@@ -1,0 +1,69 @@
+# runs-calibration.yaml — ticket 05's tier calibration for the three candidate
+# Hard tasks (t4-py-a, t4-py-b, t4-ts-a, authored at a83c081).
+#
+# THIS IS NOT THE SWEEP. Per the sealed pre-registration section 1, calibration
+# is exploratory instrument characterisation. Its estimand is a property of the
+# TASKS (pooled roster pass rate per task against 05's bands: Easy >= 0.95,
+# Medium 0.50-0.95, Hard <= 0.50), not of any configuration. Its output may
+# assign tiers, may fire 17 section 6's one-shot K revision, and may answer the
+# Hard-tier go/no-go in pre-reg section 8. It may do nothing else, and it never
+# pools with v2 sweep data.
+#
+# ROSTER — 4 model ids, ONE effort tier each, 3 reps, 3 tasks = 36 runs.
+# 17 section 6 step 2 says ">= 3 reps x the full roster per Hard task". Read as
+# the 8 sweep CONFIGS that is 72 runs, which is the confirmatory sweep itself
+# (pre-reg section 4) spent on instrument characterisation. It is read here as
+# the sweep's MODEL IDS, because:
+#
+#   1. The calibration statistic is pooled across the roster. A second effort
+#      tier for a model already present adds no roster breadth -- it reweights
+#      one model to 2x in the pool. Breadth is what makes "pooled roster pass
+#      rate" an honest estimate of "the roster fails this task".
+#   2. Effort is the SWEEP's manipulated axis, not calibration's. T13 measured
+#      76 low-effort runs with zero failures: the dial moves tau, not pi. Buying
+#      a second tier here buys a pi axis that has never moved.
+#
+# WHICH tier, and why the stronger one: codex runs at `high`, not `low`. A task
+# calibrated at a starved effort budget would be declared Hard for an instrument
+# reason rather than a task reason -- the error 05 section 2 settled on the
+# low-effort dial and 17 section 4 rejected as option (iii). Calibrating at each
+# model's stronger credited tier biases AGAINST declaring a task Hard, which is
+# the direction that costs the author something. claude-haiku-4-5 runs at `low`
+# because that is the single tier the sweep buys it, and T13 measured its dial a
+# NO-OP at 1.06-1.08x, so low ~ high for it regardless.
+#
+# KIMI IS ABSENT and this is a capability gap, not a choice. run.py's registry
+# routes family `kimi` to the `claude` binary with an injected Moonshot key
+# (run.py:507). Pre-reg section 8 exclusion 3 rules that path a SEPARATE
+# STRATUM from the native `kimi` binary, and precondition 4 (ticket 20, OPEN)
+# has not delivered a native invocation path. Running Kimi today would spend
+# real money to produce a v1-stratum row that cannot pool with anything.
+# Consequence: the pooled rate is over 4 of the sweep's 5 model ids, disclosed
+# with its n, and the Kimi cell renders as not-yet-run.
+#
+# TIMEOUT. t4 tasks fall to the t1/t2 branch (run.py:1000 keys tier3 on the
+# literal "t3"), which is 1200 s. Raised to 3600 s here -- the t3 value -- so a
+# wall-clock kill cannot masquerade as task difficulty on multi-file Hard tasks.
+# Cap-terminated runs score as failures per the estimand, so a tight cap would
+# manufacture Hard out of an instrument property. Corpus max wall is 375 s.
+#
+# Protocol v2: brokered (K=10), sealed task dir, untamperable grader. Bare
+# scaffold -- harness: false -- so no scaffold confound enters a task-property
+# measurement.
+
+defaults:
+  timeout_t1_t2_s: 3600
+  timeout_t3_s: 3600
+  seed: 1337
+  k_acceptance: 10
+
+sweeps:
+  - name: calib
+    harness: false
+    reps: [1, 2, 3]
+    tasks: [t4-py-a, t4-py-b, t4-ts-a]
+    configs:
+      - {model: gpt-5.6-sol, effort: high}
+      - {model: gpt-5.6-luna, effort: high}
+      - {model: gpt-5.3-codex-spark, effort: high}
+      - {model: claude-haiku-4-5, effort: low}
