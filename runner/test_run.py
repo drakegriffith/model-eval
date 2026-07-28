@@ -1,15 +1,19 @@
-"""Regression tests for runner/run.py's resume/done-set logic.
+"""Regression tests for runner/run.py's instrument seams.
 
-Seam under test: existing_ids(results_path), the public function main() uses to
-build the resume set. See ticket: a row's presence in results.jsonl must not by
-itself mark its run_id "done" -- only a genuinely complete run should.
+Seams under test:
+  - existing_ids(results_path), the public function main() uses to build the
+    resume set. See ticket: a row's presence in results.jsonl must not by
+    itself mark its run_id "done" -- only a genuinely complete run should.
+  - loc_changed(scratch), ticket 22 defect 1: the field must measure the model's
+    work, not the model's git habit.
 """
 import json
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from run import existing_ids, parse_usage  # noqa: E402
+from run import existing_ids, parse_usage, prepare_scratch, loc_changed  # noqa: E402
 
 
 def _write_rows(path, rows):
@@ -136,3 +140,57 @@ def test_parse_usage_codex_family_does_not_double_count_cached_tokens():
     assert ti == 351378
     assert to == 1988
     assert turns == 1
+
+
+# --------------------------------------------------------------------------- #
+# ticket 22 defect 1: loc_changed must be invariant to the model's git habit
+# --------------------------------------------------------------------------- #
+def _make_task(tmp_path, name="t9-py-a"):
+    """Minimal task_dir with the base/ layout prepare_scratch expects."""
+    base = os.path.join(str(tmp_path), name, "base")
+    os.makedirs(base)
+    with open(os.path.join(base, "lib.py"), "w", encoding="utf-8") as f:
+        f.write("def f():\n    return 1\n")
+    return os.path.join(str(tmp_path), name)
+
+
+def _model_edit(scratch):
+    """The same edit in both arms: 4 insertions, 1 deletion, no new file."""
+    with open(os.path.join(scratch, "lib.py"), "w", encoding="utf-8") as f:
+        f.write("def f():\n    return 2\n\n\ndef g():\n    return 3\n")
+
+
+def _git(scratch, *args):
+    return subprocess.run(
+        ["git", "-c", "user.email=m@m", "-c", "user.name=model", *args],
+        cwd=scratch, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
+
+def test_loc_changed_is_invariant_to_the_model_committing(tmp_path):
+    """Ticket 22 defect 1.
+
+    Two runs, byte-identical work. One model leaves it in the working tree, the
+    other commits it -- the git habit calib-d2's sol r2/r3 exhibited and r1 did
+    not. The recorded number must not be able to tell them apart.
+    """
+    task_dir = _make_task(tmp_path)
+
+    left_in_tree = os.path.join(str(tmp_path), "scratch-uncommitted")
+    prepare_scratch(task_dir, left_in_tree, harness=False)
+    _model_edit(left_in_tree)
+
+    committed = os.path.join(str(tmp_path), "scratch-committed")
+    prepare_scratch(task_dir, committed, harness=False)
+    _model_edit(committed)
+    _git(committed, "add", "-A")
+    _git(committed, "commit", "-q", "-m", "fix: finish the adapter")
+
+    # Control arm: the fixture must actually reproduce the defect condition,
+    # otherwise the assertion below passes for the wrong reason. After the
+    # model's own commit the index equals HEAD, which is what made the old
+    # index-vs-HEAD diff read 0. That assertion is a test, not a comment.
+    _git(committed, "add", "-A")
+    assert _git(committed, "diff", "--cached", "--shortstat").stdout.strip() == ""
+
+    assert loc_changed(left_in_tree) > 0, "fixture produced no measurable change"
+    assert loc_changed(committed) == loc_changed(left_in_tree)

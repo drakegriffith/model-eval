@@ -931,10 +931,44 @@ LOC_EXCLUDE = [":(exclude)package-lock.json", ":(exclude)**/package-lock.json",
                ":(exclude)yarn.lock", ":(exclude)pnpm-lock.yaml"]
 
 
+def base_commit(scratch):
+    """The base commit of a scratch tree, or None if it cannot be resolved.
+
+    prepare_scratch() git-inits and makes exactly one commit, so the base is
+    always the root commit. Resolving it that way rather than off a tag or a
+    threaded-through SHA means the anchor needs no extra state and is equally
+    available when replaying an archived scratch tree after the fact.
+    """
+    r = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=scratch,
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    roots = r.stdout.split()
+    return roots[0] if r.returncode == 0 and len(roots) == 1 else None
+
+
 def loc_changed(scratch):
+    """Lines the model changed, measured against the base commit.
+
+    Ticket 22 defect 1: this used to diff the index against HEAD, so a model
+    that committed its own work left index == HEAD and the field recorded 0.
+    That measures a git habit, not the work. calib-d2 caught it intermittently
+    within one cell -- sol r2 and r3 recorded 0 against 57 and 58 real changed
+    lines because they committed, while r1, same model and task, recorded its
+    60 correctly only because it happened to leave the work in the tree.
+
+    `git add -A` still runs first so untracked files count, and the diff is
+    taken from the base commit to the index, so committed, uncommitted and
+    untracked work all land in the same number.
+    """
     subprocess.run(["git", "add", "-A"], cwd=scratch,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    r = subprocess.run(["git", "diff", "--cached", "--shortstat", "--", "."] + LOC_EXCLUDE,
+    base = base_commit(scratch)
+    if base is None:
+        # Never silently: a 0 here is what the defect looked like, so say so
+        # rather than emitting an unremarkable-looking number.
+        print(f"  ! loc_changed: no base commit in {scratch}, field is unanchored",
+              file=sys.stderr)
+        return 0
+    r = subprocess.run(["git", "diff", "--cached", base, "--shortstat", "--", "."] + LOC_EXCLUDE,
                        cwd=scratch,
                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     ins = dele = 0
