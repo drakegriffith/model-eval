@@ -512,7 +512,10 @@ def execute(repo, monkeypatch, calls, k, solve_before=-1, patch_cmd=True):
     run = {"run_id": "broker--probe--r1", "sweep": "broker", "model": "claude-haiku-4-5",
            "effort": "low", "harness": False, "task": "t-broker", "rep": 1,
            "mode": "solo"}
-    cfg = {"defaults": {"k_acceptance": k, "timeout_t1_t2_s": 300}}
+    # t-broker is a synthetic task with no tier, so it needs the explicit
+    # catch-all cap (ticket 22 defect 2); 300 s is what it already ran under.
+    cfg = {"defaults": {"k_acceptance": k, "timeout_t1_t2_s": 300,
+                        "timeout_default_s": 300}}
     row = runner.execute_run(run, cfg, os.path.join(repo["root"], "tasks"),
                              os.path.join(repo["root"], ".scratch"),
                              os.path.join(repo["tmp"], "results.jsonl"))

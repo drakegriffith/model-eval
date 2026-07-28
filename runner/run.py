@@ -1024,6 +1024,50 @@ def existing_ids(results_path):
 
 
 # --------------------------------------------------------------------------- #
+# Wall-clock cap
+# --------------------------------------------------------------------------- #
+# Tiers 1 and 2 shared one key and tier 3 had its own, which is the whole cap
+# vocabulary the first sweeps needed. t4 and t5 tasks exist now.
+_TIER_RE = re.compile(r"^t(\d+)(?:[-_]|$)")
+_LEGACY_TIMEOUT_KEYS = {1: "timeout_t1_t2_s", 2: "timeout_t1_t2_s", 3: "timeout_t3_s"}
+
+
+def resolve_timeout_s(task, defaults):
+    """The wall-clock cap `task` runs under, or ValueError naming what to declare.
+
+    Resolution order for a tier-N task: `timeout_t{N}_s`, then the legacy key
+    covering that tier (t1/t2 -> timeout_t1_t2_s, t3 -> timeout_t3_s), then an
+    explicit `timeout_default_s`. Nothing after that -- a tier with no cap
+    declared for it is a config bug and is raised as one.
+
+    Fail-closed for the same reason check_effort() is (ticket 22 defect 2). The
+    old expression keyed on the literal "t3" and sent everything else to the
+    t1/t2 branch, so t4 and t5 tasks silently drew a cap sized for a 20-minute
+    task. Cap-terminated runs score as FAILURES under the pre-registration's
+    estimand: a mis-sized cap does not show up as a timeout in the analysis, it
+    shows up as task difficulty. Adding a tier must therefore cost a config edit
+    it cannot forget to make, not inherit the short cap by falling off the end
+    of a boolean.
+    """
+    defaults = defaults or {}
+    tried = []
+    m = _TIER_RE.match(task or "")
+    if m:
+        tier = int(m.group(1))
+        for key in (f"timeout_t{tier}_s", _LEGACY_TIMEOUT_KEYS.get(tier)):
+            if key and key not in tried:
+                tried.append(key)
+                if key in defaults:
+                    return defaults[key]
+    tried.append("timeout_default_s")
+    if "timeout_default_s" in defaults:
+        return defaults["timeout_default_s"]
+    raise ValueError(
+        f"no wall-clock cap declared for task {task}; "
+        f"add one of {', '.join(tried)} to the config's defaults")
+
+
+# --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
@@ -1031,8 +1075,7 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     task_dir = os.path.abspath(os.path.join(tasks_dir, run["task"]))
     scratch = os.path.abspath(os.path.join(scratch_root, run["run_id"]))
     defaults = cfg.get("defaults", {}) or {}
-    tier3 = run["task"].startswith("t3")
-    timeout_s = defaults.get("timeout_t3_s", 3600) if tier3 else defaults.get("timeout_t1_t2_s", 1200)
+    timeout_s = resolve_timeout_s(run["task"], defaults)
 
     mock = os.environ.get("GAUNTLET_MOCK")
     tokens_in = tokens_out = turns = 0
@@ -1207,6 +1250,9 @@ def main():
         try:
             resolve_model(r["model"])
             check_effort(r["model"], r["effort"])
+            # Same posture for the wall-clock cap: an undeclared tier is a config
+            # bug, and the run it would spoil is the one that already cost money.
+            resolve_timeout_s(r["task"], cfg.get("defaults", {}) or {})
         except ValueError as e:
             bad.append(f"  {r['run_id']}: {e}")
     if bad:

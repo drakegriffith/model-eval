@@ -6,6 +6,9 @@ Seams under test:
     itself mark its run_id "done" -- only a genuinely complete run should.
   - loc_changed(scratch), ticket 22 defect 1: the field must measure the model's
     work, not the model's git habit.
+  - resolve_timeout_s(task, defaults), ticket 22 defect 2: the wall-clock cap a
+    task runs under must be declared for that task's tier, never inherited by
+    falling off the end of a boolean.
 """
 import json
 import os
@@ -13,7 +16,10 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from run import existing_ids, parse_usage, prepare_scratch, loc_changed  # noqa: E402
+from run import (  # noqa: E402
+    build_runs, existing_ids, parse_usage, parse_yaml, prepare_scratch,
+    loc_changed, resolve_timeout_s,
+)
 
 
 def _write_rows(path, rows):
@@ -194,3 +200,120 @@ def test_loc_changed_is_invariant_to_the_model_committing(tmp_path):
 
     assert loc_changed(left_in_tree) > 0, "fixture produced no measurable change"
     assert loc_changed(committed) == loc_changed(left_in_tree)
+
+
+# --------------------------------------------------------------------------- #
+# resolve_timeout_s -- ticket 22 defect 2
+# --------------------------------------------------------------------------- #
+# The caps the sweeps actually shipped with: a short one for t1/t2 and a long one
+# for t3. The defect is what any OTHER tier gets.
+SHIPPED = {"timeout_t1_t2_s": 1200, "timeout_t3_s": 3600}
+
+
+def _old_timeout_s(task, defaults):
+    """run.py:1035 before the fix, verbatim. Present so the tests below can show
+    the defect is live rather than assert against a remembered description of it.
+    """
+    tier3 = task.startswith("t3")
+    return defaults.get("timeout_t3_s", 3600) if tier3 else defaults.get("timeout_t1_t2_s", 1200)
+
+
+def test_unknown_tier_does_not_silently_receive_timeout_t1_t2_s():
+    """Ticket 22 defect 2, the eval bar verbatim.
+
+    t4 and t5 tasks exist and are nobody's t1/t2. Cap-terminated runs score as
+    FAILURES under the pre-registration's estimand, so a cap sized for a 20-min
+    task and handed to a multi-file one converts an instrument property into
+    apparent task difficulty. Loud failure is the only safe default: it costs a
+    config edit, and the alternative costs a result.
+    """
+    for task in ("t4-py-a", "t5-ts-a"):
+        # Control arm: the fixture must actually reproduce the defect condition.
+        # If the old expression stopped returning the short cap here, this test
+        # would pass for a reason that has nothing to do with the fix. That
+        # assertion is a test, not a comment.
+        assert _old_timeout_s(task, SHIPPED) == 1200
+
+        try:
+            got = resolve_timeout_s(task, SHIPPED)
+        except ValueError:
+            continue
+        assert False, f"{task} silently inherited a cap of {got}s"
+
+
+def test_the_raised_error_names_the_task_and_the_missing_key():
+    """A cap that has to be declared is only cheaper than a wrong cap if the
+    message says which one to declare and for which task."""
+    try:
+        resolve_timeout_s("t6-py-a", SHIPPED)
+    except ValueError as e:
+        assert "t6-py-a" in str(e)
+        assert "timeout_t6_s" in str(e)
+    else:
+        assert False, "an undeclared tier must raise"
+
+
+def test_a_declared_tier_key_resolves():
+    assert resolve_timeout_s("t4-py-a", dict(SHIPPED, timeout_t4_s=3600)) == 3600
+    assert resolve_timeout_s("t5-ts-a", dict(SHIPPED, timeout_t5_s=3600)) == 3600
+
+
+def test_a_declared_tier_key_beats_the_legacy_key():
+    """timeout_t1_t2_s covers two tiers at once. A per-tier key must win over it,
+    or t2 could never be capped separately from t1."""
+    defaults = dict(SHIPPED, timeout_t2_s=2400)
+    assert resolve_timeout_s("t2-py-b", defaults) == 2400
+    assert resolve_timeout_s("t1-py-a", defaults) == 1200
+
+
+def test_the_legacy_keys_still_resolve_t1_t2_and_t3():
+    """Every archived row was produced under these two keys. The fix must not
+    change what any already-run config resolves to -- a sweep that replays to a
+    different cap is a sweep that no longer replays.
+    """
+    for task in ("t1-py-a", "t1-ts-b", "t2-py-a", "t2-ts-b"):
+        assert resolve_timeout_s(task, SHIPPED) == 1200 == _old_timeout_s(task, SHIPPED)
+    assert resolve_timeout_s("t3-a", SHIPPED) == 3600 == _old_timeout_s("t3-a", SHIPPED)
+
+
+def test_timeout_default_s_is_the_last_resort_and_only_when_declared():
+    """An explicit catch-all is a decision on the record. Its absence is what
+    makes the raise above possible, so it stays opt-in.
+    """
+    assert resolve_timeout_s("t6-py-a", dict(SHIPPED, timeout_default_s=3600)) == 3600
+    # ...and a per-tier key still wins over it.
+    assert resolve_timeout_s(
+        "t6-py-a", dict(SHIPPED, timeout_default_s=3600, timeout_t6_s=900)) == 900
+
+
+def test_a_task_with_no_tier_prefix_is_not_guessed_at():
+    """mock-task and friends parse to no tier at all. Same posture: the catch-all
+    or nothing -- never the t1/t2 cap by accident of string matching.
+    """
+    try:
+        resolve_timeout_s("mock-task", SHIPPED)
+    except ValueError as e:
+        assert "mock-task" in str(e)
+    else:
+        assert False, "an unparseable tier must raise"
+    assert resolve_timeout_s("mock-task", dict(SHIPPED, timeout_default_s=60)) == 60
+
+
+def test_every_shipped_config_resolves_a_cap_for_every_task_it_schedules():
+    """The fleet-level version of the same assertion. A config file that cannot
+    name a cap for a task it schedules is now a config bug, and this test is
+    where it surfaces -- at zero cost, not 40 runs into a sweep.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    configs = [os.path.join(here, f) for f in sorted(os.listdir(here))
+               if f.startswith("runs") and f.endswith(".yaml")]
+    configs.append(os.path.join(here, "fixtures", "pilot.yaml"))
+    assert len(configs) > 1, "config discovery found nothing to check"
+
+    for path in configs:
+        with open(path, encoding="utf-8") as f:
+            cfg = parse_yaml(f.read())
+        defaults = cfg.get("defaults", {}) or {}
+        for run in build_runs(cfg):
+            cap = resolve_timeout_s(run["task"], defaults)
+            assert cap > 0, f"{os.path.basename(path)}: {run['task']} -> {cap}"

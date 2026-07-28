@@ -46,6 +46,9 @@
 # wall-clock kill cannot masquerade as task difficulty on multi-file Hard tasks.
 # Cap-terminated runs score as failures per the estimand, so a tight cap would
 # manufacture Hard out of an instrument property. Corpus max wall is 375 s.
+# (Ticket 22 defect 2 has since closed that branch: resolve_timeout_s() raises
+# on a tier with no cap declared for it, and timeout_t4_s below states this
+# sweep's 3600 s directly. The rows this file produced are unaffected.)
 #
 # Protocol v2: brokered (K=10), sealed task dir, untamperable grader. Bare
 # scaffold -- harness: false -- so no scaffold confound enters a task-property
@@ -54,6 +57,11 @@
 defaults:
   timeout_t1_t2_s: 3600
   timeout_t3_s: 3600
+  # Ticket 22 defect 2, added after this sweep ran. The t4 cap was 3600 s here
+  # only because the t1/t2 key above was raised to meet it; stating it directly
+  # changes nothing this sweep did (3258c72 replays identically) and stops the
+  # value from depending on a key that names other tiers.
+  timeout_t4_s: 3600
   seed: 1337
   k_acceptance: 10
 

@@ -10,6 +10,9 @@ defaults:
   seed: 1337
   timeout_t1_t2_s: 60
   timeout_t3_s: 120
+  # mock-task parses to no tier at all, so under ticket 22 defect 2 it needs the
+  # explicit catch-all. 60 s is what it was already getting from the t1/t2 key.
+  timeout_default_s: 60
 
 winning_effort:
   fable: high
