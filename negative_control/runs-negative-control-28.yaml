@@ -1,0 +1,55 @@
+# runs-negative-control-28.yaml — ticket 28 arm 3, the weak-model arm.
+#
+# NOT A SWEEP, and not poolable with anything. Its estimand is a property of the
+# ACCEPTANCE SUITES, not of a model or a configuration: arm 3 exists to separate
+# "the suite rejects garbage" from "the suite rejects anything below frontier".
+# Rows land in results/negative-control-28-weak.jsonl and are never appended to
+# results.jsonl.
+#
+# MODEL — gpt-5.3-codex-spark, the weakest id reachable in ticket 02's registry.
+# The registry has two axes and this id is the low end of both at once: 5.3 is
+# the oldest codex generation carried (5.6 > 5.5 > 5.4 > 5.3), and `spark` is a
+# small variant rather than a full model. gpt-5.4-mini is the only other id that
+# is small-variant, and it is a generation newer, so it is not weaker than this
+# one on either axis. claude-haiku-4-5 is the weakest claude id but sits a
+# generation ahead of 5.3 and T13 measured its effort dial a NO-OP, so it has no
+# lower setting to run at. Choosing the id that is weakest on both axes is the
+# choice that gives the arm its best chance of producing a FAILURE, which is the
+# direction that costs this ticket something.
+#
+# EFFORT — `low`, the lowest tier CODEX_TIERS declares. One rep per task, as the
+# ticket specifies.
+#
+# PRIOR EVIDENCE, recorded here because it is what makes the arm's separate
+# scoring necessary rather than fussy: T13 already measured this id at pass_rate
+# 1.0 over 18 runs on t1-ts-b and t2-py-b across low/high/xhigh, and ticket 05's
+# calibration ran it at `high` on the three t4 tasks. A weak model passing is
+# therefore an expected result and weak evidence of permissiveness on its own —
+# a small model solving a small task is what reading A predicts. That is exactly
+# why the ticket scores this arm separately and keeps it out of the 12.
+#
+# TIMEOUT — 3600 s on every tier, the calibration value rather than the sweep's
+# 1200 s. A cap-terminated run scores as a failure, and a failure here reads as
+# "the suite rejected a weak model" — the conservative direction for the headline
+# score but a false negative for THIS arm's question. Sizing the cap generously
+# keeps a wall-clock kill from being read as grader discrimination.
+#
+# PROTOCOL — v2, matching the corpus: brokered acceptance at K=10, sealed task
+# dir, untamperable grader, bare scaffold (harness: false) so no scaffold
+# confound enters a suite-property measurement.
+
+defaults:
+  timeout_t1_t2_s: 3600
+  timeout_t3_s: 3600
+  timeout_t4_s: 3600
+  seed: 1337
+  k_acceptance: 10
+
+sweeps:
+  - name: negctl28
+    harness: false
+    reps: [1]
+    # one line: run.py's YAML subset does not read a multi-line flow sequence
+    tasks: [t1-py-a, t1-py-b, t1-ts-a, t1-ts-b, t2-py-a, t2-py-b, t2-ts-a, t2-ts-b, t3-a, t4-py-a, t4-py-b, t4-ts-a]
+    configs:
+      - {model: gpt-5.3-codex-spark, effort: low}
