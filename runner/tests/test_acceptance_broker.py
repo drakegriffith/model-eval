@@ -118,6 +118,23 @@ def cheat_cmd(checks):
     return [sys.executable, CHEAT_PROBE, json.dumps({"canary": CANARY, "checks": checks})]
 
 
+def probe_log(repo, name):
+    """Where the broker probe records what it observed.
+
+    Inside the scratch tree, because the probe runs INSIDE the model's sandbox
+    and ticket 26 made writes allowlist-shaped: the model's own working copy is
+    writable, everything else is not. These logs used to sit beside the stand-in
+    repo in the pytest tmp dir, which write containment correctly denies -- the
+    probe then wrote nothing and the tests read an empty log. That was the
+    instrumentation being contained along with the model, not a broker fault;
+    nothing in production writes an observation log outside the run's own tree.
+
+    A dotfile so it stays clear of the acceptance suite's globs and the visible
+    test tree the model is graded on.
+    """
+    return os.path.join(repo["scratch"], f".probe-{name}")
+
+
 def probe_cmd(log, **spec):
     spec["log"] = log
     return [sys.executable, BROKER_PROBE, json.dumps(spec)]
@@ -192,7 +209,7 @@ def test_control_arm_takes_twelve_uncounted_grades(repo, monkeypatch):
     acceptance-feedback requests' is unfalsifiable on every row in the corpus."""
     monkeypatch.setattr(runner, "ROOT", repo["root"])
     legacy_scratch(repo)
-    log = os.path.join(repo["tmp"], "control.jsonl")
+    log = probe_log(repo, "control.jsonl")
 
     _out, reason, _w = runner.run_cli(probe_cmd(log, calls=12), repo["scratch"],
                                       300, repo["task_dir"], bk=None)
@@ -235,7 +252,7 @@ def test_self_check_still_grades_through_the_broker(repo, monkeypatch):
     gets counts back instead of the suite."""
     monkeypatch.setattr(runner, "ROOT", repo["root"])
     bk, _shim = brokered_scratch(repo, k=4)
-    log = os.path.join(repo["tmp"], "selfcheck.jsonl")
+    log = probe_log(repo, "selfcheck.jsonl")
     try:
         runner.run_cli(probe_cmd(log, calls=2, solve_before=1), repo["scratch"],
                        300, repo["task_dir"], bk=bk)
@@ -260,7 +277,7 @@ def test_broker_reports_counts_and_nothing_else(repo, monkeypatch):
     structurally rather than by filtering."""
     monkeypatch.setattr(runner, "ROOT", repo["root"])
     bk, _shim = brokered_scratch(repo)
-    log = os.path.join(repo["tmp"], "counts.jsonl")
+    log = probe_log(repo, "counts.jsonl")
     try:
         # The raw grade really does contain the secret -- proven, not assumed.
         rc, raw = runner.graded_run(repo["scratch"], repo["task_dir"])
@@ -500,7 +517,7 @@ def test_counts_are_read_from_real_runner_summaries(text, expect):
 # broker, run_cli, the seal and run_verify exactly as a sweep would.
 # --------------------------------------------------------------------------- #
 def execute(repo, monkeypatch, calls, k, solve_before=-1, patch_cmd=True):
-    log = os.path.join(repo["tmp"], "run.jsonl")
+    log = probe_log(repo, "run.jsonl")
     monkeypatch.setattr(runner, "ROOT", repo["root"])
     monkeypatch.setattr(runner, "RUNNER_DIR", os.path.join(repo["tmp"], "runner"))
     monkeypatch.setattr(usage_ledger, "USAGE_PATH",

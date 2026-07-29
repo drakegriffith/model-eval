@@ -584,6 +584,14 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
     runner/results/ are reachable -- by GAUNTLET_TASK_DIR or by walking up from
     cwd, since scratch lives inside the repo by default.
 
+    Writes are contained too (ticket 26): file-write* is denied outright and
+    re-allowed only on this run's own apparatus -- its scratch tree, the staged
+    mirror, the broker directory, a run-scoped TMPDIR -- plus the CLI runtime
+    tier in sandbox_seal.cli_runtime_write_paths(). Before that ticket the seal
+    emitted read rules only, so the model under test could append a forged row
+    to results.jsonl, truncate it, poison a canonical task file or write into a
+    concurrent run's working tree. Recorded on the row as `write_contained`.
+
     The seal is fail-closed: no sandbox-exec means no run, rather than a run
     that silently measures an open-book attempt. GAUNTLET_NO_SANDBOX=1 is the
     documented, loudly-warned opt-out, and it is recorded on the results row.
@@ -620,13 +628,30 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
         if bk is not None:
             env["GAUNTLET_BROKER_SOCK"] = bk.sock_path
             allow.append(bk.dir)
+        # ticket 26: the model's TMPDIR is redirected to a directory created for
+        # this run alone, and that directory -- not the shared /var/folders root
+        # it lives in -- is what the write allowlist names. Allowing the shared
+        # root instead would hand every run write access to every concurrent
+        # run's staged mirror and broker directory, i.e. reopen one level up the
+        # contamination channel this ticket closes.
+        run_tmp = stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="gauntlet-tmp-"))
+        env["TMPDIR"] = env["TMP"] = env["TEMP"] = run_tmp
+
         if seal_enabled():
+            # write_allow_paths names the run's own apparatus and nothing else;
+            # sandbox_seal appends the CLI runtime tier itself. Everything
+            # outside it -- results.jsonl, the canonical tasks/ tree, sibling
+            # scratch trees -- is read-only to the model under test.
             prefix = stack.enter_context(sandbox_seal.sandbox_prefix(
-                deny_paths=[ROOT], allow_paths=allow))
+                deny_paths=[ROOT], allow_paths=allow,
+                write_allow_paths=allow + [run_tmp]))
             cmd = prefix + list(cmd)
         else:
             print("WARNING: GAUNTLET_NO_SANDBOX=1 -- model can read its own "
-                  "answer key; this row is marked sealed=false", file=sys.stderr)
+                  "answer key AND write to results.jsonl, the canonical tasks "
+                  "and other runs' scratch trees; this row is marked "
+                  "sealed=false write_contained=false", file=sys.stderr)
         t0 = time.time()
         proc = subprocess.Popen(cmd, cwd=scratch, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1086,6 +1111,15 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     # Recorded per row so "was this result open-book?" is answerable from the
     # corpus instead of reconstructed from commit dates.
     sealed = None
+    # ticket 26: whether the model ran with WRITES contained -- i.e. unable to
+    # append to or truncate results.jsonl, poison the canonical tasks/ tree, or
+    # write into a sibling run's scratch. Separate from `sealed` because it is a
+    # separate property (integrity, not confidentiality) and because it has a
+    # separate history: every row written before 2026-07-29 was produced with
+    # reads sealed and writes wide open, and will lack this field entirely.
+    # Absent-or-false means "not contained" for any corpus consumer; the
+    # admissibility argument for those rows is in ticket 26.
+    write_contained = None
     # ticket 17: the same three questions for the acceptance cap. brokered=false
     # is a protocol-v1 row and the pre-registration forbids pooling it with v2,
     # so it is a field rather than an assumption about commit dates.
@@ -1127,6 +1161,11 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
                                     k=k_cap)
             cmd = build_cli_cmd(run["model"], run["effort"], prompt)
             sealed = seal_enabled()
+            # AND'd against the seal module's own capability flag rather than
+            # hardcoded True: if write containment is ever removed from
+            # sandbox_seal, the corpus says so instead of carrying rows that
+            # claim a guarantee nothing is enforcing.
+            write_contained = sealed and sandbox_seal.WRITE_CONTAINMENT
             out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir,
                                                run["model"], bk=bk)
             usage_detail = usage_ledger.parse_usage_detailed(model_family(run["model"]), out)
@@ -1187,7 +1226,7 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "task": run["task"], "rep": run["rep"], "pass": passed,
         "tokens_in": tokens_in, "tokens_out": tokens_out, "wall_s": wall_s,
         "turns": turns, "loc_changed": loc, "exit_reason": exit_reason,
-        "sealed": sealed,
+        "sealed": sealed, "write_contained": write_contained,
         # ticket 17. acceptance_requests is the design parameter K governs, and
         # it is counted by the broker rather than inferred from CLI telemetry --
         # which is what makes it comparable across families, unlike `turns`
