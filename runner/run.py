@@ -32,8 +32,16 @@ import time
 from datetime import datetime, timezone
 
 import broker
+import registry
 import sandbox_seal
 import usage_ledger
+
+# Import direction is one-way and now acyclic (ticket 30): run -> usage_ledger ->
+# registry, with registry a leaf importing nothing. Until ticket 30 the model
+# registry lived in this file, so usage_ledger had to import run back locally to
+# resolve a model -- a leaf module paying for a god module to answer "what family
+# is this". That local import is gone. Do not add an `import run` anywhere below
+# this line's dependents.
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # ~/code/model-gauntlet
 RUNNER_DIR = os.path.join(ROOT, "runner")
@@ -73,100 +81,22 @@ def kimi_dollars(tokens_in, tokens_out):
 
 
 # --------------------------------------------------------------------------- #
-# Model registry
+# Model registry -- MOVED to runner/registry.py (ticket 30)
 # --------------------------------------------------------------------------- #
-# Every model the runner can invoke, keyed by the canonical CLI id from
-# runner/CLI-FACTS.md. Three behaviours vary across the roster and nothing else
-# does: which CLI binary drives it (`family`), which effort tiers it will accept
-# (`efforts`), and whether a run costs real money (`metered`). Everything
-# downstream -- command construction, usage parsing, key injection, spend
-# metering -- dispatches on `family`, so adding a model is a row here rather than
-# a new branch in four functions.
+# The roster, the alias table, the three tier ladders and the four resolution
+# functions now live in registry.py, which owns their interface contract. They are
+# re-exported here by name, unchanged and as the same objects, so every call site
+# below and every external caller of `run.<symbol>` keeps working and the import
+# switch stays atomic -- no intermediate commit has a broken tree.
 #
-# `efforts` is the DECLARED tier set (source: ~/.codex/models_cache.json for
-# codex, `claude --help` for claude). Declared is not the same as real -- whether
-# a tier moves spend is what effort_verdict.py decides -- but declared is enough
-# to reject a typo before a 4M-token sweep launches.
-CLAUDE_TIERS = ["low", "medium", "high", "xhigh", "max"]
-CODEX_TIERS = ["low", "medium", "high", "xhigh"]
-CODEX_TIERS_6 = ["low", "medium", "high", "xhigh", "max", "ultra"]
-
-MODELS = {
-    # claude family -- driven by `claude -p`, subscription auth
-    "claude-opus-5":             {"family": "claude", "efforts": CLAUDE_TIERS},
-    "claude-opus-5[1m]":         {"family": "claude", "efforts": CLAUDE_TIERS},
-    "claude-opus-4-8":           {"family": "claude", "efforts": CLAUDE_TIERS},
-    "claude-fable-5":            {"family": "claude", "efforts": CLAUDE_TIERS},
-    "claude-sonnet-5":           {"family": "claude", "efforts": CLAUDE_TIERS},
-    "claude-haiku-4-5":          {"family": "claude", "efforts": CLAUDE_TIERS},
-    "claude-haiku-4-5-20251001": {"family": "claude", "efforts": CLAUDE_TIERS},
-    # codex family -- driven by `codex exec`, subscription auth. sol and terra are
-    # the only two ids declaring six tiers; the rest stop at xhigh.
-    "gpt-5.6-sol":               {"family": "codex", "efforts": CODEX_TIERS_6},
-    "gpt-5.6-terra":             {"family": "codex", "efforts": CODEX_TIERS_6},
-    "gpt-5.6-luna":              {"family": "codex", "efforts": CLAUDE_TIERS},
-    "gpt-5.5":                   {"family": "codex", "efforts": CODEX_TIERS},
-    "gpt-5.4":                   {"family": "codex", "efforts": CODEX_TIERS},
-    "gpt-5.4-mini":              {"family": "codex", "efforts": CODEX_TIERS},
-    "gpt-5.3-codex-spark":       {"family": "codex", "efforts": CODEX_TIERS},
-    "codex-auto-review":         {"family": "codex", "efforts": CODEX_TIERS},
-    # kimi family -- Claude Code binary pointed at Moonshot's Anthropic-compatible
-    # endpoint, injected API key, real money. Separate family from `claude`
-    # precisely because those last two facts differ.
-    "kimi-k3":                   {"family": "kimi", "efforts": CLAUDE_TIERS,
-                                  "metered": True},
-}
-
-# Short names used by the existing runs.yaml files and already written into
-# results.jsonl. Kept so old configs and old rows stay readable; new configs may
-# name either an alias or a canonical id. `hybrid` is a MODE, not a model -- it
-# runs Fable as an orchestrator (see HYBRID_INSTRUCTION), and pointing it here
-# states that plainly instead of hiding it in a build_cli_cmd branch.
-ALIASES = {
-    "fable": "claude-fable-5",
-    "hybrid": "claude-fable-5",
-    "sol": "gpt-5.6-sol",
-    "kimi": "kimi-k3",
-}
-
-
-def resolve_model(model):
-    """Return (canonical_id, spec) for an alias or canonical CLI id.
-
-    Single resolution point: build_cli_cmd, parse_usage, run_cli and the spend
-    meter all come through here, so an alias is expanded once and by one rule.
-    Raises ValueError on an unknown name -- a typo must not reach a paid CLI.
-    """
-    mid = ALIASES.get(model, model)
-    spec = MODELS.get(mid)
-    if spec is None:
-        raise ValueError(
-            f"unknown model {model!r}; known ids: {', '.join(sorted(MODELS))}; "
-            f"aliases: {', '.join(sorted(ALIASES))}")
-    return mid, spec
-
-
-def model_family(model):
-    return resolve_model(model)[1]["family"]
-
-
-def is_metered(model):
-    """True when a run of this model costs real money (Kimi only today)."""
-    return bool(resolve_model(model)[1].get("metered"))
-
-
-def check_effort(model, effort):
-    """Reject an effort tier the model does not declare, before anything is spent.
-
-    Fail-closed on purpose: a misspelled tier that the CLI silently ignores would
-    produce a sweep of identical runs wearing different labels, which is exactly
-    the artefact the effort ladder exists to rule out.
-    """
-    mid, spec = resolve_model(model)
-    if effort and effort not in spec["efforts"]:
-        raise ValueError(
-            f"model {mid} does not declare effort {effort!r}; "
-            f"declared: {', '.join(spec['efforts'])}")
+# Add a model in registry.py, not here. This block is a forwarding seam, and if it
+# ever grows a second definition of one of these names the two halves of the
+# instrument will disagree about the roster; test_registry.py asserts identity
+# (`run.MODELS is registry.MODELS`) to catch exactly that.
+from registry import (  # noqa: E402
+    ALIASES, CLAUDE_TIERS, CODEX_TIERS, CODEX_TIERS_6, MODELS,
+    check_effort, is_metered, model_family, resolve_model,
+)
 
 
 DONE_GATE_SENTENCE = (

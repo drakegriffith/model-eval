@@ -17,15 +17,20 @@ real consumption by 30x-400x on cached multi-turn sessions.
 probe_endpoints.py already summed all three fields independently; this module
 is now the single source both call through.
 
-Stdlib only. Does not import run.py at module level -- run.py imports this
-module, so a top-level import back would cycle. retrofit() needs run.py's
-model registry to resolve a family per archived row and imports it locally.
+Stdlib only, and no longer imports run.py at all (ticket 30). retrofit() needs
+the model registry to resolve a family per archived row; that registry now lives
+in the leaf module runner/registry.py, imported normally at the top of this file.
+Until ticket 30 it lived inside run.py's 1300-line worker, which run.py imports
+this module from -- so the import back had to be local to dodge the cycle. The
+cycle is resolved, not dodged: the direction is run -> usage_ledger -> registry.
 
     python3 runner/usage_ledger.py retrofit
 """
 import argparse
 import json
 import os
+
+import registry
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER_DIR = os.path.join(ROOT, "runner")
@@ -193,7 +198,7 @@ def build_usage_row(row, family, usage_detail=None, model_id=None,
       - zero tokens_in and tokens_out (mock rows): "not_applicable_zero_tokens".
 
     `model_id` should be the CANONICAL id (the caller's job to resolve, e.g.
-    via run.resolve_model) -- pre-registry archived rows only carry an alias
+    via registry.resolve_model) -- pre-registry archived rows only carry an alias
     ("sol") in `model`, and scaffold/pricing lookups below are keyed by
     canonical id, so a caller that skips this silently loses those lookups.
 
@@ -269,8 +274,6 @@ def retrofit(results_path, transcripts_dir, usage_path):
     Idempotent: run_ids already present in usage_path are skipped, so this is
     safe to re-run after new sweeps land without duplicating old rows.
     """
-    import run  # local import: run.py imports this module at top level
-
     already = set()
     if os.path.exists(usage_path):
         with open(usage_path, encoding="utf-8") as f:
@@ -300,7 +303,7 @@ def retrofit(results_path, transcripts_dir, usage_path):
                 skipped_existing += 1
                 continue
             try:
-                model_id, spec = run.resolve_model(row["model"])
+                model_id, spec = registry.resolve_model(row["model"])
                 family = spec["family"]
             except ValueError:
                 model_id, family = row.get("model"), "unknown"
