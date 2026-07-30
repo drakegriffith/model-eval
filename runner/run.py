@@ -418,6 +418,25 @@ def prepare_scratch(task_dir, scratch, harness, verify_text=None):
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+# Ticket 04, MCP half. An empty server map plus --strict-mcp-config REPLACES the
+# discovered MCP servers instead of merging with them, so the model under test is
+# handed no mcp__* tools. Measured 2026-07-30 through the request the CLI really
+# sends: 42 tools / 11 mcp__ without these, 28 / 0 with them, Read+Write+Bash
+# intact either way. The eleven were the context-mode plugin -- ctx_search reads
+# an index built over the vault, ctx_execute_file runs arbitrary code -- i.e. a
+# retrieval channel the filesystem seal does not watch, because it arrives over a
+# socket rather than a path.
+#
+# ORDER IS LOAD-BEARING. --mcp-config <configs...> is variadic: it swallows every
+# following argument that does not start with '-'. --strict-mcp-config must
+# follow the value, so the value is never in the last position where a later
+# append would be absorbed into it. The failure mode is "MCP config file not
+# found: <the swallowed argument>", and it only fires once something appends a
+# positional, so it sits latent. Asserted in
+# tests/test_live_mcp_seal.py::test_mcp_config_value_is_never_last.
+MCP_SEAL_FLAGS = ["--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config"]
+
+
 def build_cli_cmd(model, effort, prompt):
     """The exact headless invocation for a model, per runner/CLI-FACTS.md.
 
@@ -436,7 +455,7 @@ def build_cli_cmd(model, effort, prompt):
 
     if family in ("claude", "kimi"):
         cmd = ["claude", "-p", prompt, "--output-format", "json",
-               "--model", mid, "--dangerously-skip-permissions"]
+               "--model", mid, "--dangerously-skip-permissions"] + MCP_SEAL_FLAGS
         if effort:
             cmd += ["--effort", effort]
         return cmd
