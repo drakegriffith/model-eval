@@ -3,3 +3,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# stats.py default --out lands here; the published copy is deliverables/STATS-APPENDIX.md.
+# Regenerate to stdout instead: python3 runner/stats.py --out /dev/stdout
+runner/results/STATS-APPENDIX.md
