@@ -22,6 +22,33 @@ by the module that publishes it. Nothing here is quoted from a prior session.
 
 ---
 
+## Strike or null — the rule for retracting a published number
+
+Ratified by Drake 2026-07-30 (ticket 35 AC#4). Stated here because both worked
+examples are in this document, and because the two retractions in it landed
+differently on purpose and a later reader would otherwise read the difference as
+drift.
+
+**Strike a published number when nothing can refill it. Null it with a
+quarantine status when a named action can — and name that action in the status.**
+
+The test is whether a closing condition exists, not how bad the number was.
+Striking says *this quantity is not computed here any more*. Nulling with a
+status says *this quantity is withheld, and here is what would restore it*; a
+reader who finds a key simply missing learns nothing, which is the right outcome
+only when there is nothing to learn.
+
+| retraction | disposition | why |
+|---|---|---|
+| `stats.py` §5's `tokens_in + tokens_out` sign-flip axis (ticket 31 AC#3) | **struck** — the axis is gone, see `summary_tokens`'s docstring and item 1 below | no closing condition. The axis was wrong in principle, not starved of data; recomputing it on a clean corpus would still be the wrong axis |
+| `effort-verdict.json`'s 16 `scaffold_in_median` values (ticket 35 AC#4) | **null + `scaffold_in_status: "quarantined"` + `scaffold_in_n: 0`** — see item 9 below | a live closing condition: re-run `probe_endpoints.py --phase ladder` under the current parser. The quantity is well-defined and measurable; this corpus just cannot supply it |
+
+A status that does not name its refilling action is not compliant with this
+rule — `"quarantined"` earns its keep only because item 9 and the closing table
+below both state the re-probe. If no action can be named, strike instead.
+
+---
+
 ## 1. The retired section-5 finding, and the two places it is still published
 
 `stats.py:section_permutation` used to run the sign-flip test on
