@@ -317,13 +317,23 @@ def test_the_auth_carve_out_does_not_name_the_codex_config():
 # to be sensitive, i.e. it must fail when the auth is genuinely absent.
 # --------------------------------------------------------------------------- #
 def test_a_sealed_scoped_run_is_still_logged_in(repo):
+    """Corrected 2026-07-30, fourth session. This asserted `"Logged in" in
+    arm["out"]`, which cannot pass: measured against codex 0.144.0,
+    `login status` writes "Logged in using ChatGPT" to STDERR and leaves stdout
+    empty, and run_cli returns stdout only. The original verification read it off
+    a terminal, where both streams land on the same screen -- the same shape of
+    error as verifying a config-loading binary with `--version`.
+
+    So the exit status is the whole observable here, and what makes it a
+    sensitive one is test_login_status_fails_when_the_auth_source_is_absent
+    below: it drives the same argv through the same live path with the auth
+    source pointed at nothing and requires a non-ok reason. Delete that test and
+    this one goes vacuous."""
     arm = _run(repo, LOGIN_STATUS, sealed=True)
     assert arm["reason"] == "ok", (
         f"`codex login status` failed under the scoped home (reason="
         f"{arm['reason']}); the run-scoped CODEX_HOME cost the arm its "
         f"subscription auth. stdout: {arm['out'][:2000]!r}")
-    assert "Logged in" in arm["out"], (
-        f"login status exited 0 without reporting a login: {arm['out'][:2000]!r}")
 
 
 def test_login_status_fails_when_the_auth_source_is_absent(repo, tmp_path):

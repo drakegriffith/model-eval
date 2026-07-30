@@ -468,6 +468,72 @@ def build_cli_cmd(model, effort, prompt):
     raise ValueError(f"unknown family {family} for model {mid}")
 
 
+# Ticket 04, codex half. The host credential file the run-scoped CODEX_HOME
+# symlinks onto. A module constant rather than an inline literal so the negative
+# auth arm can point it at a path that does not exist without a test-only branch
+# living in shipped code (tests/test_live_codex_seal.py). It must stay in
+# sandbox_seal.cli_auth_read_paths(), or the symlink resolves onto a denied path.
+CODEX_AUTH_SOURCE = os.path.expanduser("~/.codex/auth.json")
+
+# Deliberately comments only: no `mcp_servers` table means codex starts with an
+# empty server list. An absent key is the seal here, so nothing may be added to
+# this text that declares one.
+SCOPED_CODEX_CONFIG = """\
+# Run-scoped CODEX_HOME for the model-gauntlet (ticket 04).
+# Intentionally declares nothing. The host ~/.codex/config.toml configures MCP
+# servers -- node_repl, computer-use, an authenticated remote github, and more --
+# and `codex exec` has no --strict-mcp-config equivalent, so the only way to hand
+# the model under test an empty server list is to hand it a different home.
+"""
+
+
+@contextlib.contextmanager
+def scoped_codex_home():
+    """Yield a throwaway CODEX_HOME holding an empty config and the host's auth.
+
+    Ticket 04, codex half, fixes two defects with one change.
+
+    1. INSTRUMENT FAULT. sensitive_paths() denies ~/.codex and
+       cli_auth_read_paths() carves back auth.json alone, so from 1a6b0d5 every
+       codex-family run died at config load -- `Failed to read config file
+       ~/.codex/config.toml: Operation not permitted` -- before any model call.
+       It was verified with `codex --version`, which never loads the config: a
+       binary that starts is not a binary that ran.
+
+    2. MCP SURFACE. The host config declares six servers, several of which
+       execute code or carry a bearer PAT.
+
+    Pointing CODEX_HOME at this directory makes config load succeed with no
+    servers configured, WITHOUT re-allowing ~/.codex/config.toml -- re-allowing
+    it would reopen exactly the vector the ticket closes.
+
+    auth.json is a symlink rather than a copy so the credential is never
+    duplicated onto disk; it resolves onto CODEX_AUTH_SOURCE, which is already
+    in the read carve-out.
+
+    TEARDOWN IS NOT COSMETIC. codex replaces auth.json by writing a sibling and
+    renaming over it, not by writing through the link, and its refresh tokens
+    are single-use. A run that crosses a refresh therefore spends the host's
+    token and leaves the replacement in a directory we are about to delete --
+    breaking Drake's login, not just the run's. So a real file where the symlink
+    was is copied back to the source; a symlink still being a symlink means
+    nothing was refreshed and the source is left untouched, mtime included.
+    """
+    with tempfile.TemporaryDirectory(prefix="gauntlet-codexhome-") as home:
+        with open(os.path.join(home, "config.toml"), "w", encoding="utf-8") as f:
+            f.write(SCOPED_CODEX_CONFIG)
+        link = os.path.join(home, "auth.json")
+        os.symlink(CODEX_AUTH_SOURCE, link)
+        try:
+            yield home
+        finally:
+            # exists() follows the link, so a dangling symlink (the negative
+            # auth arm) is False here and nothing is written back.
+            if os.path.exists(link) and not os.path.islink(link):
+                shutil.copyfile(link, CODEX_AUTH_SOURCE)
+                os.chmod(CODEX_AUTH_SOURCE, 0o600)
+
+
 @contextlib.contextmanager
 def staged_task_dir(task_dir, stage_acceptance=True):
     """Yield a sanitised mirror of task_dir for the model's GAUNTLET_TASK_DIR.
@@ -587,6 +653,17 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
             tempfile.TemporaryDirectory(prefix="gauntlet-tmp-"))
         env["TMPDIR"] = env["TMP"] = env["TEMP"] = run_tmp
 
+        # ticket 04, codex half: every run gets its own CODEX_HOME, holding an
+        # empty config and a symlink to the host credential. Unconditional, not
+        # branched on family -- a claude-family run that ignores CODEX_HOME
+        # costs one temp directory, whereas a family branch is one more place
+        # the seal can be absent without anything failing. It joins the WRITE
+        # allowlist only: codex writes session state under its home, but reads
+        # are denylist-shaped and /var/folders is already readable, so adding it
+        # to `allow` would widen the read carve-out for nothing.
+        codex_home = stack.enter_context(scoped_codex_home())
+        env["CODEX_HOME"] = codex_home
+
         if seal_enabled():
             # ROOT is ticket 16's deny (the benchmark's own answer key).
             # sensitive_paths() is ticket 04's: the vault, the global Claude and
@@ -609,7 +686,7 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
             prefix = stack.enter_context(sandbox_seal.sandbox_prefix(
                 deny_paths=[ROOT] + list(sandbox_seal.sensitive_paths().values()),
                 allow_paths=allow + sandbox_seal.cli_auth_read_paths(),
-                write_allow_paths=allow + [run_tmp]))
+                write_allow_paths=allow + [run_tmp, codex_home]))
             cmd = prefix + list(cmd)
         else:
             print("WARNING: GAUNTLET_NO_SANDBOX=1 -- model can read its own "
