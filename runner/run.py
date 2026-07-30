@@ -569,17 +569,33 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
         env["TMPDIR"] = env["TMP"] = env["TEMP"] = run_tmp
 
         if seal_enabled():
+            # ROOT is ticket 16's deny (the benchmark's own answer key).
+            # sensitive_paths() is ticket 04's: the vault, the global Claude and
+            # Codex configs, the global MCP config, the skills tree and shell
+            # history. Until 2026-07-30 the live list was [ROOT] alone, so every
+            # row collected before then was sealed against the answer key and
+            # open-book against the vault -- the module could seal those paths
+            # and simply was never asked to.
+            #
+            # cli_auth_read_paths() is carved back out because the ~/.claude and
+            # ~/.codex denies would otherwise take the credential files with
+            # them and break subscription auth. It is appended to allow_paths
+            # rather than removed from the deny list so the exception stays two
+            # named files instead of two directories.
+            #
             # write_allow_paths names the run's own apparatus and nothing else;
             # sandbox_seal appends the CLI runtime tier itself. Everything
             # outside it -- results.jsonl, the canonical tasks/ tree, sibling
             # scratch trees -- is read-only to the model under test.
             prefix = stack.enter_context(sandbox_seal.sandbox_prefix(
-                deny_paths=[ROOT], allow_paths=allow,
+                deny_paths=[ROOT] + list(sandbox_seal.sensitive_paths().values()),
+                allow_paths=allow + sandbox_seal.cli_auth_read_paths(),
                 write_allow_paths=allow + [run_tmp]))
             cmd = prefix + list(cmd)
         else:
             print("WARNING: GAUNTLET_NO_SANDBOX=1 -- model can read its own "
-                  "answer key AND write to results.jsonl, the canonical tasks "
+                  "answer key AND the vault, the global agent configs and shell "
+                  "history, AND write to results.jsonl, the canonical tasks "
                   "and other runs' scratch trees; this row is marked "
                   "sealed=false write_contained=false", file=sys.stderr)
         t0 = time.time()

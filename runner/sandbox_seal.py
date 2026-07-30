@@ -104,6 +104,37 @@ def cli_runtime_write_paths():
     ]
 
 
+def cli_auth_read_paths():
+    """Paths the model's CLI must be able to READ or the measurement breaks.
+
+    Ticket 04. The read-side twin of cli_runtime_write_paths(), and it exists
+    for the same reason: sensitive_paths() denies ~/.claude and ~/.codex as
+    whole subpaths, and the credential files live inside them. Denying those
+    does not produce a sealed run, it produces a run that could not
+    authenticate -- which lands in results.jsonl looking like a capability
+    result when it is actually an instrument fault.
+
+    Deliberately two literal files rather than their directories. Re-allowing
+    ~/.claude to fix auth would hand back CLAUDE.md, the skills tree and the
+    plugin cache in the same rule -- undoing the entire deny this ticket is
+    for. SBPL is last-match-wins and _profile_text emits allows after denies,
+    so a `literal` allow on exactly the credential file survives the `subpath`
+    deny on its parent without widening it. That the carve-out stays surgical
+    is asserted by
+    tests/test_live_vault_seal.py::test_auth_carve_out_does_not_reopen_the_directory,
+    not left to the reader to infer from rule ordering.
+
+    Verified 2026-07-30 against the real binaries under the exact profile
+    run_cli generates: `claude --version`, `claude mcp list` and
+    `codex --version` all exit 0 with the full sensitive_paths() deny in place
+    and these two files carved back out.
+    """
+    return [
+        os.path.expanduser("~/.claude/.credentials.json"),
+        os.path.expanduser("~/.codex/auth.json"),
+    ]
+
+
 # ~/.claude.json is rewritten atomically as sibling temp files and guarded by a
 # lock file (~/.claude.json.lock, ~/.claude.json.tmp.<pid>.<hash>), so a literal
 # rule on the json path alone leaves the CLI unable to commit config. Matched by
