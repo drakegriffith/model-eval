@@ -43,6 +43,12 @@ dependencies = []
 
 [project.scripts]
 gauntlet-playground = "gauntlet_playground.__main__:main"
+# Ticket 40, slice S2. A second script rather than a subcommand of the first:
+# the two report different things (the boundary vs the executor's invocation
+# paths and the spend cap's coverage) and runner/tests/test_product_boundary.py
+# pins the line above byte-for-byte, so growing it into an argv-dispatching
+# entry point would move a line another test is holding still.
+gauntlet-playground-run = "gauntlet_playground.executor:main"
 
 [tool.setuptools]
 packages = ["gauntlet_playground"]

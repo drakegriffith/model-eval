@@ -16,8 +16,11 @@ This gate is a RATCHET, not a migration target. A scan of every import in the
 four core modules yields zero non-stdlib names today -- half A is already true.
 Nothing is expected to fail on first run, which makes the quality of the
 assertion the whole deliverable: a ratchet that cannot detect its own blind
-spots is decoration. Half B has zero subjects (product/ does not exist) and is
-reported UNENFORCED rather than passed; see `verdict()`.
+spots is decoration. Half B had zero subjects when this gate was written and was
+reported UNENFORCED rather than passed; ticket 38 created product/ and ticket 40
+added the executor, so it now inspects real files and reports PASS with a count.
+The UNENFORCED arm stays in `verdict()` -- deleting product/ must not read as a
+quiet pass.
 
 WHAT THIS GATE DOES NOT PROVE. It reads import statements and nothing else.
 Passing it is not evidence the core is extractable, because the core's
@@ -236,10 +239,12 @@ def check_product_depends_on_core_only(product_dir=PRODUCT_DIR,
     """Half B. Subjects are .py files under product/. Each may import the stdlib,
     the core, and third-party packages -- never a non-core instrument module.
 
-    product/ does not exist today, so this returns UNENFORCED over zero
-    subjects. That is the honest answer: an import scan living inside the
-    instrument cannot see a product that is not there, and nothing currently
-    stops a future product from importing run.py directly.
+    product/ exists (ticket 38) and holds the executor (ticket 40), so this
+    reports PASS over a non-zero subject count. If the directory is ever emptied
+    or removed it returns UNENFORCED over zero subjects instead of PASS -- the
+    honest answer, because an import scan cannot see a product that is not
+    there, and a boundary with no subjects prints byte-identically to one that
+    holds.
     """
     core_stems = {n[:-3] for n in core_literal}
     local = local_module_stems(runner_dir)
