@@ -42,8 +42,14 @@ import import_gate  # noqa: E402
 # usage_ledger.py joined 2026-07-30 (ticket 37), once its paths stopped being
 # derived from its own location on disk. Typed out here by hand, not copied from
 # the gate: this copy is only worth having if it was written independently.
+#
+# spend_cap.py joined 2026-07-30 (ticket 40). The three-place cost was paid
+# deliberately: the module's own declaration, the gate's literal, and this line.
+# A cap that could quietly leave the core is a cap the product could quietly
+# stop passing through.
 EXPECTED_CORE_MODULES = ("corpus_gates.py", "effort_verdict.py", "registry.py",
-                         "stats.py", "token_units.py", "usage_ledger.py")
+                         "spend_cap.py", "stats.py", "token_units.py",
+                         "usage_ledger.py")
 
 
 def write_core_tree(root, modules, extra=None):

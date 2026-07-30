@@ -75,8 +75,13 @@ PRODUCT_DIR = os.path.join(REPO_ROOT, "product")
 # can live next to the ledger it caps. Its imports were always legal; what kept
 # it out was the F3 portability defect named below, now repaired -- it takes its
 # paths from the caller instead of computing this repo's layout for itself.
+#
+# spend_cap.py joined 2026-07-30 (ticket 40) -- the cap itself, paid for by hand
+# in all three places. It is core because a cap enforced in the surface that asks
+# for the run holds for exactly one caller; below the ledger, every caller passes
+# through it.
 CORE_MODULES = ("corpus_gates.py", "effort_verdict.py", "registry.py",
-                "stats.py", "token_units.py", "usage_ledger.py")
+                "spend_cap.py", "stats.py", "token_units.py", "usage_ledger.py")
 
 # Statuses. UNENFORCED is deliberately not a kind of PASS: it is the answer for a
 # direction whose subject set is empty, which is a result requiring a decision
