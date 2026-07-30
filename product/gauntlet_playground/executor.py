@@ -33,6 +33,7 @@ checked by a reader.
 """
 import os
 import subprocess
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import NamedTuple
@@ -95,6 +96,13 @@ class TaskOutcome(NamedTuple):
     results. `ledgered` says whether a usage.jsonl row was written, and it is
     False for every refusal by construction: the ledger records spend, and a
     refused task did not spend.
+
+    `wall_s` is the latency ticket 44's printed sentence reads out, and it is
+    None -- never 0.0 -- for a task that did not run. Zero seconds is a
+    measurement: it plots at the origin of a latency axis as the fastest result
+    on the chart, which is the opposite of what a refusal means. It carries no
+    default for the same reason `cap_usd` does not: every construction site
+    below has to say which of the two it is.
     """
     task_id: str
     model_id: str
@@ -104,6 +112,7 @@ class TaskOutcome(NamedTuple):
     run_id: str | None
     usage_detail: dict | None
     ledgered: bool
+    wall_s: float | None
 
 
 class RunRequest(NamedTuple):
@@ -257,7 +266,7 @@ def execute(request, invoke=None):
             spend_cap.authorize(request.model, request.cap_usd, spent)
         except spend_cap.SpendRefused as exc:
             outcomes.append(TaskOutcome(task_id, model_id, "refused", 0.0,
-                                        exc.reason, None, None, False))
+                                        exc.reason, None, None, False, None))
             continue
 
         path = INVOCATION_PATHS.get(family)
@@ -267,12 +276,22 @@ def execute(request, invoke=None):
                 f"no API-key invocation path for family {family!r}; this executor "
                 f"has paths for {', '.join(sorted(INVOCATION_PATHS))} and does not "
                 f"fall back to a subscription CLI surface",
-                None, None, False))
+                None, None, False, None))
             continue
 
         prompt = local_task_prompt(request.tasks_dir, task_id)
         env = invocation_env(path, request.api_key)
+        # The latency ticket 44's sentence reads out, measured here because this
+        # is the only place that sees the invocation start and end. The clock is
+        # monotonic, not the wall clock the ledger's `ts` comes from: a duration
+        # subtracted from two time-of-day readings can come out negative when the
+        # host's clock steps mid-run, and a negative latency plots as a point
+        # rather than raising. The span is the invocation alone -- reading the
+        # prompt off disk and writing the ledger row are this executor's costs,
+        # not the model's, and folding them in would report a slower model.
+        started = time.monotonic()
         out = invoke(build_command(path, model_id, request.effort, prompt), env)
+        wall_s = time.monotonic() - started
 
         detail = usage_ledger.parse_usage_detailed(family, out)
         usd = spend_cap.cost_of(model_id, detail)
@@ -291,7 +310,7 @@ def execute(request, invoke=None):
 
         outcomes.append(TaskOutcome(task_id, model_id, "ran", usd,
                                     f"ran and ledgered as {run_id}", run_id,
-                                    detail, True))
+                                    detail, True, wall_s))
 
     return RunReport(model_id, family, request.cap_usd, spent,
                      tuple(outcomes), ledgered)

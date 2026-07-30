@@ -28,6 +28,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -405,6 +406,115 @@ def test_the_repos_own_ledger_is_never_written_by_these_tests(tmp_path):
     after = os.path.getmtime(real) if os.path.exists(real) else None
     assert before == after
     assert os.path.exists(req.usage_path)
+
+
+# --------------------------------------------------------------------------- #
+# Ticket 44 AC#5/#9 -- the live latency the printed sentence is made of.
+#
+# The sentence 14b specifies reads out the user's OWN latency, and AC#9 says the
+# figures come from this executor rather than from arithmetic the surface does
+# for itself. Until now the executor recorded no time at all: results.jsonl
+# carries wall_s for instrument runs, usage.jsonl does not, and the product does
+# not write results.jsonl. So the number the sentence needs did not exist
+# anywhere, and the surface would have had to invent it or time the run itself --
+# which is the second counting rule AC#9 forbids.
+# --------------------------------------------------------------------------- #
+
+class SlowInvoke(RecordingInvoke):
+    """An invocation that takes a known amount of time.
+
+    A real CLI call takes seconds; a stub returns instantly, so a wall_s that is
+    always ~0.0 would pass any assertion phrased as "it is a number". Sleeping a
+    known interval is what makes the measurement checkable: the recorded figure
+    has to be at least the interval that actually elapsed.
+    """
+
+    def __init__(self, seconds, stdout=None):
+        super().__init__(stdout)
+        self.seconds = seconds
+
+    def __call__(self, cmd, env):
+        time.sleep(self.seconds)
+        return super().__call__(cmd, env)
+
+
+SLEEP_S = 0.2
+
+
+def test_a_completed_run_reports_the_wall_time_its_invocation_actually_took(tmp_path):
+    """The measurement, checked against an interval the test controls."""
+    req = request(tmp_path, cap_usd=100.0)
+    report = execute_and_return(req, SlowInvoke(SLEEP_S))
+
+    outcome, = report.outcomes
+    assert outcome.status == "ran"
+    assert outcome.wall_s >= SLEEP_S, (
+        f"wall_s {outcome.wall_s} is under the {SLEEP_S}s the invocation slept, "
+        f"so it is not a measurement of the invocation")
+    assert outcome.wall_s < SLEEP_S + 30
+
+
+def test_wall_time_is_per_task_and_not_the_time_since_the_loop_started(tmp_path):
+    """Two tasks, each sleeping the same interval. A timer started once outside
+    the loop produces a second figure roughly twice the first and looks entirely
+    plausible in a chart -- so the second task's latency is required to be its
+    own, not the run's cumulative time."""
+    req = request(tmp_path, cap_usd=100.0, task_ids=(LOCAL_TASK, "t1-py-b"))
+    report = execute_and_return(req, SlowInvoke(SLEEP_S))
+
+    first, second = report.outcomes
+    assert [o.status for o in report.outcomes] == ["ran", "ran"]
+    assert first.wall_s >= SLEEP_S and second.wall_s >= SLEEP_S
+    assert second.wall_s < 2 * SLEEP_S, (
+        f"the second task's wall_s ({second.wall_s}) reaches the cumulative "
+        f"time of both invocations, so the timer spans the loop, not the call")
+
+
+def test_a_refused_task_reports_no_latency_rather_than_a_zero(tmp_path):
+    """Zero seconds is a measurement: it renders as an instant run, and on a
+    latency axis it plots at the origin as the fastest result on the chart. A
+    task that never ran has no latency, which is a different fact and is carried
+    as None -- same rule the ledger already follows for a refusal, where
+    `ledgered` is False rather than a row of zeroes."""
+    floor = spend_cap.metering_capability(METERED_MODEL).floor_usd
+    req = request(tmp_path, cap_usd=floor / 2)
+    report = execute_and_return(req, RecordingInvoke())
+
+    outcome, = report.outcomes
+    assert outcome.status == "refused"
+    assert outcome.wall_s is None, (
+        "a refused task reported a latency; nothing ran, so there is nothing to "
+        "have taken any time")
+
+
+def test_an_unsupported_family_also_reports_no_latency(tmp_path, monkeypatch):
+    """The other non-running status, and a third TaskOutcome construction site. A
+    default of 0.0 in one of the three is exactly the gap a single-status test
+    leaves open, so the branch is reached rather than reasoned about: the paths
+    table is emptied so a metered family arrives at a family with no path, which
+    is the only way this status is reachable while kimi is both priced and
+    pathed."""
+    monkeypatch.setattr(executor, "INVOCATION_PATHS", {})
+    req = request(tmp_path, cap_usd=100.0)
+    invoke = RecordingInvoke()
+    report = execute_and_return(req, invoke)
+
+    outcome, = report.outcomes
+    assert outcome.status == "unsupported"
+    assert invoke.calls == []
+    assert outcome.wall_s is None
+
+
+def test_the_latency_clock_is_monotonic():
+    """A duration subtracted from two wall-clock readings can come out negative,
+    or minutes long, when the host's clock steps under it -- and a negative
+    latency renders as a point on a chart rather than as an error. The stdlib
+    supplies a clock with no such failure mode, so the module is required to be
+    reading it."""
+    names = code_identifiers(ast.parse(read_executor_source()))
+    assert "monotonic" in names or "perf_counter" in names, (
+        "the executor times its invocation with something other than a "
+        "monotonic clock")
 
 
 def execute_and_return(req, invoke):
