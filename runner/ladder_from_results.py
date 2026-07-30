@@ -29,6 +29,12 @@ erase a ladder. Excluded counts are printed, never silently dropped.
 Failing-but-complete runs ARE counted: spend is the measurement here, and a tier that
 reasons at length and still gets the wrong answer has spent those tokens. --passing-only
 restricts to passing runs for contrast.
+
+Vocabulary note (2026-07-30, ticket 42). classify() now emits BACKWARDS for a ladder that
+would have been AMBIGUOUS and whose top tier spends at or below 0.95x its bottom tier.
+This module imports the state along with the thresholds rather than restating either, and
+prints a `was` column plus a transition tally so that a block whose verdict moved under the
+new vocabulary is visible in the output instead of being re-labelled in silence.
 """
 import argparse
 import json
@@ -38,7 +44,9 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from effort_verdict import TIER_ORDER, classify  # noqa: E402  (thresholds: single source)
+from effort_verdict import (  # noqa: E402  (thresholds + vocabulary: single source)
+    TIER_ORDER, classify, pre_split_verdict, transition_tally,
+)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -122,15 +130,20 @@ def main():
     if args.pooled:
         report.append(report_block("POOLED (no task block)", rows))
 
-    hdr = (f"{'block':<24} {'verdict':<13} {'spread':>7} {'mono':>5} {'btwCV':>6} "
-           f"{'winCV':>6} {'n':>3} {'pass':>5}  out-tokens by tier")
+    # `was` = the pre-split verdict, on every block and not only the moved ones
+    # (ticket 42 AC#4). `end/1` is the top tier over the bottom -- the signed reading
+    # the split turns on, which `spread` (max/min) is blind to.
+    hdr = (f"{'block':<24} {'was':<12} {'verdict':<13} {'spread':>7} {'end/1':>6} "
+           f"{'mono':>5} {'btwCV':>6} {'winCV':>6} {'n':>3} {'pass':>5}  "
+           f"out-tokens by tier")
     print(hdr)
     print("-" * len(hdr))
     for r in report:
         tiers = " ".join(f"{t}={r['out_tokens_by_tier'][t]}" for t in r["tiers"]
                          if t in r["out_tokens_by_tier"])
         n = min(r["n_per_tier"]) if r["n_per_tier"] else 0
-        print(f"{r['block']:<24} {r['verdict']:<13} {str(r['spread']):>7} "
+        print(f"{r['block']:<24} {pre_split_verdict(r['verdict']):<12} "
+              f"{r['verdict']:<13} {str(r['spread']):>7} {str(r['end_ratio']):>6} "
               f"{str(r['monotone']):>5} {str(r['between_cv']):>6} "
               f"{str(r['within_cv']):>6} {n:>3} {str(r['pass_rate']):>5}  {tiers}")
 
@@ -140,6 +153,9 @@ def main():
         counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
     print("\ntask blocks: " + "  ".join(f"{k}={v}" for k, v in sorted(counts.items()))
           + f"   ({len(rows)} complete runs)")
+    tally = transition_tally(r["verdict"] for r in blocks)
+    print("ticket 42 transitions over " + f"{len(blocks)} task block(s): "
+          + "  ".join(f"{k}: {v}" for k, v in sorted(tally.items())))
     if excluded:
         print("excluded rows: " + "  ".join(f"{k}={v}" for k, v in sorted(excluded.items()))
               + "   (incomplete generation is not a spend measurement)")

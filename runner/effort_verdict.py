@@ -14,11 +14,37 @@ numbers happened to do:
             -> tiers are distinct budget settings; keep them as separate frontier points
   NO-OP     spread < 1.20x
             -> the knob does nothing measurable; collapse to ONE point and disclose
-  AMBIGUOUS everything in between, non-monotone, or signal not separated from noise
+  BACKWARDS unresolved AND the top of the dial spends LESS than the bottom
+            -> re-run at higher n, and never describe this reading as "close to real"
+  AMBIGUOUS everything else in between, non-monotone, or signal not separated from noise
             -> re-run at higher n; the answer is not yet in the data
 
 Spread is computed on output tokens because that is where reasoning is billed; input
 is the fixed scaffold and barely moves across tiers.
+
+THE DIRECTION SPLIT (added 2026-07-30, ticket 42). AMBIGUOUS was doing two jobs. It
+held ladders that are genuinely under-determined, and it held ladders that RUN THE
+WRONG WAY -- a different and much stronger claim, which ticket 13 measured on
+claude-haiku-4-5-20251001 (max 28% below low, monotone_score 0.0) and warned must not
+be reported as "close" the way a genuinely shallow-but-forward ladder can be. So
+
+    BACKWARDS_END_RATIO = 0.95
+    BACKWARDS  <=>  would have been AMBIGUOUS, and
+                    mean(highest probed tier) <= 0.95 * mean(lowest probed tier)
+
+0.95 is not a fifth free parameter. It is the tolerance monotone_score() has used since
+2026-07-25 to decide a step "did not go down" (b >= a * 0.95), applied end-to-end
+instead of step-to-step -- a re-use of an already pre-committed constant rather than a
+number drawn around the answer. runner/PRECOMMIT-BACKWARDS.md fixed the value, the
+rule and five falsifiable predictions BEFORE the derivation ran, and names the commit.
+
+The branch sits inside the old `else`, so it carves out of AMBIGUOUS and nothing else:
+REAL, NO-OP, UNREPLICATED and INSUFFICIENT are each reached by exactly the conditions
+that reached them before. That is what makes pre_split_verdict() a rename rather than a
+second classification pass. Note what BACKWARDS does NOT claim: it carries no noise
+gate, because it describes the direction of an UNRESOLVED ladder rather than crediting
+an effect. Downstream it is treated exactly as AMBIGUOUS was -- not credited, one
+frontier point, still listed as needing more n.
 
 THE TOKEN GATE (added 2026-07-30, ticket 35). That last clause -- "input is the fixed
 scaffold and barely moves" -- was a claim about the exact quantity the pre-fix
@@ -68,6 +94,12 @@ NOOP_SPREAD = 1.20
 # ladder counts as signal rather than the model differing from itself on a re-run.
 NOISE_MARGIN = 2.0
 MIN_N_FOR_VERDICT = 2
+# The direction split (ticket 42). An otherwise-AMBIGUOUS ladder whose top tier spends
+# at or below this fraction of its bottom tier runs BACKWARDS. Same 0.95 tolerance
+# monotone_score() uses per step, applied end-to-end. THE ONLY HOME for this number --
+# ticket 45's badges import it from here; nothing restates it. Pre-commitment and
+# rationale: runner/PRECOMMIT-BACKWARDS.md.
+BACKWARDS_END_RATIO = 0.95
 
 # Canonical ordering; models expose different subsets.
 TIER_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra"]
@@ -147,12 +179,15 @@ def classify(tiers):
     means = [(e, statistics.mean(v)) for e, v in tiers if v]
     if len(means) < 2:
         return {"verdict": "INSUFFICIENT", "spread": None, "monotone": None,
-                "between_cv": None, "within_cv": None}
+                "between_cv": None, "within_cv": None, "end_ratio": None}
     vals = [m for _, m in means]
     lo, hi = min(vals), max(vals)
     spread = (hi / lo) if lo > 0 else float("inf")
     mono = monotone_score(vals)
     between = cv(vals)
+    # Direction, end to end. `vals` is ordered by TIER_ORDER, so this is the top of the
+    # dial over the bottom -- a signed reading that `spread` (max/min) cannot give.
+    end_ratio = (vals[-1] / vals[0]) if vals[0] > 0 else float("inf")
 
     # Within-tier noise, pooled over every tier that actually has replicates.
     reps = [v for _, v in tiers if len(v) >= 2]
@@ -167,12 +202,46 @@ def classify(tiers):
         verdict = "NO-OP"
     elif spread >= REAL_SPREAD and mono >= 0.6 and between >= NOISE_MARGIN * within:
         verdict = "REAL"
+    elif end_ratio <= BACKWARDS_END_RATIO:
+        # Ticket 42's split, and it sits HERE on purpose: inside what used to be the
+        # bare `else`, so it can only take ladders that were already AMBIGUOUS.
+        verdict = "BACKWARDS"
     else:
         verdict = "AMBIGUOUS"
 
     return {"verdict": verdict, "spread": round(spread, 2), "monotone": round(mono, 2),
             "between_cv": round(between, 2),
-            "within_cv": (round(within, 2) if within is not None else None)}
+            "within_cv": (round(within, 2) if within is not None else None),
+            "end_ratio": round(end_ratio, 2)}
+
+
+def pre_split_verdict(verdict):
+    """The verdict this ladder would have carried before ticket 42's direction split.
+
+    A rename, not a second classification pass: BACKWARDS is carved out of AMBIGUOUS
+    and nothing else, so mapping it back recovers the old vocabulary exactly. That is
+    what lets the transition tally (ticket 42 AC#4) be printed without re-classifying
+    the corpus under a copy of the old rule -- a copy that could drift.
+
+    The equivalence is asserted, not asserted-by-comment:
+    tests/test_effort_verdict_backwards.py runs an independent transcription of the
+    pre-split branch over a grid of synthetic ladders and the real corpus, and demands
+    it agree with this mapping on every one.
+    """
+    return "AMBIGUOUS" if verdict == "BACKWARDS" else verdict
+
+
+def transition_tally(verdicts):
+    """-> {"BEFORE -> AFTER": count} over an iterable of post-split verdict strings.
+
+    Printed rather than summarised: ticket 42 AC#4 exists because a model whose verdict
+    moved and is missing from the output is indistinguishable from one that stayed put.
+    """
+    tally = {}
+    for v in verdicts:
+        key = f"{pre_split_verdict(v)} -> {v}"
+        tally[key] = tally.get(key, 0) + 1
+    return tally
 
 
 def build_report(rows):
@@ -262,20 +331,27 @@ def main():
     built = build_report(load(paths))
     report, dropped = built["report"], built["dropped"]
 
-    hdr = (f"{'model':<28} {'verdict':<13} {'spread':>7} {'mono':>5} "
-           f"{'btwCV':>6} {'winCV':>6} {'n':>3}  out-tokens by tier")
+    # The `was` column is the pre-split verdict, printed for EVERY model rather than
+    # only the ones that moved (ticket 42 AC#4): a silent re-classification is exactly
+    # what a moved-models-only list would hide.
+    hdr = (f"{'model':<28} {'was':<12} {'verdict':<13} {'spread':>7} {'end/1':>6} "
+           f"{'mono':>5} {'btwCV':>6} {'winCV':>6} {'n':>3}  out-tokens by tier")
     print(hdr)
     print("-" * len(hdr))
     for r in report:
         tiers = " ".join(f"{t}={r['out_tokens_by_tier'][t]}" for t in r["tiers_probed"])
-        print(f"{r['model_id']:<28} {r['verdict']:<13} "
-              f"{str(r['spread']):>7} {str(r['monotone']):>5} "
+        print(f"{r['model_id']:<28} {pre_split_verdict(r['verdict']):<12} "
+              f"{r['verdict']:<13} "
+              f"{str(r['spread']):>7} {str(r['end_ratio']):>6} {str(r['monotone']):>5} "
               f"{str(r['between_cv']):>6} {str(r['within_cv']):>6} {r['min_n']:>3}  {tiers}")
 
     counts = {}
     for r in report:
         counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
     print("\n" + "  ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    tally = transition_tally(r["verdict"] for r in report)
+    print(f"ticket 42 transitions over {len(report)} model(s): "
+          + "  ".join(f"{k}: {v}" for k, v in sorted(tally.items())))
     if dropped:
         print(f"dropped {dropped} row(s) with an empty usage block (measurement failure)")
 
@@ -294,8 +370,11 @@ def main():
         print("  The verdicts above are unaffected: classify() reads tokens_out only, "
               "which was verified byte-identical pre- and post-fix.")
 
+    # BACKWARDS is listed alongside AMBIGUOUS deliberately: the split renames a reading,
+    # it does not resolve one. A backwards ladder still needs n before anyone can say
+    # whether the reversal is real or the model differing from itself.
     needs_more = [r["model_id"] for r in report
-                  if r["verdict"] in ("UNREPLICATED", "AMBIGUOUS")]
+                  if r["verdict"] in ("UNREPLICATED", "AMBIGUOUS", "BACKWARDS")]
     if needs_more:
         print("not yet credited; re-run probe_endpoints.py --phase ladder --models "
               + ",".join(needs_more))
