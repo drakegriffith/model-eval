@@ -240,14 +240,44 @@ def test_every_published_scaffold_median_is_withheld_on_the_real_corpus(ladder_c
 
 def test_the_real_corpus_verdicts_match_the_pre_gate_capture(ladder_corpus):
     """Ticket 35 AC#6, against the actual numbers, captured from master at
-    fa1559b before a line of this ticket was written."""
+    fa1559b before a line of this ticket was written.
+
+    UPDATED 2026-07-30 by ticket 42, which split BACKWARDS out of AMBIGUOUS and
+    so had to move this capture. It is REPHRASED, NOT RELAXED: the original
+    capture is still asserted, in the pre-split vocabulary it was taken in, by
+    mapping today's verdicts back through pre_split_verdict(). Both halves have
+    to hold, which is strictly more than the single line this replaced. The
+    2 models that moved are named in the transition tally below, so a future
+    re-classification cannot hide inside an aggregate count."""
     built = effort_verdict.build_report(
         [r for r in ladder_corpus if r.get("phase") == "ladder"])
     counts = {}
     for e in built["report"]:
         counts[e["verdict"]] = counts.get(e["verdict"], 0) + 1
-    assert counts == {"REAL": 10, "AMBIGUOUS": 6}
+    assert counts == {"REAL": 10, "AMBIGUOUS": 4, "BACKWARDS": 2}
+
+    # The fa1559b capture itself, unchanged, recovered by rename.
+    pre = {}
+    for e in built["report"]:
+        v = effort_verdict.pre_split_verdict(e["verdict"])
+        pre[v] = pre.get(v, 0) + 1
+    assert pre == {"REAL": 10, "AMBIGUOUS": 6}
+
+    # Ticket 42 AC#4: which models moved, not merely how many.
+    assert effort_verdict.transition_tally(
+        e["verdict"] for e in built["report"]) == {
+        "REAL -> REAL": 10,
+        "AMBIGUOUS -> AMBIGUOUS": 4,
+        "AMBIGUOUS -> BACKWARDS": 2,
+    }
+    assert sorted(e["model_id"] for e in built["report"]
+                  if e["verdict"] == "BACKWARDS") == [
+        "claude-haiku-4-5", "claude-haiku-4-5-20251001"]
+
     assert built["dropped"] == 7
+    # Unchanged, and that is the point: BACKWARDS collapses to one frontier
+    # point exactly as AMBIGUOUS did, so the split cannot move the study's
+    # design out from under ticket 13.
     points = sum(len(e["tiers_probed"]) if e["verdict"] == "REAL" else 1
                  for e in built["report"])
     assert points == 53

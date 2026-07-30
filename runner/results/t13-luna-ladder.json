@@ -22,7 +22,8 @@
     "spread": 4.38,
     "monotone": 1.0,
     "between_cv": 0.57,
-    "within_cv": 0.31
+    "within_cv": 0.31,
+    "end_ratio": 4.38
   },
   {
     "block": "t2-py-b",
@@ -47,7 +48,8 @@
     "spread": 3.45,
     "monotone": 1.0,
     "between_cv": 0.45,
-    "within_cv": 0.15
+    "within_cv": 0.15,
+    "end_ratio": 3.45
   },
   {
     "block": "POOLED (no task block)",
@@ -72,6 +74,7 @@
     "spread": 3.82,
     "monotone": 1.0,
     "between_cv": 0.5,
-    "within_cv": 0.3
+    "within_cv": 0.3,
+    "end_ratio": 3.82
   }
 ]

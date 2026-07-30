@@ -18,11 +18,12 @@
       "max": 3985
     },
     "pass_rate": 1.0,
-    "verdict": "AMBIGUOUS",
+    "verdict": "BACKWARDS",
     "spread": 1.39,
     "monotone": 0.0,
     "between_cv": 0.13,
-    "within_cv": 0.28
+    "within_cv": 0.28,
+    "end_ratio": 0.72
   },
   {
     "block": "t2-py-b",
@@ -47,7 +48,8 @@
     "spread": 1.43,
     "monotone": 0.5,
     "between_cv": 0.17,
-    "within_cv": 0.14
+    "within_cv": 0.14,
+    "end_ratio": 0.97
   },
   {
     "block": "POOLED (no task block)",
@@ -68,10 +70,11 @@
       "max": 4621
     },
     "pass_rate": 1.0,
-    "verdict": "AMBIGUOUS",
+    "verdict": "BACKWARDS",
     "spread": 1.36,
     "monotone": 0.5,
     "between_cv": 0.13,
-    "within_cv": 0.29
+    "within_cv": 0.29,
+    "end_ratio": 0.84
   }
 ]

@@ -116,8 +116,62 @@ That is a defect in the prediction's wording, so it is logged here rather than r
 `BACKWARDS_END_RATIO` did not move. The `NO-OP` half of prediction 2 is tested where the
 reading it refers to actually lives, in part 2 below.
 
-**Part 2 (`results.jsonl` / the six `t13-*-ladder.json` tables) is NOT YET RUN.** Nothing
-in §5's predictions 1, 3, 4 or 5 has been checked against it, and no test file exists yet.
+### Part 2 of 2 — the REAL-TASK corpus (`results.jsonl`, the six `t13-*-ladder.json`)
+
+Run 2026-07-30, `ladder_from_results.py --sweep t13-* --pooled --json-out`, once per sweep.
+**No new runs**: `results.jsonl` is 268 lines and sha1 `a2a146b4…` before and after; the six
+tables were regenerated from rows already on disk. Diffed field by field against the versions
+they replaced, the *only* changes are the added `end_ratio` column and one verdict:
+
+    ticket 42 transitions over 12 task block(s):
+      NO-OP -> NO-OP: 2   AMBIGUOUS -> AMBIGUOUS: 5
+      AMBIGUOUS -> BACKWARDS: 1   REAL -> REAL: 4
+
+    t13-haiku-pin  t1-ts-b  AMBIGUOUS -> BACKWARDS  spread 1.39  end/1 0.72  mono 0.0
+                            low=5551 high=5061 max=3985
+
+Every other block's spread, monotone score and both CVs came back byte-identical to the
+2026-07-26/27 tables — the re-derivation moved a label, not a measurement.
+
+**Predictions 1, 3, 4, 5 all held, and prediction 2's `NO-OP` half held here.**
+
+1. **CONFIRMED, exactly as written.** `claude-haiku-4-5-20251001` on `t1-ts-b`: `max` 3985 vs
+   `low` 5551, end ratio 0.72, `AMBIGUOUS -> BACKWARDS`. This is the corpus prediction 1's
+   numbers were quoted from.
+2. **The `NO-OP` half CONFIRMED, here, where the cited reading actually lives.**
+   `claude-haiku-4-5` stays `NO-OP` on both blocks — spread 1.08 and 1.06, the 1.06–1.08x §5
+   named. Note `t1-ts-b` ends **7% down** (end/1 0.93, under 0.95) and is `NO-OP` anyway,
+   because spread never reaches `NOOP_SPREAD` so the branch is never consulted. That is §3's
+   "a `NO-OP` ladder that happens to end 6% down stays `NO-OP`" exercised by the corpus rather
+   than merely asserted. The part-1 failure stands as recorded above; it was a naming defect,
+   and this is the reading it should have named.
+3. **CONFIRMED over both corpora.** Every transition in both tallies has `AMBIGUOUS` on its
+   left, or is a fixed point. Nothing left `REAL`, `NO-OP`, `UNREPLICATED` or `INSUFFICIENT`.
+4. **CONFIRMED, and it discriminates.** Six `AMBIGUOUS` blocks; end ratios 0.72, 0.97, 1.40,
+   1.42, 1.71, 4.38. Exactly the 0.72 moved. `t13-haiku-pin`'s `t2-py-b` at **0.97** is the
+   near-miss that makes this a two-sided result: it ends down and stays `AMBIGUOUS`.
+5. **CONFIRMED.** `REAL_SPREAD` 1.50, `NOOP_SPREAD` 1.20, `NOISE_MARGIN` 2.0,
+   `MIN_N_FOR_VERDICT` 2 unmoved; `BACKWARDS_END_RATIO` still 0.95 after both derivations.
+
+The `POOLED` rows are excluded from the tally (task is the blocking factor; `--pooled` exists
+only to show what ignoring the block costs). For the record `t13-haiku-pin`'s pooled row also
+moved, at end/1 0.84.
+
+### A boundary found while writing the tests, not predicted
+
+Ticket 35's invariance holds under corrupted `tokens_in` **only when the corruption preserves
+zeroness**. 17 ladder rows report a wholly empty usage block; 10 are unreachable and skipped
+before usage is consulted, leaving the 7 `dropped`. Inventing a nonzero `tokens_in` for those
+7 un-drops them and moves `claude-opus-5[1m]` `BACKWARDS -> AMBIGUOUS`, because rows worth 0
+tokens then drag a tier mean down.
+
+This is not `tokens_in` leaking into `classify()`. It is `usage_block_empty` — the one
+permitted **presence** read — behaving exactly as its docstring specifies, on an input the
+`parse_usage` bug could not have produced (it undercounted 30x–400x and never returned 0).
+Ticket 35's licence for that read is precisely that no real quarantine decision can flip the
+predicate. Recorded here and pinned by
+`test_the_presence_read_is_where_tokens_in_still_bites` so the next audit reads a decision
+instead of re-finding a surprise.
 
 ## 7. Out of scope, explicitly
 
