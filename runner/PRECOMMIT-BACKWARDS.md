@@ -14,7 +14,7 @@ of it unless it is fixed the same way.
 | Name | `BACKWARDS_END_RATIO` |
 | Value | **0.95** |
 | Home | `runner/effort_verdict.py` — exactly one definition, nothing else restates it |
-| Fixed in commit | the commit adding this file (see §5) |
+| Fixed in commit | **`758140c`** — `feat(ticket-42): fix the BACKWARDS rule before deriving anything`. Still 0.95 after the derivation. |
 
 ## 1. The rule
 
@@ -82,10 +82,44 @@ inspection of the corpus under the new rule.
    the derivation.
 
 **If the data makes this rule look wrong, that is a new ticket with this rule on record —
-never an edit in place.** Predictions 1–5 are checked in `§6` of the ticket 42 close-out
+never an edit in place.** Predictions 1–5 are checked in §6 below
 and pinned by `runner/tests/test_effort_verdict_backwards.py`.
 
-## 6. Out of scope, explicitly
+## 6. Derivation, part 1 of 2 — the PROBE corpus (`results/ladder-*.jsonl`)
+
+Run at `758140c`, `python3 runner/effort_verdict.py`. 256 ladder rows in, 7 dropped for an
+empty usage block, 16 models classified. **No new runs**: `results.jsonl` is 268 lines and
+sha1 `a2a146b4…` before and after; the probe corpus is 256 rows before and after.
+
+    ticket 42 transitions over 16 model(s):
+      AMBIGUOUS -> AMBIGUOUS: 4    AMBIGUOUS -> BACKWARDS: 2    REAL -> REAL: 10
+
+    claude-haiku-4-5           AMBIGUOUS -> BACKWARDS  spread 2.15  end/1 0.85  mono 0.5
+    claude-haiku-4-5-20251001  AMBIGUOUS -> BACKWARDS  spread 1.90  end/1 0.81  mono 0.5
+
+Frontier points unchanged at 53 — `BACKWARDS` collapses to one point exactly as
+`AMBIGUOUS` did. Both models remain in the needs-more-n list.
+
+### Prediction 2 did not survive as written — recorded, not edited away
+
+Prediction 2 said `claude-haiku-4-5` **stays `NO-OP`**. On this corpus it does not: it was
+`AMBIGUOUS` at spread 2.15 and moved to `BACKWARDS`.
+
+The prediction was not wrong about the reading it cited; it was **wrong about which corpus
+it named**. Ticket 13's `NO-OP` at spread 1.06–1.08x with within-cell CV 0.01–0.10 is a
+reading on `results.jsonl` real-task rows, derived through `ladder_from_results.py`. The
+probe corpus is a different measurement of the same model on toy puzzles, and there it was
+already `AMBIGUOUS` before this ticket touched anything. Two corpora, two readings, one
+model id — and the prediction elided the distinction.
+
+That is a defect in the prediction's wording, so it is logged here rather than reworded.
+`BACKWARDS_END_RATIO` did not move. The `NO-OP` half of prediction 2 is tested where the
+reading it refers to actually lives, in part 2 below.
+
+**Part 2 (`results.jsonl` / the six `t13-*-ladder.json` tables) is NOT YET RUN.** Nothing
+in §5's predictions 1, 3, 4 or 5 has been checked against it, and no test file exists yet.
+
+## 7. Out of scope, explicitly
 
 - Retuning any of the four existing thresholds.
 - Reaching for `tokens_in` to separate the new state. The ladder corpus's input counts are
