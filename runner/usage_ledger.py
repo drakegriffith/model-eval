@@ -24,19 +24,51 @@ Until ticket 30 it lived inside run.py's 1300-line worker, which run.py imports
 this module from -- so the import back had to be local to dodge the cycle. The
 cycle is resolved, not dodged: the direction is run -> usage_ledger -> registry.
 
+Core module since ticket 37, which is why no path below is derived from this
+file's own location on disk: a core module is consumed from another tree, and a
+module that computes its ROOT from where its own source happens to sit hands
+every such consumer THIS repo's directory layout (14b defect F3). Paths come
+from the caller instead. The CLI still works unchanged from a repo checkout --
+
     python3 runner/usage_ledger.py retrofit
+
+-- because main() resolves the repo root from --repo-root, else
+$MODEL_GAUNTLET_ROOT, else the working directory, and fails loudly naming the
+flag when no corpus is there.
 """
 import argparse
 import json
 import os
+from typing import NamedTuple
 
 import registry
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUNNER_DIR = os.path.join(ROOT, "runner")
-USAGE_PATH = os.path.join(RUNNER_DIR, "results", "usage.jsonl")
-RESULTS_PATH = os.path.join(RUNNER_DIR, "results", "results.jsonl")
-TRANSCRIPTS_DIR = os.path.join(RUNNER_DIR, "results", "transcripts")
+CORE_MODULE = True
+
+
+class LedgerPaths(NamedTuple):
+    """The three files the ledger reads and writes, resolved for one tree."""
+    results: str
+    transcripts: str
+    usage: str
+
+
+def paths_for_repo(repo_root):
+    """model-gauntlet's own ledger layout, rooted at a path the CALLER supplies.
+
+    This is the one place the layout `<root>/runner/results/{results,usage}.jsonl`
+    plus `transcripts/` is written down, and it is a convenience for callers who
+    happen to share that layout -- NOTHING IN THIS MODULE CALLS IT IMPLICITLY.
+    Every function here takes its paths as arguments; a product with a different
+    layout passes its own three paths and never touches this function. The old
+    module-level constants (ROOT/RUNNER_DIR/USAGE_PATH/RESULTS_PATH/
+    TRANSCRIPTS_DIR) are deleted rather than moved behind a default, so a caller
+    cannot silently inherit a tree it did not name.
+    """
+    results_dir = os.path.join(repo_root, "runner", "results")
+    return LedgerPaths(results=os.path.join(results_dir, "results.jsonl"),
+                       transcripts=os.path.join(results_dir, "transcripts"),
+                       usage=os.path.join(results_dir, "usage.jsonl"))
 
 
 # --------------------------------------------------------------------------- #
@@ -237,7 +269,7 @@ def format_provenance_report(report):
     return "\n".join(lines)
 
 
-def recovered_tokens_in(usage_path=None):
+def recovered_tokens_in(usage_path):
     """run_id -> the ledger's re-parsed `tokens_in`, for rows it could recover.
 
     The other half of `tokens_in_status`. `stamp_provenance` deliberately does
@@ -253,7 +285,7 @@ def recovered_tokens_in(usage_path=None):
     on `tokens_in_status`.
     """
     return {u["run_id"]: u["tokens_in"]
-            for u in _read_jsonl(usage_path or USAGE_PATH)
+            for u in _read_jsonl(usage_path)
             if u.get("kind", "worker") == "worker"
             and u.get("retrofit_status") == "measured"
             and isinstance(u.get("tokens_in"), (int, float))}
@@ -474,12 +506,37 @@ def retrofit(results_path, transcripts_dir, usage_path):
     return {"written": written, "skipped_existing": skipped_existing}
 
 
+def resolve_repo_root(repo_root=None, environ=None, cwd=None):
+    """Where the CLI looks for a tree, and what it will say it looked at.
+
+    Returns (root, source). `source` exists so the failure below can name the
+    thing that produced a wrong answer: "no corpus at <path>" is unactionable
+    when the reader cannot tell whether the path came from a flag they typed, an
+    exported variable they forgot, or the directory they happen to be standing
+    in. Precedence is explicit-beats-ambient: flag, then $MODEL_GAUNTLET_ROOT,
+    then the working directory.
+    """
+    if repo_root:
+        return repo_root, "--repo-root"
+    environ = os.environ if environ is None else environ
+    from_env = environ.get("MODEL_GAUNTLET_ROOT")
+    if from_env:
+        return from_env, "$MODEL_GAUNTLET_ROOT"
+    return (os.getcwd() if cwd is None else cwd), "the working directory"
+
+
 def main():
     ap = argparse.ArgumentParser(description="model-gauntlet usage ledger")
     ap.add_argument("action", choices=["retrofit", "stamp-provenance"])
-    ap.add_argument("--results", default=RESULTS_PATH)
-    ap.add_argument("--transcripts", default=TRANSCRIPTS_DIR)
-    ap.add_argument("--usage", default=USAGE_PATH)
+    # The root is a caller input, never derived from this file's location -- see
+    # paths_for_repo. Running from a repo checkout needs no flag at all, which is
+    # what keeps `python3 runner/usage_ledger.py retrofit` working unchanged.
+    ap.add_argument("--repo-root", default=None,
+                    help="tree holding runner/results/ (default: "
+                         "$MODEL_GAUNTLET_ROOT, else the working directory)")
+    ap.add_argument("--results", default=None)
+    ap.add_argument("--transcripts", default=None)
+    ap.add_argument("--usage", default=None)
     # Dry by default. The backfill edits the corpus in place, and a command that
     # rewrites 268 rows because someone typed the wrong subcommand is not a
     # command anyone should have to be careful with.
@@ -487,14 +544,33 @@ def main():
                     help="write the labels; without it, report only")
     args = ap.parse_args()
 
+    root, source = resolve_repo_root(args.repo_root)
+    default = paths_for_repo(root)
+    results = args.results or default.results
+    transcripts = args.transcripts or default.transcripts
+    usage = args.usage or default.usage
+
+    # Fail loud, not empty. Both actions read results.jsonl, and an absent corpus
+    # used to be impossible (the path was computed from this file's own location
+    # and always pointed at this repo). Now the root is an input, so it can be
+    # wrong -- and when it is wrong the honest
+    # answer is a named failure -- "retrofit wrote 0 rows" over a tree that was
+    # never there reads exactly like a corpus with nothing left to ledger.
+    if not os.path.exists(results):
+        raise SystemExit(
+            f"usage_ledger: no results corpus at {results}\n"
+            f"  repo root came from {source}: {root}\n"
+            f"  pass --repo-root /path/to/model-gauntlet (or --results directly), "
+            f"or run this from a repo checkout.")
+
     if args.action == "stamp-provenance":
         print(format_provenance_report(
-            stamp_provenance(args.results, args.usage, apply=args.apply)))
+            stamp_provenance(results, usage, apply=args.apply)))
         return
 
-    summary = retrofit(args.results, args.transcripts, args.usage)
+    summary = retrofit(results, transcripts, usage)
     print(f"wrote {summary['written']} row(s), "
-          f"skipped {summary['skipped_existing']} already-ledgered -> {args.usage}")
+          f"skipped {summary['skipped_existing']} already-ledgered -> {usage}")
 
 
 if __name__ == "__main__":

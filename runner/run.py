@@ -46,6 +46,13 @@ import usage_ledger
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # ~/code/model-gauntlet
 RUNNER_DIR = os.path.join(ROOT, "runner")
 
+# Ticket 37: usage_ledger became a core module and stopped deriving any path from
+# its own __file__, so the instrument now tells the ledger where its tree is
+# rather than the other way round. This file is the instrument -- deriving ROOT
+# from __file__ here is correct and always was; what was wrong was a core module
+# doing it on the instrument's behalf.
+USAGE_PATH = usage_ledger.paths_for_repo(ROOT).usage
+
 # --- Kimi K3 (Moonshot) ---------------------------------------------------- #
 # K3 has no native agent CLI; we drive it through Codex's OpenAI-compatible
 # provider path. Its API key lives in a gitignored secrets file in the vault and
@@ -1318,7 +1325,7 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     # Prospective only -- does not touch or retrofit any prior row.
     urow = usage_ledger.build_usage_row(row, model_family(run["model"]), usage_detail,
                                         model_id=row["model_id"])
-    usage_ledger.append_usage_row(usage_ledger.USAGE_PATH, urow)
+    usage_ledger.append_usage_row(USAGE_PATH, urow)
 
     return row
 

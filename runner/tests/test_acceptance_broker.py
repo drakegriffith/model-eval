@@ -34,7 +34,6 @@ RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RUNNER_DIR)
 import broker  # noqa: E402
 import run as runner  # noqa: E402
-import usage_ledger  # noqa: E402
 
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 CHEAT_PROBE = os.path.join(FIXTURES, "cheat_probe.py")
@@ -520,7 +519,9 @@ def execute(repo, monkeypatch, calls, k, solve_before=-1, patch_cmd=True):
     log = probe_log(repo, "run.jsonl")
     monkeypatch.setattr(runner, "ROOT", repo["root"])
     monkeypatch.setattr(runner, "RUNNER_DIR", os.path.join(repo["tmp"], "runner"))
-    monkeypatch.setattr(usage_ledger, "USAGE_PATH",
+    # Ticket 37: the constant lives on run.py now, not on the core ledger, which
+    # no longer knows any tree's layout. Same redirect, correct owner.
+    monkeypatch.setattr(runner, "USAGE_PATH",
                         os.path.join(repo["tmp"], "usage.jsonl"))
     if patch_cmd:
         monkeypatch.setattr(runner, "build_cli_cmd",

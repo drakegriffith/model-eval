@@ -38,8 +38,12 @@ import import_gate  # noqa: E402
 # corpus_gates.py joined 2026-07-30 (ticket 31 AC#3) because stats.py imports it
 # and the core may only import the stdlib and the core. Restated here rather than
 # read from the gate, same as every other name on this line.
+#
+# usage_ledger.py joined 2026-07-30 (ticket 37), once its paths stopped being
+# derived from its own location on disk. Typed out here by hand, not copied from
+# the gate: this copy is only worth having if it was written independently.
 EXPECTED_CORE_MODULES = ("corpus_gates.py", "effort_verdict.py", "registry.py",
-                         "stats.py", "token_units.py")
+                         "stats.py", "token_units.py", "usage_ledger.py")
 
 
 def write_core_tree(root, modules, extra=None):
@@ -283,13 +287,24 @@ def test_summary_reports_the_real_tree_as_fully_enforced():
 
 
 def test_report_refuses_to_overclaim():
-    """AC#7 and AC#6: the output states its scope, names the two portability
-    defects a green run does not clear, and says why pricing is absent."""
+    """AC#7 and AC#6: the output states its scope, names the portability defects
+    a green run does not clear, and says why pricing is absent.
+
+    Ticket 37 repaired one of the two F3 sites, so this assertion is rephrased to
+    the new fact rather than relaxed: usage_ledger must now be ABSENT from the
+    known-broken list and the ladder must still be present. Deleting the whole
+    list would also have satisfied the old test's spirit while making the report
+    claim a repair that never happened -- pinning both directions is what stops
+    that. The repair itself is pinned by test_usage_ledger_portability.py.
+    """
     text = import_gate.report(import_gate.run_gate())
     assert "import statements only" in text
     assert "NOT evidence" in text
     assert "ladder_from_results.py:40-41" in text
-    assert "usage_ledger.py:30-34" in text
+    assert "usage_ledger.py:30-34" not in text
+    assert not any("usage_ledger" in site
+                   for site in import_gate.KNOWN_BROKEN_PORTABILITY)
+    assert len(import_gate.KNOWN_BROKEN_PORTABILITY) == 1
     assert "pricing is absent" in text
     assert "tables.py:29-30" in text
 

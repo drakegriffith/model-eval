@@ -36,7 +36,6 @@ RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RUNNER_DIR)
 import run as runner  # noqa: E402
 import sandbox_seal  # noqa: E402
-import usage_ledger  # noqa: E402
 
 PROBE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "write_probe.py")
 
@@ -246,7 +245,9 @@ def emit_row(repo, monkeypatch, no_sandbox, run_id):
     # absolute paths. Left unpatched, this test appends to the REAL corpus --
     # which is precisely the corruption the file is about.
     monkeypatch.setattr(runner, "RUNNER_DIR", os.path.join(repo["root"], "runner"))
-    monkeypatch.setattr(usage_ledger, "USAGE_PATH",
+    # Ticket 37: the constant lives on run.py now, not on the core ledger, which
+    # no longer knows any tree's layout. Same redirect, correct owner.
+    monkeypatch.setattr(runner, "USAGE_PATH",
                         os.path.join(repo["root"], "runner", "usage.jsonl"))
     monkeypatch.setenv("GAUNTLET_NO_BROKER", "1")
     if no_sandbox:

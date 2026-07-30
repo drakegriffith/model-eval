@@ -21,10 +21,12 @@ reported UNENFORCED rather than passed; see `verdict()`.
 
 WHAT THIS GATE DOES NOT PROVE. It reads import statements and nothing else.
 Passing it is not evidence the core is extractable, because the core's
-PORTABILITY is separately known-broken at two sites the 14b consult recorded as
-F3: runner/ladder_from_results.py:40-41 manipulates sys.path, and
-runner/usage_ledger.py:30-34 hardcodes repo paths. Repairing those is separate
-work; this gate names them so that a green run stops implying they are absent.
+PORTABILITY is separately known-broken at a site the 14b consult recorded as F3:
+runner/ladder_from_results.py:40-41 manipulates sys.path. Repairing that is
+separate work; this gate names it so that a green run stops implying it is
+absent. The second F3 site was runner/usage_ledger.py, which hardcoded this
+repo's paths; ticket 37 repaired it and moved the module into the core, so it is
+named here as a departure rather than deleted silently.
 
 HOW SUBJECTS ARE FOUND, and why it is not the literal list. Membership in the
 core is declared on disk by a module-level `CORE_MODULE = True` in each core
@@ -68,8 +70,13 @@ PRODUCT_DIR = os.path.join(REPO_ROOT, "product")
 # corpus_gates.py joined 2026-07-30 (ticket 31 AC#3): stats.py imports it, and a
 # core module may only import the stdlib and other core modules, so leaving it
 # outside would have made stats.py's own import illegal.
+#
+# usage_ledger.py joined 2026-07-30 (ticket 37) so that the product's spend cap
+# can live next to the ledger it caps. Its imports were always legal; what kept
+# it out was the F3 portability defect named below, now repaired -- it takes its
+# paths from the caller instead of computing this repo's layout for itself.
 CORE_MODULES = ("corpus_gates.py", "effort_verdict.py", "registry.py",
-                "stats.py", "token_units.py")
+                "stats.py", "token_units.py", "usage_ledger.py")
 
 # Statuses. UNENFORCED is deliberately not a kind of PASS: it is the answer for a
 # direction whose subject set is empty, which is a result requiring a decision
@@ -81,9 +88,15 @@ UNENFORCED = "UNENFORCED"
 CORE_DECLARATION = "CORE_MODULE"
 
 # The portability defects a green run must not be read as clearing (14b F3).
+#
+# usage_ledger left this list on 2026-07-30 (ticket 37) because the defect was
+# repaired, not because the list was tidied: the module now takes its paths from
+# the caller, proven by runner/tests/test_usage_ledger_portability.py. The
+# ladder entry stays. Dropping both would have made this same green run claim a
+# repair that did not happen, which is the exact failure mode the list exists to
+# prevent -- an entry may only leave with a test that pins its repair.
 KNOWN_BROKEN_PORTABILITY = (
     "runner/ladder_from_results.py:40-41 -- manipulates sys.path",
-    "runner/usage_ledger.py:30-34 -- hardcodes repo paths",
 )
 
 

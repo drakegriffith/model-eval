@@ -32,7 +32,6 @@ RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RUNNER_DIR)
 import judge  # noqa: E402
 import run as runner  # noqa: E402
-import usage_ledger  # noqa: E402
 
 # num_turns is non-zero on purpose. run.py:1116 reclassifies an "ok" run that
 # completed zero turns to `no_completion`, which is itself non-"ok" -- so a
@@ -84,7 +83,10 @@ def stub_cli(solve, rc):
 def execute(repo, monkeypatch, solve=True, rc=0, force_reason=None):
     monkeypatch.setattr(runner, "ROOT", repo["root"])
     monkeypatch.setattr(runner, "RUNNER_DIR", os.path.join(repo["tmp"], "runner"))
-    monkeypatch.setattr(usage_ledger, "USAGE_PATH",
+    # Ticket 37 moved this constant out of usage_ledger (a core module may not
+    # know this repo's layout) and into run.py, which is the caller that owns it.
+    # The redirect targets the instrument now, not the ledger.
+    monkeypatch.setattr(runner, "USAGE_PATH",
                         os.path.join(repo["tmp"], "usage.jsonl"))
     monkeypatch.setattr(runner, "build_cli_cmd",
                         lambda *a, **kw: stub_cli(solve, rc))
