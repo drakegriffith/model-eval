@@ -20,6 +20,18 @@ numbers happened to do:
 Spread is computed on output tokens because that is where reasoning is billed; input
 is the fixed scaffold and barely moves across tiers.
 
+THE TOKEN GATE (added 2026-07-30, ticket 35). That last clause -- "input is the fixed
+scaffold and barely moves" -- was a claim about the exact quantity the pre-fix
+parse_usage bug was getting wrong, and this module read `tokens_in` ungated while
+ticket 31 AC#3 named it as one of the four readers that must not. Every row of the
+ladder corpus was recorded 2026-07-25, two days before the fix instant (f11be7e,
+2026-07-27T15:38:36Z), carries no `tokens_in_status`, and cannot be retrofitted the way
+56 of results.jsonl's rows were, because probe_endpoints.py retains no transcript to
+re-parse. So `scaffold_in_median` is now resolved through corpus_gates and comes back
+WITHHELD on the whole of the current corpus. The verdicts are untouched: classify()
+never sees an input count, and test_effort_verdict_token_gate.py asserts that rather
+than trusting this paragraph.
+
 THE NOISE GATE (added 2026-07-25 after the first pass). Spread alone is not evidence.
 The first n=1 pass classified 12 models REAL on spread and monotonicity; the moment
 replication arrived for four of them, within-tier CV came back at 0.19-0.60 against
@@ -39,7 +51,11 @@ import glob
 import json
 import os
 import statistics
+import sys
 from collections import defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import corpus_gates  # noqa: E402  -- the shared reader dispositions; no private copy
 
 # Membership in B''s core, declared on disk for runner/import_gate.py (read via
 # ast, never imported). Deleting this line fails the gate rather than quietly
