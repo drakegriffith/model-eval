@@ -10,3 +10,9 @@ runner/results/STATS-APPENDIX.md
 
 # Build metadata left by `pip install -e product/`; the manifest is the source.
 *.egg-info/
+
+# The product's third-party dependency (matplotlib) cannot be installed into the
+# host interpreter -- Homebrew's python is PEP 668 externally-managed. This is
+# where it lives instead; product/pyproject.toml declares it, and this directory
+# is the built artefact of that declaration, not a second source of truth.
+.venv/
