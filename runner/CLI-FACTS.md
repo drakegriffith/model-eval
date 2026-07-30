@@ -111,6 +111,16 @@ not what the study needs.
 Settled at n=3–4 per tier over 256 ladder runs. Run `python3 runner/effort_verdict.py`
 to regenerate; machine-readable copy in `runner/results/effort-verdict.json`.
 
+**The input-token column is withheld; the verdicts are not** (ticket 35, 2026-07-30).
+`effort_verdict.py` used to publish a bare `scaffold_in_median` per model; all 16 now read
+`null` / `"quarantined"`, because all 256 ladder rows were recorded 2026-07-25, two days
+before the `parse_usage` fix, carry no `tokens_in_status`, and cannot be retrofitted —
+`probe_endpoints.py` retains no transcript to re-parse. Closing condition: re-run
+`probe_endpoints.py --phase ladder` under the current parser. The verdicts below are
+unaffected, and asserted so rather than assumed: `classify()` reads `tokens_out` only,
+which was verified byte-identical pre- and post-fix. Full disposition in
+`runner/TOKENS-IN-RESIDUAL.md` §9.
+
 A ladder is **credited** only when spread ≥ 1.5×, the ladder trends upward, and
 between-tier CV ≥ 2× within-tier CV. That last clause is the one that matters: the first
 n=1 pass called 12 of 16 models REAL on spread alone, and replication cut that to 10 while

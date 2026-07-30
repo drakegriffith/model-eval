@@ -11,6 +11,12 @@ recovered from `usage.jsonl` by `run_id`, and 64 are quarantined — all 64
 `fable`'s, none with a retained transcript. What follows is what those 64 rows
 still hold up.
 
+Those 268 rows are `results.jsonl`, and they are **not** the whole of this repo's
+input-token exposure. Item 9 (added 2026-07-30, ticket 35) carries a second corpus
+of 256 ladder rows that ticket 31's backfill never reached, 256/256 quarantined.
+Items 1–8 are about the first corpus only; read the count above as scoped, not
+total.
+
 Every figure below was recomputed against the corpus at this commit, in memory,
 by the module that publishes it. Nothing here is quoted from a prior session.
 
@@ -149,7 +155,21 @@ as a pass in all seven. This is the residual `PASS-FIELD-AUDIT.md` hands
 forward, restated here with current line numbers because the ones that file
 recorded (`:126`, `:199`, `:222`) have drifted.
 
-### `effort_verdict.py` is named in AC#3 and is not in the roster
+### `effort_verdict.py` is named in AC#3 and is not in the roster — CLOSED 2026-07-30 (ticket 35)
+
+**Closed by ticket 35.** `effort_verdict.py` now imports `corpus_gates`, resolves
+its magnitude read through `tokens_in_rows`, and is the fourth name in
+`READER_MODULES` with the roster floor raised 3→4 so it cannot silently shrink
+back. The one remaining ungated read is named and pinned rather than merely
+surviving: `usage_block_empty` is a *presence* read, permitted because a pre-fix
+undercount is 85 or 114 or 35670 and never 0, so the quarantine cannot change its
+answer on any row — while routing it through the gate would drop all 256 ladder
+rows as measurement failures and manufacture a corpus of nothing.
+What the fix surfaced is a new residual, filed as item 9 below: the corpus that
+reader reads was never in ticket 31's scope at all. The original finding is kept
+below unedited, because the interesting part is not the ungated read — it is that
+a roster whose whole job was to make this loud reported three passes and zero
+failures over it.
 
 AC#3 names four consumers that must refuse quarantined input tokens:
 `tables.py`, `stats.py`, `calibration_report.py`, `effort_verdict.py`. The first
@@ -251,6 +271,52 @@ and this ticket was the other; with this document AC#6 is met, but the dollar
 column stays an estimate built on placeholder rates until 08 lands. No cost
 claim should leave this repo before then.
 
+## 9. The ladder corpus is a second corpus, and ticket 31's backfill never reached it
+
+Added 2026-07-30 by ticket 35. Items 1–8 are all about `results.jsonl`. There is a
+**second** input-token corpus that this document did not carry as its own item:
+`runner/results/ladder-*.jsonl`, written by `probe_endpoints.py` and read only by
+`effort_verdict.py`. Nothing asserted about `results.jsonl` could have caught it,
+because it is not the same file. Measured 2026-07-30:
+
+| Property | Ladder corpus |
+|---|---|
+| files | 11 (`ladder-{claude,codex,kimi}`, `-rep2..rep4`) |
+| rows | 256 (239 reachable with a non-empty usage block; 7 dropped as measurement failures) |
+| rows carrying `tokens_in_status` | **0** |
+| `ts` range | 2026-07-25T17:59:50Z → 2026-07-25T21:43:43Z |
+| fix instant (`f11be7e`) | 2026-07-27T15:38:36Z |
+| retained transcripts | **0** — `probe_endpoints.py` writes none; `results/transcripts/` holds 241 files, none from a ladder probe |
+
+Every row predates the parser fix by two days, and none can be retrofitted the way
+ticket 31's amendment recovered 56 of `results.jsonl`'s 120 rows —
+`usage_ledger.retrofit()` re-parses retained transcripts, and there are none. Under
+`corpus_gates.tokens_in_usable`'s fail-closed rule the honest disposition is
+**256/256 quarantined, unrecoverable without a fresh probe**, and that is now what
+the tool prints: `ladder rows: inspected=239 kept=0 excluded=239 — unstamped=239`.
+
+What that changed on disk: `runner/results/effort-verdict.json` published a bare
+`scaffold_in_median` for each of its 16 entries (15,469 – 30,098), every one a
+median over pre-fix input tokens and none of them labelled. All 16 are now `null`
+with `scaffold_in_status: "quarantined"` and `scaffold_in_n: 0`. The module
+docstring's claim that "input is the fixed scaffold and barely moves across tiers"
+is retracted in place, since it was a claim about the exact quantity the broken
+parser was getting wrong.
+
+**The verdicts are not in doubt, and that is asserted rather than assumed.**
+`classify()` runs on `tokens_out`, which was verified byte-identical pre- and
+post-fix on all 56 re-parsed rows.
+`test_verdicts_are_invariant_under_tokens_in` classifies the same rows twice with
+every input count corrupted the second time and demands byte-identical output; the
+regenerated JSON was diffed against the pre-fix file across 192 non-scaffold key
+comparisons with zero differences. REAL=10, AMBIGUOUS=6, dropped=7 and 53 implied
+frontier points all hold.
+
+Deliberately **not** done: stamping the ladder rows `quarantined` by `ts`. Ticket 31
+AC#1 forbids inferring provenance from a timestamp at read time, and a backfill that
+writes that inference down is the same inference with a write step. Unstamped
+already fails closed, which is the same answer honestly reached.
+
 ---
 
 ## What would close each item
@@ -261,11 +327,12 @@ claim should leave this repo before then.
 | 2 | all deliverables frozen pre-fix | same |
 | 3 | vendor-counting explanation partly our bug | `fable` transcripts recovered (none exist) or arms re-run — out of scope, costs tokens |
 | 4a | `tables.py` pass counts ungated | deliberate; closes only if the pass rate stops being 1.00 |
-| 4b | `effort_verdict.py` ungated and off the roster | its own ticket — gate it and add it to `READER_MODULES` |
+| 4b | `effort_verdict.py` ungated and off the roster | **CLOSED 2026-07-30, ticket 35** — gated through `corpus_gates`, fourth name in `READER_MODULES`, roster floor 3→4 |
 | 5 | `fable` `$/task` unavailable | `fable` re-run post-fix; nothing cheaper exists |
 | 6 | `negative-control-28.jsonl` unstampable | never — recorded as permanently out of scope |
 | 7 | table-6 winners on an out-only tiebreak | `fable` re-run, or the tiebreak axis is documented in the table itself |
 | 8 | placeholder prices | ticket 08 verifies real list prices |
+| 9 | ladder corpus input tokens 256/256 quarantined | re-run `probe_endpoints.py --phase ladder` under the current parser; costs tokens, and no published verdict depends on it |
 
 Items 3, 5 and 7 all reduce to the same 64 rows with no transcripts. Re-running
 `fable` is the only thing that closes them, it is explicitly out of scope for
