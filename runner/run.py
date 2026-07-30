@@ -1128,21 +1128,43 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     # the scratch trees, which are not retained forever.
     tamper_files = tamper_report(scratch, task_dir, installed=installed)
 
+    # pass_raw is what the grader itself returned, captured before any protocol
+    # rule rewrites `passed`. None means the grader never produced a verdict at
+    # all (it timed out below) -- which is a different fact from "the grader said
+    # False", and collapsing the two is what makes a gate unauditable.
+    pass_raw = None
     try:
         passed = run_verify(scratch, task_dir)
+        pass_raw = passed
     except subprocess.TimeoutExpired:
         passed = False
         exit_reason = exit_reason + "+verify_timeout"
 
-    # Pre-registration section 7: "Runs terminated by the cap are scored as
-    # failures." The verifier outcome at the moment of termination is still
-    # recorded, under its own name -- scoring the run a failure is a protocol
-    # rule, and quietly discarding what the grader actually said would make the
-    # rule unauditable. Nothing downstream may read pass_at_cap as pi.
-    pass_at_cap = None
-    if exit_reason == "cap_exhausted":
-        pass_at_cap = passed
+    # ticket 34. Pre-registration section 7 -- "Runs terminated by the cap are
+    # scored as failures" -- generalized from the cap to every run that did not
+    # finish. exit_reason == "ok" is this instrument's completeness gate
+    # (existing_ids() above; ladder_from_results.py excludes non-"ok" rows and
+    # prints the excluded count), so `pass` -- the field that reads most like a
+    # verdict -- may not claim success for an incomplete run. Before this, only
+    # cap_exhausted and verify_timeout were handled and cli_error got neither,
+    # which is how sweep2b--fable--medium--bare--t3-a--r1 landed cli_error with
+    # pass=true.
+    #
+    # The test is `!= "ok"`, deliberately NOT membership in a list of known-bad
+    # reasons: a reason added later must inherit this gate because it is not
+    # "ok", never because someone remembered to enlist it. An enumerated
+    # denylist would reintroduce the same silent default one reason further on.
+    # Scoring the run a failure is a protocol rule; discarding what the grader
+    # said would make the rule unauditable, so the verdict survives as
+    # pass_raw. Nothing downstream may read pass_raw or pass_at_cap as pi.
+    if exit_reason != "ok":
         passed = False
+
+    # Kept under its original name because every row written before ticket 34
+    # carries it and pre-registration section 7 names it. It is now exactly
+    # pass_raw narrowed to the cap case; the general gate above is what forces
+    # `pass` False, here as everywhere else.
+    pass_at_cap = pass_raw if exit_reason == "cap_exhausted" else None
 
     loc = loc_changed(scratch)
     # `model` stays exactly as the config wrote it so existing rows, run_ids and
@@ -1164,6 +1186,9 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "brokered": brokered, "k_cap": k_cap,
         "acceptance_requests": acceptance_requests,
         "cap_exhausted": exit_reason == "cap_exhausted",
+        # ticket 34: the grader's own verdict, on every row, so `pass` being a
+        # gated field costs no information. Not pi -- see the gate above.
+        "pass_raw": pass_raw,
         "pass_at_cap": pass_at_cap,
         "tampered": bool(tamper_files), "tamper_files": tamper_files,
     }

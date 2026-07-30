@@ -204,7 +204,21 @@ MOCK_SCORES = {
 
 
 def passing_run_ids(results_path):
-    """Read results.jsonl and return run_ids of runs whose machine gate passed."""
+    """Read results.jsonl and return run_ids of runs whose machine gate passed.
+
+    ticket 34. This is the one `pass` reader that SELECTS WORK rather than
+    summarizing data: whatever it returns gets a paid judge call, and its score
+    enters every downstream quality mean. So it gates on completeness here
+    rather than inheriting it from the writer -- a run that never finished is
+    not a subject, whatever the grader managed to say about its half-built tree.
+
+    Concretely: this ungated read is how sweep2b--fable--medium--bare--t3-a--r1
+    (cli_error, pass=true) came to be judged, putting an 8.75 into the corpus
+    quality means. run.py now scores incomplete runs False at write time, so
+    this filter is redundant for every row written after ticket 34 and
+    load-bearing for every row written before it -- which is the whole current
+    corpus, since AC#5 rules out a backfill. See runner/PASS-FIELD-AUDIT.md.
+    """
     ids = []
     if not os.path.exists(results_path):
         return ids
@@ -217,7 +231,7 @@ def passing_run_ids(results_path):
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if rec.get("pass"):
+            if rec.get("exit_reason") == "ok" and rec.get("pass"):
                 ids.append(rec["run_id"])
     return ids
 
