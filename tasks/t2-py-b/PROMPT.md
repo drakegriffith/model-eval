@@ -74,9 +74,17 @@ lower-priority-but-ready job DOES get returned instead (backoff actually
 withholds it), (c) `dequeue(now=<time at/after ready_at>)` does return it,
 (d) a job that fails `max_retries + 1` times ends up with
 `status == "dead"` and appears in `dead_letters()`, not in the pending
-pool, (e) backoff delay doubles each attempt (assert the `ready_at` gap
-between attempt 1 and attempt 2 is exactly 2x the gap for attempt 1, given
-fixed `backoff_base_s`).
+pool, (e) the backoff delay grows **exponentially**, not merely
+monotonically — pin the `ready_at` gaps for at least the first **three**
+consecutive attempts against the closed form
+`backoff_base_s * (2 ** (attempts - 1))`, using a `backoff_base_s` other
+than `1.0`. Two gaps are not sufficient and a doubling-ratio assertion
+between attempts 1 and 2 is not sufficient: linear backoff
+(`backoff_base_s * attempts`) produces the identical first two gaps and
+diverges only from the third (4x vs 3x), so a test that stops at the second
+gap accepts linear backoff as if it were exponential. A `backoff_base_s` of
+`1.0` likewise lets an implementation that ignores the base coincide with
+the right answer.
 
 ## 6. Out of scope
 

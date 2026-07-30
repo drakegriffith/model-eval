@@ -126,18 +126,26 @@ def test_mark_failed_exceeds_max_retries_goes_dead():
     assert q.pending_count() == 0
 
 
-def test_backoff_delay_doubles_each_attempt():
-    q = JobQueue(max_retries=5, backoff_base_s=1.0)
+def test_backoff_delay_is_exponential_not_merely_increasing():
+    # Pins the first FOUR gaps against the closed form `backoff_base_s *
+    # 2 ** (attempts - 1)`. Two gaps are not enough to identify the formula:
+    # linear backoff (`backoff_base_s * attempts`) produces 1x and 2x for the
+    # first two gaps exactly as the exponential form does, and the two only
+    # diverge from the third gap onward (4x vs 3x). `backoff_base_s` is
+    # deliberately not 1.0 so that an implementation ignoring the base is also
+    # rejected rather than coinciding with 1, 2, 4, 8.
+    q = JobQueue(max_retries=5, backoff_base_s=0.5)
     q.enqueue(make_job("j1", priority=1))
 
-    q.dequeue(now=0.0)
-    q.mark_failed("j1", now=0.0)
-    first_ready_at = q.get("j1").ready_at
-    first_gap = first_ready_at - 0.0
+    now = 0.0
+    gaps = []
+    for _ in range(4):
+        popped = q.dequeue(now=now)
+        assert popped is not None
+        q.mark_failed("j1", now=now)
+        ready_at = q.get("j1").ready_at
+        assert ready_at is not None
+        gaps.append(ready_at - now)
+        now = ready_at
 
-    q.dequeue(now=first_ready_at)
-    q.mark_failed("j1", now=first_ready_at)
-    second_ready_at = q.get("j1").ready_at
-    second_gap = second_ready_at - first_ready_at
-
-    assert second_gap == first_gap * 2
+    assert gaps == [0.5, 1.0, 2.0, 4.0]
