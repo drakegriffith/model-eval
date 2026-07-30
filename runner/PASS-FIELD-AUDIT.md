@@ -46,7 +46,7 @@ Effect of that one score, computed over the corpus at `4221110`:
 
 | figure | with the row | without it | delta |
 |---|---|---|---|
-| its own cell (fable/medium/bare/t3-a, n=2) | 9.00 | 9.25 | 0.25 |
+| its own cell (fable/medium/bare/t3-a, n=2) | 9.00 | **9.25 — this is the published value** | 0.25 |
 | fable @ medium, pooled (n=40 judged) | 8.422 | 8.413 | 0.009 |
 | corpus pooled quality (n=153 judged) | 8.959 | 8.960 | 0.001 |
 | pass rate, any grouping | 1.00 | 1.00 | 0 |
@@ -56,10 +56,18 @@ moves a published number by a quarter point. A constant field cannot bias a
 comparison — but it was never only a field, it was also a selector, and that is
 the half the "latent" reading missed.
 
-**Open, for Drake, deliberately not decided here.** Whether that 9.00 cell gets
-restated as 9.25 changes a published number, and this repo's standing rule is
-that a changed published number is ratified, not quietly regenerated. Nothing in
-this ticket regenerates a table.
+**Decided. Ratified by Drake 2026-07-30.** The fable/medium/bare/t3-a cell reads
+**9.25**, computed over the one remaining rep. 9.00 is retired: it is the mean of
+a judged score the run never earned and a score that stands, and this document is
+the record of why the number moved rather than a table quietly regenerating
+underneath a reader. The standing rule held — the restatement was ratified before
+it was made, and the measurement above is what it was ratified against.
+
+Two limits on that, both deliberate. n drops from 2 to 1, so the cell is a single
+observation and should not be read as a two-rep estimate. And the row itself is
+still not backfilled and still not re-run (AC#5): it stays in `results.jsonl`
+exactly as written, excluded at read time by `corpus_gates.summarizable`, not
+erased.
 
 ## Every `pass` read site in `runner/`
 
@@ -99,3 +107,17 @@ The honest scope of "recorded, not fixed": these four sites are correct for
 every row written from ticket 34 onward, and exposed to exactly one row written
 before it, whose measured effect is tabulated above. If the corpus is ever
 regenerated or extended with a real pass/fail spread, revisit item 3 first.
+
+## Superseded in part by ticket 31 (2026-07-30)
+
+Item 3 above is now half-executed, and the half that is not is a named residual
+rather than an open question. Sites 4, 5 and 6 all call `corpus_gates` today:
+`stats.py` gates the whole corpus once in `build_report`, and both quality means
+in `tables.py` gate on `pass` **and** `summarizable`, so no score from a
+non-`ok` run enters a published mean.
+
+The pass **counts** in `tables.py` (`:126`, `:199`, `:222`) stay ungated on
+purpose. The pass rate is still 1.00 and the `cli_error` row is still counted as
+a pass there. That is a deliberate residual carried forward, written down in
+`TOKENS-IN-RESIDUAL.md` with the rest of them — not an oversight, and not
+something a reader has to infer from the absence of a gate.
