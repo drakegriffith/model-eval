@@ -32,6 +32,12 @@ CORE_MODULE = True
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER_DIR = os.path.join(ROOT, "runner")
+sys.path.insert(0, RUNNER_DIR)
+
+# Permitted only because corpus_gates is itself core (it declares CORE_MODULE and
+# is named in both copies of import_gate's literal list). A core module may import
+# the stdlib and the core, nothing else.
+import corpus_gates  # noqa: E402
 
 # 95% two-sided normal quantile (z_{0.975}), full precision.
 Z95 = 1.959963984540054
@@ -463,6 +469,15 @@ def section_power(results):
 
 
 def build_report(results, judgments):
+    # THE GATE (ticket 34, ticket 31 AC#4). Applied ONCE, here, so no section can
+    # be added later that quietly skips it: a run that did not exit cleanly is
+    # excluded from every test below, because its `pass` was never earned by
+    # enumeration and its token count describes a truncated session. The
+    # predicate is corpus_gates', not a private copy.
+    n_in = len(results)
+    kept, excluded = corpus_gates.summarizable_rows(results)
+    results = kept
+
     n_pass = sum(1 for r in results if is_pass(r))
     parts = [
         "# Statistical appendix — Fable vs Sol gauntlet",
@@ -473,6 +488,14 @@ def build_report(results, judgments):
         "",
         f"Source: {len(results)} run row(s), {n_pass} passing, "
         f"{len(judgments)} judged.",
+        "",
+        "> **exclusions** — "
+        + corpus_gates.format_exclusions("results rows", n_in, kept, excluded)
+        + ". Excluded rows are gone from every test on this page, counts "
+          "included. §6 is the one section computed over the FULL judgment set: "
+          "it measures whether the two judges agree with each other, not how a "
+          "model performed, and a truncated run's judges either agreed or did "
+          "not. Token axes here are `tokens_out` only (ticket 31 AC#3).",
         "",
         section_wilson(results),
         section_head_to_head(results),

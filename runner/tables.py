@@ -11,11 +11,22 @@ Tables (per spec section 5):
   5. Variance min/med/max per cell ("same prompt, 3 outcomes")
   6. When-to-use-which decision matrix + $/task
 
-Stdlib only. Emits GitHub-flavored markdown to stdout (or --out FILE).
+Emits GitHub-flavored markdown to stdout (or --out FILE).
 Degrades gracefully: any table with no matching rows prints "(no data)".
 
 $/task uses documented list-price PLACEHOLDERS (runs are on subscription, so the
 dollar column is a list-price-equivalent estimate, not billed spend).
+
+TOKEN AXIS (ticket 31 AC#3). Every `tokens_in + tokens_out` total is gone; the
+token columns report `tokens_out` ONLY and say so in their headers. 64 of 268
+rows carry a pre-fix `tokens_in` undercounted 30x-400x, and a total that silently
+mixes 204 good inputs with 64 bad ones is worse than no input axis at all.
+`$/task` is the one cell that genuinely needs both axes, so it cannot fall back
+to tokens_out; it resolves each row's input through `corpus_gates` +
+`usage_ledger` and drops -- loudly, with a count -- what it cannot resolve.
+
+Both dispositions come from `corpus_gates`; this module holds no private copy of
+either rule.
 """
 import argparse
 import json
@@ -25,6 +36,10 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER_DIR = os.path.join(ROOT, "runner")
+sys.path.insert(0, RUNNER_DIR)
+
+import corpus_gates  # noqa: E402
+import usage_ledger  # noqa: E402
 
 # List-price ESTIMATES, USD per 1M tokens (input, output). Placeholders — edit to
 # taste; the dollar column is labelled as an estimate everywhere it appears.
@@ -82,6 +97,36 @@ def dollars(model, tin, tout):
     return (tin / 1e6) * p["in"] + (tout / 1e6) * p["out"]
 
 
+def out_tokens(r):
+    """The only token axis these tables may sum across the whole corpus.
+
+    Named as a function rather than inlined so that `tokens_in` cannot creep back
+    into a total by someone adding one term to an expression.
+    """
+    return r.get("tokens_out", 0)
+
+
+def resolve_tokens_in(row, ledger):
+    """The row's TRUE cache-inclusive input tokens, or None.
+
+    Three states, three answers -- the dispositions come from `corpus_gates`, the
+    join from `usage_ledger`, and this function only routes between them:
+      measured             -> the number on the row is the truth
+      recovered_in_ledger  -> the row's own number is the wrong pre-fix one; the
+                              truth is in usage.jsonl under this run_id
+      anything else        -> None. Quarantined, unstamped, or recoverable-but-
+                              absent-from-the-ledger all mean the same thing to a
+                              consumer: there is no input number here. Fail closed;
+                              a missing join is not a zero.
+    """
+    if corpus_gates.tokens_in_usable(row):
+        tin = row.get("tokens_in")
+        return tin if isinstance(tin, (int, float)) else None
+    if corpus_gates.tokens_in_recoverable(row):
+        return ledger.get(row.get("run_id"))
+    return None
+
+
 def pct(k, n):
     return f"{100.0 * k / n:.0f}%" if n else "-"
 
@@ -124,7 +169,12 @@ def table1_effort_ladder(rows, qual):
             g.items(), key=lambda kv: (kv[0][0], EFFORT_ORDER.get(kv[0][1], 9))):
         n = len(rs)
         passes = sum(1 for r in rs if r.get("pass"))
-        q = mean([qual.get(r["run_id"]) for r in rs if r.get("pass")])
+        # Quality gates on BOTH `pass` and a clean exit (ticket 34): a truncated
+        # run's judged score describes a truncated run. The pass COUNT one line
+        # up stays ungated -- a named residual in TOKENS-IN-RESIDUAL.md, not an
+        # oversight.
+        q = mean([qual.get(r["run_id"]) for r in rs
+                  if r.get("pass") and corpus_gates.summarizable(r)])
         data.append([model, effort, n, passes, pct(passes, n),
                      fnum(q, 2) if q is not None else "-"])
     return md_table(
@@ -138,12 +188,13 @@ def table2_efficiency_frontier(rows):
             g.items(), key=lambda kv: (kv[0][0], EFFORT_ORDER.get(kv[0][1], 9))):
         n = len(rs)
         passes = sum(1 for r in rs if r.get("pass"))
-        tot = [r.get("tokens_in", 0) + r.get("tokens_out", 0) for r in rs]
+        tot = [out_tokens(r) for r in rs]
         tpp = (sum(tot) / passes) if passes else None
         data.append([model, effort, pct(passes, n), fnum(mean(tot)),
                      fnum(tpp) if tpp is not None else "inf (0 pass)"])
     return md_table(
-        ["model", "effort", "pass_rate", "mean_tokens/run", "tokens_per_pass"], data)
+        ["model", "effort", "pass_rate", "mean_tokens_out/run",
+         "tokens_out_per_pass"], data)
 
 
 def table3_harness_delta(rows):
@@ -155,7 +206,7 @@ def table3_harness_delta(rows):
             rs = [r for r in rows if r["model"] == model and bool(r.get("harness")) == hv]
             n = len(rs)
             passes = sum(1 for r in rs if r.get("pass"))
-            toks = mean([r.get("tokens_in", 0) + r.get("tokens_out", 0) for r in rs])
+            toks = mean([out_tokens(r) for r in rs])
             cell[tag] = (n, passes, (100.0 * passes / n if n else None), toks)
         b, h = cell["bare"], cell["harness"]
         if b[0] == 0 and h[0] == 0:
@@ -170,8 +221,8 @@ def table3_harness_delta(rows):
             (f"{dtok:+,.0f}" if dtok is not None else "-"),
         ])
     return md_table(
-        ["model", "bare pass%", "bare tok", "harness pass%", "harness tok",
-         "delta pass", "delta tok"], data)
+        ["model", "bare pass%", "bare tok_out", "harness pass%", "harness tok_out",
+         "delta pass", "delta tok_out"], data)
 
 
 def table4_hybrid_vs_solo(rows):
@@ -183,10 +234,10 @@ def table4_hybrid_vs_solo(rows):
     for model, rs in sorted(g.items()):
         n = len(rs)
         passes = sum(1 for r in rs if r.get("pass"))
-        toks = mean([r.get("tokens_in", 0) + r.get("tokens_out", 0) for r in rs])
+        toks = mean([out_tokens(r) for r in rs])
         kind = "hybrid" if model == "hybrid" else "solo"
         data.append([model, kind, n, pct(passes, n), fnum(toks)])
-    return md_table(["model", "kind", "n", "pass_rate", "mean_tokens"], data)
+    return md_table(["model", "kind", "n", "pass_rate", "mean_tokens_out"], data)
 
 
 def table5_variance(rows):
@@ -198,7 +249,7 @@ def table5_variance(rows):
             continue  # variance needs repeated cells
         passes = sum(1 for r in rs if r.get("pass"))
         locs = [r.get("loc_changed", 0) for r in rs]
-        toks = [r.get("tokens_in", 0) + r.get("tokens_out", 0) for r in rs]
+        toks = [out_tokens(r) for r in rs]
         data.append([
             f"{model}/{effort}/{htag}", task, len(rs), f"{passes}/{len(rs)}",
             f"{min(locs)}/{round(statistics.median(locs))}/{max(locs)}",
@@ -206,12 +257,14 @@ def table5_variance(rows):
         ])
     return md_table(
         ["cell (model/effort/harness)", "task", "reps", "passed",
-         "loc min/med/max", "tokens min/med/max"], data)
+         "loc min/med/max", "tokens_out min/med/max"], data)
 
 
-def table6_decision_matrix(rows, qual):
+def table6_decision_matrix(rows, qual, ledger=None):
+    ledger = {} if ledger is None else ledger
     models = sorted({r["model"] for r in rows})
     data = []
+    dropped_note = []
     for model in models:
         # best config = highest pass rate, tiebreak lowest mean tokens
         g = group([r for r in rows if r["model"] == model],
@@ -221,13 +274,40 @@ def table6_decision_matrix(rows, qual):
             n = len(rs)
             passes = sum(1 for r in rs if r.get("pass"))
             rate = passes / n if n else 0
-            toks = mean([r.get("tokens_in", 0) + r.get("tokens_out", 0) for r in rs]) or 0
+            toks = mean([out_tokens(r) for r in rs]) or 0
             score = (rate, -toks)
             if best is None or score > best:
                 best, best_key = score, (key, rate, toks, rs)
         (effort, htag), rate, toks, rs = best_key
-        dol = mean([dollars(model, r.get("tokens_in", 0), r.get("tokens_out", 0)) for r in rs])
-        q = mean([qual.get(r["run_id"]) for r in rs if r.get("pass")])
+
+        # $/task is the ONE cell that needs both axes, so it may not quietly fall
+        # back to the tokens_out-only axis the other five tables use -- a dollar
+        # figure priced off output alone is not a cheaper task, it is a wrong
+        # number wearing a dollar sign. Rows whose input cannot be resolved are
+        # dropped WITH their count; a cell that lost every row says unavailable
+        # and why, because an empty average and a real one must not render alike.
+        priced = []
+        for r in rs:
+            tin = resolve_tokens_in(r, ledger)
+            if tin is None:
+                continue
+            priced.append(dollars(model, tin, out_tokens(r)))
+        n_cell, n_priced = len(rs), len(priced)
+        if n_priced == 0:
+            dol_cell = "unavailable"
+            dropped_note.append(
+                f"`{model}`: 0 of {n_cell} rows in the winning cell have a true "
+                f"`tokens_in` (all quarantined pre-fix)")
+        elif n_priced < n_cell:
+            dol_cell = f"${mean(priced):.4f} (n={n_priced}/{n_cell})"
+            dropped_note.append(
+                f"`{model}`: priced over {n_priced} of {n_cell} rows; "
+                f"{n_cell - n_priced} dropped for want of a true `tokens_in`")
+        else:
+            dol_cell = f"${mean(priced):.4f}"
+
+        q = mean([qual.get(r["run_id"]) for r in rs
+                  if r.get("pass") and corpus_gates.summarizable(r)])
         rate_pct = 100.0 * rate
         if rate_pct >= 90:
             use = "reliable — default choice for this class"
@@ -238,23 +318,46 @@ def table6_decision_matrix(rows, qual):
         data.append([
             model, f"{effort}/{htag}", f"{rate_pct:.0f}%",
             fnum(q, 2) if q is not None else "-",
-            f"${dol:.4f}" if dol is not None else "-", use,
+            dol_cell, use,
         ])
     note = ("\n\n> `$/task` is a **list-price estimate** (runs execute on "
-            "subscription, so no per-run billing); token counts are 0 under `--mock`.\n")
+            "subscription, so no per-run billing); token counts are 0 under `--mock`. "
+            "It is priced from each row's TRUE input tokens — measured on the row, "
+            "or joined from `usage.jsonl` by `run_id` for `recovered_in_ledger` "
+            "rows — never from the pre-fix `tokens_in`.\n")
+    if dropped_note:
+        note += "\n> **rows dropped from `$/task`**: " + "; ".join(dropped_note) + ".\n"
     return md_table(
         ["model", "best config", "pass_rate", "avg_quality(/10)",
          "$/task (est)", "when to use"], data) + note
 
 
-def build_report(results, judgments):
+def build_report(results, judgments, ledger=None):
     qual = quality_by_run(judgments)
     n_pass = sum(1 for r in results if r.get("pass"))
+
+    # AC#4: count the subjects out loud, in the header, before any table. A
+    # filtered corpus and an unfiltered one must not render identically, and a
+    # corpus of zero rows must not render as a clean one.
+    kept_s, excl_s = corpus_gates.summarizable_rows(results)
+    kept_t, excl_t = corpus_gates.tokens_in_rows(results)
+    n_recoverable = sum(1 for r in results if corpus_gates.tokens_in_recoverable(r))
+
     parts = [
         "# model-gauntlet results",
         "",
         f"Source: {len(results)} run row(s), {n_pass} passing, "
         f"{len(judgments)} judged.",
+        "",
+        "> **dispositions** (ticket 31 AC#4 / ticket 34) — "
+        + corpus_gates.format_exclusions(
+            "quality means", len(results), kept_s, excl_s)
+        + ". "
+        + corpus_gates.format_exclusions(
+            "input tokens on the row", len(results), kept_t, excl_t)
+        + f"; {n_recoverable} of the excluded are recoverable from `usage.jsonl` "
+          "by `run_id` and are priced into `$/task` through that join. Token "
+          "columns elsewhere report `tokens_out` only.",
         "",
         "## 1. Pass rate x effort ladder", "",
         table1_effort_ladder(results, qual),
@@ -267,7 +370,7 @@ def build_report(results, judgments):
         "## 5. Variance per cell (same prompt, N outcomes)", "",
         table5_variance(results),
         "## 6. When-to-use-which decision matrix + $/task", "",
-        table6_decision_matrix(results, qual),
+        table6_decision_matrix(results, qual, ledger),
     ]
     return "\n".join(parts)
 
@@ -276,14 +379,17 @@ def main():
     ap = argparse.ArgumentParser(description="model-gauntlet table generator")
     ap.add_argument("--results", default=os.path.join(RUNNER_DIR, "results", "results.jsonl"))
     ap.add_argument("--judgments", default=os.path.join(RUNNER_DIR, "results", "judgments.jsonl"))
+    ap.add_argument("--usage", default=os.path.join(RUNNER_DIR, "results", "usage.jsonl"),
+                    help="ledger joined by run_id for recovered input tokens")
     ap.add_argument("--out", default=None, help="write markdown here (default: stdout)")
     args = ap.parse_args()
 
     results = load_jsonl(args.results)
     judgments = load_jsonl(args.judgments)
+    ledger = usage_ledger.recovered_tokens_in(args.usage)
     if not results:
         print(f"no results found at {args.results}", file=sys.stderr)
-    report = build_report(results, judgments)
+    report = build_report(results, judgments, ledger)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(report + "\n")

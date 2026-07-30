@@ -20,9 +20,13 @@ Usage: calibration_report.py <results.jsonl> [--sweep NAME] [--expect N]
 """
 import argparse
 import json
+import os
 import statistics
 import sys
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import corpus_gates  # noqa: E402
 
 ALPHA = 0.05  # two-sided 95%, matching 05's 0.735 on 12/12 and 0.903 on 36/36
 
@@ -91,6 +95,12 @@ def main():
         "brokered: true on every row": [r for r in rows if r.get("brokered") is not True],
         "k_cap == 10 on every row": [r for r in rows if r.get("k_cap") != 10],
         "tamper_files empty on every row": [r for r in rows if r.get("tamper_files")],
+        # Was a bare distribution print below, which reports a dirty exit just as
+        # calmly as a clean one and rules nothing out. As a check it can FAIL the
+        # grade. No-op on the stamped calibration corpora (all `ok`) — which is a
+        # verified fact, not an assumption; see the tally line under `## cost`.
+        "exit_reason summarizable on every row":
+            [r for r in rows if not corpus_gates.summarizable(r)],
     }
     failed = False
     for name, bad in checks.items():
@@ -171,17 +181,33 @@ def main():
             print(f"  {fam_name}: n={len(fr)} max={max(fr)} mean={statistics.mean(fr):.2f}")
 
     # ---------------- cost
+    #
+    # The combined `tokens_in + tokens_out` total is STRUCK (ticket 31 AC#3,
+    # ratified 2026-07-30). It summed two axes of unequal provenance into one
+    # number: `tokens_out` was verified byte-identical pre- and post-fix, while
+    # `tokens_in` is the true cache-inclusive total on some rows and a 30x-400x
+    # undercount on others. The two axes are now reported separately, and the
+    # input axis is gated to rows whose number is actually measured.
     print("\n## cost — measured actuals")
-    tin = sum(r.get("tokens_in") or 0 for r in rows)
+    tin_kept, tin_excluded = corpus_gates.tokens_in_rows(rows)
+    tin = sum(r.get("tokens_in") or 0 for r in tin_kept)
     tout = sum(r.get("tokens_out") or 0 for r in rows)
     walls = [r.get("wall_s") or 0 for r in rows]
     print(f"  runs: {len(rows)}")
-    print(f"  worker tokens: {tin + tout:,} (in {tin:,} / out {tout:,})")
-    print(f"  per run mean: {(tin + tout) / len(rows):,.0f}" if rows else "")
+    print("  " + corpus_gates.format_exclusions(
+        "tokens_in", len(rows), tin_kept, tin_excluded))
+    print(f"  worker tokens out: {tout:,} over {len(rows)} runs"
+          + (f" (mean {tout / len(rows):,.0f})" if rows else ""))
+    print(f"  worker tokens in:  {tin:,} over {len(tin_kept)} gated runs"
+          + (f" (mean {tin / len(tin_kept):,.0f})" if tin_kept else ""))
     for m in models:
         mr = [r for r in rows if r["model_id"] == m]
-        s = sum((r.get("tokens_in") or 0) + (r.get("tokens_out") or 0) for r in mr)
-        print(f"    {m}: n={len(mr)} tokens={s:,} mean={s / len(mr):,.0f}")
+        mk, _ = corpus_gates.tokens_in_rows(mr)
+        so = sum(r.get("tokens_out") or 0 for r in mr)
+        si = sum(r.get("tokens_in") or 0 for r in mk)
+        print(f"    {m}: n={len(mr)} out={so:,} mean_out={so / len(mr):,.0f}"
+              f"  in={si:,} over {len(mk)}/{len(mr)} gated"
+              + (f" mean_in={si / len(mk):,.0f}" if mk else ""))
     if walls:
         print(f"  wall clock: total {sum(walls) / 60:.0f} min; median {statistics.median(walls):.0f} s; max {max(walls):.0f} s")
 
