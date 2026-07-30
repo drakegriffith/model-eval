@@ -47,9 +47,13 @@ import import_gate  # noqa: E402
 # deliberately: the module's own declaration, the gate's literal, and this line.
 # A cap that could quietly leave the core is a cap the product could quietly
 # stop passing through.
-EXPECTED_CORE_MODULES = ("corpus_gates.py", "effort_verdict.py", "registry.py",
-                         "spend_cap.py", "stats.py", "token_units.py",
-                         "usage_ledger.py")
+# provenance.py joined 2026-07-30 (ticket 44). Typed here by hand, not copied
+# from the gate: a value's provenance is what stops a live latency and a corpus
+# pass rate becoming one averaged number, and a module that could drift out of
+# the core is a guard the product could stop importing without a red run.
+EXPECTED_CORE_MODULES = ("corpus_gates.py", "effort_verdict.py",
+                         "provenance.py", "registry.py", "spend_cap.py",
+                         "stats.py", "token_units.py", "usage_ledger.py")
 
 
 def write_core_tree(root, modules, extra=None):

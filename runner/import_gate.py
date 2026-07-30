@@ -83,8 +83,14 @@ PRODUCT_DIR = os.path.join(REPO_ROOT, "product")
 # in all three places. It is core because a cap enforced in the surface that asks
 # for the run holds for exactly one caller; below the ledger, every caller passes
 # through it.
-CORE_MODULES = ("corpus_gates.py", "effort_verdict.py", "registry.py",
-                "spend_cap.py", "stats.py", "token_units.py", "usage_ledger.py")
+# provenance.py joined 2026-07-30 (ticket 44) -- the never-blend guard. It is
+# core for the reason the cap is: the render surface has two callers already (the
+# chart and the printed sentence), so a guard living beside them holds for
+# whichever of the two remembered to ask. Below them, the arithmetic itself
+# refuses.
+CORE_MODULES = ("corpus_gates.py", "effort_verdict.py", "provenance.py",
+                "registry.py", "spend_cap.py", "stats.py", "token_units.py",
+                "usage_ledger.py")
 
 # Statuses. UNENFORCED is deliberately not a kind of PASS: it is the answer for a
 # direction whose subject set is empty, which is a result requiring a decision
