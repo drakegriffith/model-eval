@@ -1,0 +1,48 @@
+# The product's own manifest -- ticket 38, slice S7 of the 14b playground spec,
+# under repo shape B' (14b-repo-boundary-doctrine-consult §8): core package plus
+# an isolated product directory with its own manifest, same repo, one import
+# gate. The gate is runner/import_gate.py (ticket 33, closed); this directory is
+# what gives its half B something to inspect.
+#
+# WHAT THIS MANIFEST IS FOR. It makes product/ a unit with a name, an entry point
+# and a declared dependency set, so that what the product may reach is written
+# down rather than inherited from whatever happens to sit next to it on the
+# import path.
+#
+# HOW THE CORE IS SUPPLIED, and why it is not under [project.dependencies].
+# The core has no distribution yet: there is no repo-root manifest, and no index
+# or git remote for a requirement to resolve against (consult §7 -- zero remotes,
+# no packaging). So the core arrives on the import path from the environment:
+#
+#     PYTHONPATH=<repo>/product:<repo>/runner python3 -m gauntlet_playground
+#
+# Product code must never put it there itself. sys.path manipulation inside
+# product/ is the F3 defect pattern runner/ladder_from_results.py:40-41 already
+# carries once; import_gate.py half B and runner/tests/test_product_boundary.py
+# are what keep it at once. The point of holding the line is that packaging the
+# core later -- a repo-root manifest exposing exactly the five core modules and
+# nothing else -- changes this invocation and not one line of product code.
+#
+# WHAT AN INSTALL OF THIS MANIFEST DOES NOT GIVE YOU. `pip install -e product/`
+# installs the product and its console script; it does NOT install the core, so
+# the entry point still needs the core on the path and says so when it is
+# missing. Verified once by install rather than assumed.
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gauntlet-playground"
+version = "0.1.0"
+description = "The model-gauntlet product surface: what a visitor runs, held behind the core boundary."
+# Floor, not a tested matrix: the product's stdlib use is unremarkable and the
+# only interpreter it has been run on is the host's 3.14.
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+gauntlet-playground = "gauntlet_playground.__main__:main"
+
+[tool.setuptools]
+packages = ["gauntlet_playground"]

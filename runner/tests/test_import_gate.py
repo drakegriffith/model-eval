@@ -173,17 +173,22 @@ def test_declaration_must_be_module_level_and_literally_true(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Half B: product -> core only. Zero subjects today.
+# Half B: product -> core only. Two subjects since ticket 38.
 # --------------------------------------------------------------------------- #
 
-def test_product_direction_is_unenforced_not_passed_on_the_real_tree():
-    """AC#3. product/ does not exist, so this direction has nothing to inspect,
-    and the gate must say so instead of reporting a pass over an empty set."""
+def test_product_direction_is_enforced_over_counted_subjects_on_the_real_tree():
+    """AC#3 of ticket 33 asserted the opposite of this: product/ did not exist,
+    so the direction had nothing to inspect and had to report UNENFORCED rather
+    than a pass over an empty set. Ticket 38 created product/, and this
+    assertion is rephrased to the new fact rather than relaxed -- the property
+    pinned is the same one, that the status follows the subject count. Deleting
+    product/ returns the status to UNENFORCED silently; this test is what makes
+    that a red run instead."""
     d = import_gate.check_product_depends_on_core_only()
-    assert not os.path.isdir(import_gate.PRODUCT_DIR)
-    assert d["subjects"] == []
-    assert d["status"] == import_gate.UNENFORCED
-    assert d["status"] != import_gate.PASS
+    assert os.path.isdir(import_gate.PRODUCT_DIR)
+    assert d["subjects"], "product/ exists but the gate found no .py file in it"
+    assert d["status"] == import_gate.PASS, d["violations"]
+    assert d["status"] != import_gate.UNENFORCED
 
 
 def test_an_empty_subject_set_can_never_be_a_pass():
@@ -230,22 +235,51 @@ def test_real_tree_holds_the_core_direction():
 
 def test_report_prints_the_count_and_every_inspected_name():
     """AC#2. A count alone cannot distinguish inspecting all subjects from
-    inspecting one of them, so the names are part of the output."""
+    inspecting one of them, so the names are part of the output -- now asserted
+    for BOTH directions, since ticket 38 gave the product half subjects. The
+    `0 files inspected` line was the expected output here until that ticket; it
+    is now the regression this test forbids."""
     directions = import_gate.run_gate()
     text = import_gate.report(directions)
     assert f"{len(EXPECTED_CORE_MODULES)} files inspected" in text
     for name in EXPECTED_CORE_MODULES:
         assert name in text
-    assert "0 files inspected" in text
-    assert "product -> core only: UNENFORCED" in text
+
+    product = [d for d in directions if d["name"] == "product -> core only"]
+    assert len(product) == 1
+    subjects = product[0]["subjects"]
+    assert len(subjects) >= 1
+    assert f"{len(subjects)} files inspected" in text
+    for name in subjects:
+        assert name in text
+    assert "product -> core only: PASS" in text
+    assert "0 files inspected" not in text
 
 
 def test_summary_cannot_print_a_bare_pass_while_anything_is_unenforced():
-    line = import_gate.summary(import_gate.run_gate())
+    """The property this test has always pinned: an unenforced direction is
+    named in the same breath as the pass and never absorbed into a bare PASS.
+    Until ticket 38 the real tree supplied the unenforced direction itself; with
+    both directions now carrying subjects, the property is exercised on a
+    constructed third direction. Rephrased, not dropped -- the summary must
+    still behave this way the next time a direction is added before it has
+    anything to inspect."""
+    unenforced = {"name": "a future direction", "status": import_gate.UNENFORCED,
+                  "subjects": [], "violations": [], "note": ""}
+    line = import_gate.summary(import_gate.run_gate() + [unenforced])
     assert line != import_gate.PASS
     assert not line.startswith("PASS (all")
     assert "UNENFORCED" in line
-    assert "product -> core only" in line
+    assert "a future direction" in line
+
+
+def test_summary_reports_the_real_tree_as_fully_enforced():
+    """The other half of what ticket 38 changed. With product/ on disk no
+    direction is unenforced, and the summary states the count it is claiming
+    over rather than a bare PASS."""
+    line = import_gate.summary(import_gate.run_gate())
+    assert line == "PASS (all 2 directions enforced)"
+    assert import_gate.UNENFORCED not in line
 
 
 def test_report_refuses_to_overclaim():
