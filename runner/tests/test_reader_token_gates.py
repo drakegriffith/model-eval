@@ -53,7 +53,16 @@ EXPECTED_TOKENS_IN_RECOVERABLE_STATUS = "recovered_in_ledger"
 # from `pass` or from `tokens_in` belongs here. Adding a reader without adding it
 # to this line is the failure mode this roster exists to make loud: the new
 # reader would be ungated and nothing would say so.
-READER_MODULES = ("calibration_report.py", "stats.py", "tables.py")
+#
+# effort_verdict.py joined 2026-07-30 (ticket 35). It was named in ticket 31 AC#3
+# alongside the other three, read `tokens_in` ungated the whole time, and this
+# roster reported three passes and zero failures over its absence -- the exact
+# failure the comment above describes, happening on the roster's own watch. It
+# reads a DIFFERENT corpus (results/ladder-*.jsonl, written by
+# probe_endpoints.py), so nothing asserted about results.jsonl could have caught
+# it; only the roster could, and the roster did not contain it.
+READER_MODULES = ("calibration_report.py", "effort_verdict.py", "stats.py",
+                  "tables.py")
 
 
 def row(**kw):
@@ -218,8 +227,27 @@ def test_every_reader_is_wired_to_the_shared_predicates(reader):
 
 def test_the_reader_roster_is_not_empty():
     """A parametrized test over an empty roster reports zero failures and looks
-    exactly like a pass."""
-    assert len(READER_MODULES) >= 3
+    exactly like a pass.
+
+    The floor is the count ticket 31 AC#3 named: four readers, and the roster
+    carried three of them for three days. It rises with the roster so a reader
+    cannot be dropped back off it and leave a green suite behind (ticket 35).
+    """
+    assert len(READER_MODULES) >= 4
+
+
+def test_the_roster_names_every_reader_ticket_31_ac3_did():
+    """INDEPENDENT COPY of AC#3's list -- do not derive it from READER_MODULES.
+    AC#3 enumerates the consumers that sum or compare `tokens_in` across models;
+    the roster is supposed to be that list. Restating it here is what turns a
+    reader missing from the roster into a failure instead of a smaller loop
+    (harness #5: the checker must not read its rule from the thing checked).
+    """
+    ac3_named_readers = {"tables.py", "stats.py", "calibration_report.py",
+                         "effort_verdict.py"}
+    assert ac3_named_readers <= set(READER_MODULES), (
+        f"ticket 31 AC#3 names readers absent from the roster: "
+        f"{sorted(ac3_named_readers - set(READER_MODULES))}")
 
 
 def test_corpus_gates_declares_itself_core():
