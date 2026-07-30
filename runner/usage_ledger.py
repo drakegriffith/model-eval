@@ -115,6 +115,136 @@ def parse_usage_detailed(family, out):
 
 
 # --------------------------------------------------------------------------- #
+# Token-input provenance (ticket 31)
+#
+# The formula above is correct now and was not always. Rows written before
+# f11be7e carry a tokens_in from the buggy claude/kimi branch, and nothing on
+# those rows says so -- which is the whole defect: a reader averaging tokens_in
+# across models cannot distinguish a real total from a 30x-400x undercount.
+#
+# USAGE_PARSER_VERSION is the version of the formula in parse_usage_detailed.
+# Bump it whenever a change alters the VALUE that formula returns for the same
+# input bytes (a refactor that cannot move a number is not a new version).
+# Rows record the version that produced them, so no consumer ever has to date a
+# row to know what it is holding.
+# --------------------------------------------------------------------------- #
+PARSER_VERSION_PRE_CACHE_FIX = 1
+USAGE_PARSER_VERSION = 2
+TOKENS_IN_FIX_COMMIT = "f11be7e"
+TOKENS_IN_FIX_TS = "2026-07-27T15:38:36Z"
+
+# Branches PROVEN unaffected by the v1 bug, so their v1 numbers are true totals.
+# An allowlist by deliberate choice: a family absent here is quarantined under
+# the old parser because nobody checked it, not because someone forgot to list
+# it as broken. The inverse (a denylist of known-buggy families) reads the same
+# until the next family is added, and then it silently trusts an unchecked
+# number.
+UNAFFECTED_PARSE_BRANCHES = ("codex",)
+
+TOKENS_IN_STATUSES = ("measured", "recovered_in_ledger", "quarantined")
+
+
+def tokens_in_status(family, parser_version, ledger_status=None):
+    """Disposition of one row's `tokens_in`. THE rule -- stated once here, read
+    by run.py's write path and by stamp_provenance; never restated at a reader.
+
+    - "measured": the number on the row is the true cache-inclusive total.
+    - "recovered_in_ledger": the row's number is wrong, but the run's transcript
+      survived and usage.jsonl holds the re-parsed truth (join by run_id). 56 of
+      the 120 buggy-branch rows; verified 56/56 against an independent re-parse
+      on 2026-07-30.
+    - "quarantined": no copy of the true value exists anywhere. fable's 64 rows.
+
+    `ledger_status` is the joined usage.jsonl `retrofit_status`, or None when no
+    ledger row exists. Only "measured" there means recovered --
+    "unfixable_floor_only" is the ledger saying it could not recover it either.
+    """
+    if parser_version >= USAGE_PARSER_VERSION:
+        return "measured"
+    if family in UNAFFECTED_PARSE_BRANCHES:
+        return "measured"
+    if ledger_status == "measured":
+        return "recovered_in_ledger"
+    return "quarantined"
+
+
+def parser_version_at(ts):
+    """Which parser produced a row stamped `ts`. Used ONCE, by the backfill, to
+    label rows written before the field existed; the label is then recorded and
+    read from the row forever after. Nothing downstream may date a row itself.
+    """
+    if ts and ts >= TOKENS_IN_FIX_TS:
+        return USAGE_PARSER_VERSION
+    return PARSER_VERSION_PRE_CACHE_FIX
+
+
+def stamp_provenance(results_path, usage_path, apply=False):
+    """Backfill `usage_parser_version` + `tokens_in_status` onto results rows.
+
+    Labelling, never recomputation (AC#2): no recorded `tokens_in` is rewritten.
+    The wrong numbers stay exactly as recorded -- they are evidence of what the
+    instrument did, and overwriting them with the ledger's recovered value would
+    erase the distinction between a row that was always right and a row that was
+    fixed afterwards. The recovered value stays in usage.jsonl and is joined by
+    run_id when a reader wants it.
+
+    Returns the count report; writes only when `apply` is true.
+    """
+    rows = _read_jsonl(results_path)
+    ledger = {u["run_id"]: u for u in _read_jsonl(usage_path)
+              if u.get("kind", "worker") == "worker"}
+    report = {"inspected": len(rows), "path": results_path, "applied": bool(apply)}
+    report.update({s: 0 for s in TOKENS_IN_STATUSES})
+    report["by_arm"] = {}
+
+    for row in rows:
+        version = row.get("usage_parser_version")
+        if version is None:
+            version = parser_version_at(row.get("ts"))
+        led = ledger.get(row.get("run_id"))
+        status = tokens_in_status(registry.model_family(row.get("model")), version,
+                                  led.get("retrofit_status") if led else None)
+        row["usage_parser_version"] = version
+        row["tokens_in_status"] = status
+        report[status] += 1
+        arm = report["by_arm"].setdefault(row.get("model"),
+                                          {s: 0 for s in TOKENS_IN_STATUSES})
+        arm[status] += 1
+
+    if apply:
+        tmp = results_path + ".stamped"
+        with open(tmp, "w") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+        os.replace(tmp, results_path)
+    return report
+
+
+def format_provenance_report(report):
+    """Count the subjects out loud (AC#4). Every disposition is printed even
+    when it is zero: a corpus with nothing to quarantine and a corpus whose rows
+    were never inspected must not render identically.
+    """
+    head = (f"tokens_in provenance: inspected={report['inspected']} "
+            + " ".join(f"{s}={report[s]}" for s in TOKENS_IN_STATUSES)
+            + ("" if report.get("applied") else "  (dry run -- nothing written)"))
+    lines = [head]
+    for arm, counts in sorted(report.get("by_arm", {}).items()):
+        lines.append(f"  {arm:32s} "
+                     + " ".join(f"{s}={counts[s]}" for s in TOKENS_IN_STATUSES))
+    if report["inspected"] == 0:
+        lines.append("  NO ROWS INSPECTED -- not a clean corpus, no corpus at all")
+    return "\n".join(lines)
+
+
+def _read_jsonl(path):
+    if not path or not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [json.loads(l) for l in f if l.strip()]
+
+
+# --------------------------------------------------------------------------- #
 # Pricing -- dated, list-price, and ONLY for ids with a verified metered rate.
 #
 # Claude and Codex ids run on Drake's flat-rate subscriptions (runner/CLI-FACTS.md)
@@ -324,11 +454,21 @@ def retrofit(results_path, transcripts_dir, usage_path):
 
 def main():
     ap = argparse.ArgumentParser(description="model-gauntlet usage ledger")
-    ap.add_argument("action", choices=["retrofit"])
+    ap.add_argument("action", choices=["retrofit", "stamp-provenance"])
     ap.add_argument("--results", default=RESULTS_PATH)
     ap.add_argument("--transcripts", default=TRANSCRIPTS_DIR)
     ap.add_argument("--usage", default=USAGE_PATH)
+    # Dry by default. The backfill edits the corpus in place, and a command that
+    # rewrites 268 rows because someone typed the wrong subcommand is not a
+    # command anyone should have to be careful with.
+    ap.add_argument("--apply", action="store_true",
+                    help="write the labels; without it, report only")
     args = ap.parse_args()
+
+    if args.action == "stamp-provenance":
+        print(format_provenance_report(
+            stamp_provenance(args.results, args.usage, apply=args.apply)))
+        return
 
     summary = retrofit(args.results, args.transcripts, args.usage)
     print(f"wrote {summary['written']} row(s), "

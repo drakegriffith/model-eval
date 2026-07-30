@@ -1177,6 +1177,14 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "effort": run["effort"], "harness": run["harness"],
         "task": run["task"], "rep": run["rep"], "pass": passed,
         "tokens_in": tokens_in, "tokens_out": tokens_out, "wall_s": wall_s,
+        # ticket 31: which parse formula produced tokens_in, recorded by the
+        # code that ran it. Read off the module rather than written as a literal
+        # here -- a hardcoded "measured" would be the row asserting its own
+        # correctness, which is exactly what the 268 pre-f11be7e rows could not
+        # do. The status is derived through the one shared rule, never restated.
+        "usage_parser_version": usage_ledger.USAGE_PARSER_VERSION,
+        "tokens_in_status": usage_ledger.tokens_in_status(
+            model_family(run["model"]), usage_ledger.USAGE_PARSER_VERSION),
         "turns": turns, "loc_changed": loc, "exit_reason": exit_reason,
         "sealed": sealed, "write_contained": write_contained,
         # ticket 17. acceptance_requests is the design parameter K governs, and
