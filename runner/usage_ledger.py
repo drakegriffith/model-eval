@@ -237,6 +237,28 @@ def format_provenance_report(report):
     return "\n".join(lines)
 
 
+def recovered_tokens_in(usage_path=None):
+    """run_id -> the ledger's re-parsed `tokens_in`, for rows it could recover.
+
+    The other half of `tokens_in_status`. `stamp_provenance` deliberately does
+    NOT write the recovered value back onto the results row (AC#2: labelling,
+    never recomputation), so a reader that wants an input number for a
+    "recovered_in_ledger" row joins it from here by run_id. This function is
+    where that join lives, so no reader restates the ledger's shape or its rule.
+
+    Only `retrofit_status == "measured"` is offered. "unfixable_floor_only" is
+    the ledger saying it could not recover the value either -- its `tokens_in` is
+    a floor, not a measurement, and returning it would hand a reader a number
+    that looks recovered and is not. Same literal, same reason, as the docstring
+    on `tokens_in_status`.
+    """
+    return {u["run_id"]: u["tokens_in"]
+            for u in _read_jsonl(usage_path or USAGE_PATH)
+            if u.get("kind", "worker") == "worker"
+            and u.get("retrofit_status") == "measured"
+            and isinstance(u.get("tokens_in"), (int, float))}
+
+
 def _read_jsonl(path):
     if not path or not os.path.exists(path):
         return []

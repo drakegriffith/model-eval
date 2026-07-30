@@ -34,7 +34,12 @@ import import_gate  # noqa: E402
 # Pricing is deliberately absent: it is not yet a module (runner/tables.py:29-30
 # are placeholder prices). Adding it later is a deliberate edit here, in the
 # gate, and in the new module's own declaration.
-EXPECTED_CORE_MODULES = ("effort_verdict.py", "registry.py", "stats.py", "token_units.py")
+#
+# corpus_gates.py joined 2026-07-30 (ticket 31 AC#3) because stats.py imports it
+# and the core may only import the stdlib and the core. Restated here rather than
+# read from the gate, same as every other name on this line.
+EXPECTED_CORE_MODULES = ("corpus_gates.py", "effort_verdict.py", "registry.py",
+                         "stats.py", "token_units.py")
 
 
 def write_core_tree(root, modules, extra=None):

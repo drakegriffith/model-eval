@@ -22,6 +22,14 @@ literals ("ok", "measured") independently of anything importable from here --
 see the annotation on TOKENS_IN_USABLE_STATUS below.
 """
 
+# DECLARATION READ BY runner/import_gate.py. This module is imported by stats.py,
+# which the gate holds to the stdlib-only rule, so it has to be inside the core
+# boundary rather than a third-party dependency of it. The name is ALSO listed in
+# import_gate.CORE_MODULES and, independently, in
+# tests/test_import_gate.EXPECTED_CORE_MODULES -- three places on purpose, and
+# that is the intended friction, not duplication to design away.
+CORE_MODULE = True
+
 # --------------------------------------------------------------------------- #
 # The two rules.
 # --------------------------------------------------------------------------- #
@@ -44,6 +52,15 @@ SUMMARIZABLE_EXIT_REASON = "ok"
 # these into one shared constant.
 TOKENS_IN_USABLE_STATUS = "measured"
 
+# The middle state, named HERE rather than at a reader so that "which rows get a
+# ledger join" stays one decision in one place. This module never reads a file --
+# it says which rows may take a joined value; usage_ledger.recovered_tokens_in
+# performs the join, and only offers rows the ledger itself marked measured.
+#
+# DUPLICATED RULE (harness #5), same as the two literals above: restated in
+# tests/test_reader_token_gates.py::test_only_the_middle_status_is_recoverable.
+TOKENS_IN_RECOVERABLE_STATUS = "recovered_in_ledger"
+
 
 def summarizable(row):
     """True when this run's numbers may enter any published summary."""
@@ -58,6 +75,15 @@ def tokens_in_usable(row):
     clean one -- fail closed (harness: silence is not evidence).
     """
     return row.get("tokens_in_status") == TOKENS_IN_USABLE_STATUS
+
+
+def tokens_in_recoverable(row):
+    """True when an input number for this row exists in usage.jsonl, joinable by
+    run_id. Disjoint from `tokens_in_usable` by construction: a row is either
+    right on its face or recoverable elsewhere, never both, and a quarantined row
+    is neither.
+    """
+    return row.get("tokens_in_status") == TOKENS_IN_RECOVERABLE_STATUS
 
 
 # --------------------------------------------------------------------------- #

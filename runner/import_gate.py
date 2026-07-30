@@ -64,7 +64,12 @@ PRODUCT_DIR = os.path.join(REPO_ROOT, "product")
 # placeholder prices). When the pricing ticket lands, adding it here is a
 # deliberate edit in BOTH copies plus a `CORE_MODULE = True` in the new module.
 # That three-place cost is the intended friction, not a defect to design away.
-CORE_MODULES = ("effort_verdict.py", "registry.py", "stats.py", "token_units.py")
+#
+# corpus_gates.py joined 2026-07-30 (ticket 31 AC#3): stats.py imports it, and a
+# core module may only import the stdlib and other core modules, so leaving it
+# outside would have made stats.py's own import illegal.
+CORE_MODULES = ("corpus_gates.py", "effort_verdict.py", "registry.py",
+                "stats.py", "token_units.py")
 
 # Statuses. UNENFORCED is deliberately not a kind of PASS: it is the answer for a
 # direction whose subject set is empty, which is a result requiring a decision
