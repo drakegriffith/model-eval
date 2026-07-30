@@ -134,13 +134,22 @@ class RunRequest(NamedTuple):
 
 
 class RunReport(NamedTuple):
-    """The rows ticket 44 will render, plus the two counts AC#7 asks for."""
+    """The rows ticket 44 will render, plus the two counts AC#7 asks for.
+
+    `effort` is the rung the whole report was measured at, carried because
+    ticket 44 plots a live point as a dot at one (model, effort) pair and 14a's
+    ruling never marginalizes effort into the model. Without it the surface
+    would have to guess -- and a guessed rung puts a dot on a tier nobody ran.
+    One field for the report rather than one per outcome because a RunRequest
+    carries a single effort: every outcome in this report was produced at it.
+    """
     model_id: str
     family: str
     cap_usd: float
     spent_usd: float
     outcomes: tuple
     ledger_rows_written: int
+    effort: str
 
 
 def invocation_paths():
@@ -313,7 +322,7 @@ def execute(request, invoke=None):
                                     detail, True, wall_s))
 
     return RunReport(model_id, family, request.cap_usd, spent,
-                     tuple(outcomes), ledgered)
+                     tuple(outcomes), ledgered, request.effort)
 
 
 def format_report(report):

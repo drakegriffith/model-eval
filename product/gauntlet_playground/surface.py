@@ -46,6 +46,7 @@ counting rule -- ticket 44's AC on figures, and ticket 40 AC#8 before it. The tw
 live axes are `wall_s` and `tokens_out` precisely because ticket 31 left both
 untouched; there is no third live axis to offer.
 """
+import re
 from typing import NamedTuple
 
 import corpus_gates
@@ -595,13 +596,17 @@ def _zero_rows_reason(tier, tier_rows, models, selected, points):
     if models is not None and not list(models):
         return ("0 rows: no models selected. Every model was deselected, so "
                 "there is nothing to plot -- the corpus is intact")
-    if not selected:
-        return (f"0 rows: none of the selected models appear in the "
-                f"{tier.title} tier")
+    # The gate is checked before the selection: with models=None, `selected`
+    # is derived from `tier_rows`, so a gate-emptied tier empties the selection
+    # too, and checking the selection first would blame a filter the visitor
+    # never applied.
     if not tier_rows:
         return (f"0 rows: the {tier.title} tier has published tasks but no run "
                 f"survived the clean-exit gate, so every row describes a "
                 f"truncated session")
+    if not selected:
+        return (f"0 rows: none of the selected models appear in the "
+                f"{tier.title} tier")
     return (f"0 rows: the selection over the {tier.title} tier returned no "
             f"config with values on both axes")
 
@@ -703,7 +708,22 @@ def format_chart(chart):
 # against the finished string rather than trusted to the format calls above it:
 # the executor knows each outcome's cost and the report carries `spent_usd`, so
 # the number is one attribute access away from anyone editing this function.
-_MONEY_MARKERS = ("$", "usd", "USD", "dollar", "cent")
+#
+# TWO KINDS OF MARKER, MATCHED TWO WAYS. "$" is punctuation: it appears in no
+# English word, so a substring test is exactly right and a word-boundary regex
+# would not even match it (\b needs a word character on one side). The rest are
+# words, and a substring test on a word is wrong in the direction that costs a
+# working sentence: "cent" is inside "percent" and "recent", both of which this
+# module's own text wants to say ("40 points" became "percent" once already).
+# The failure mode of a too-eager marker is a refusal on an honest sentence,
+# which reads as the price gate working -- so the boundary is not a nicety.
+# The plurals are listed because \bdollar\b does not match "dollars", and "5
+# dollars" is a price. Same marker set as before otherwise -- this is a matching
+# fix, not a widening of what counts as money.
+_MONEY_SYMBOLS = ("$",)
+_MONEY_WORDS = ("usd", "dollar", "dollars", "cent", "cents")
+_MONEY_WORD_RE = re.compile(
+    r"\b(" + "|".join(_MONEY_WORDS) + r")\b", re.IGNORECASE)
 
 
 def printed_sentence(report, corpus_rows=(), tier_key=DEFAULT_TIER):
@@ -789,11 +809,12 @@ def _refuse_money(text):
     The check is on the finished string, which is the only place a price added
     by any future edit has to pass through.
     """
-    for marker in _MONEY_MARKERS:
-        if marker in text:
-            raise ValueError(
-                f"printed sentence contains {marker!r} -- no slice may print a "
-                f"price (playground spec §5; ticket 08 records no verified "
-                f"prices and tables.py:29-30 are placeholders). Sentence was: "
-                f"{text!r}")
+    found = [m for m in _MONEY_SYMBOLS if m in text]
+    found += sorted({m.group(0) for m in _MONEY_WORD_RE.finditer(text)})
+    if found:
+        raise ValueError(
+            f"printed sentence contains {', '.join(repr(m) for m in found)} -- "
+            f"no slice may print a price (playground spec §5; ticket 08 records "
+            f"no verified prices and tables.py:29-30 are placeholders). "
+            f"Sentence was: {text!r}")
     return text
