@@ -155,8 +155,22 @@ def load_jsonl(path):
     return rows
 
 
-def total_tokens(r):
-    return (r.get("tokens_in", 0) or 0) + (r.get("tokens_out", 0) or 0)
+def summary_tokens(r):
+    """The token axis every summary in this file reports: **output tokens only**.
+
+    Was `tokens_in + tokens_out`. Struck on 2026-07-30 (ticket 31 AC#3, ratified
+    by Drake) because that sum is not comparable across models: only 148 of 268
+    corpus rows carry a true cache-inclusive `tokens_in`, and which rows those are
+    varies by model family. A "total" that means a different thing per row is not
+    a measurement, and a footnote does not make it one. `tokens_out` was verified
+    byte-identical pre- and post-fix on all 56 re-parsed rows, so it is the axis
+    that was actually measured. `tokens_out`-only paths are explicitly permitted
+    by AC#3 and need no provenance gate.
+
+    An input number for the 56 recovered rows is available by joining
+    `usage.jsonl` on `run_id`; it is deliberately not summed in here.
+    """
+    return r.get("tokens_out", 0) or 0
 
 
 def logtok(total):
@@ -183,7 +197,7 @@ def best_effort(model_rows):
     for eff, rs in by_eff.items():
         n = len(rs)
         rate = sum(1 for r in rs if is_pass(r)) / n if n else 0.0
-        mean_tok = sum(total_tokens(r) for r in rs) / n if n else 0.0
+        mean_tok = sum(summary_tokens(r) for r in rs) / n if n else 0.0
         score = (rate, -mean_tok, EFFORT_ORDER.get(eff, 9))
         if best is None or score > best:
             best, best_eff = score, eff
@@ -347,12 +361,21 @@ def section_harness(results):
 
 
 def section_permutation(results):
-    """(3) exact sign-flip permutation on per-task median log(total tokens) of
-    PASSING runs, fable vs sol, paired by task."""
+    """(3) exact sign-flip permutation on per-task median log(OUTPUT tokens) of
+    PASSING runs, fable vs sol, paired by task.
+
+    The axis is output tokens, not total. This is the one comparison in the file
+    where that distinction was load-bearing: fable's 64 rows are `quarantined`
+    and sol's 112 are `measured`, so a total-token contrast here was fable's
+    undercounted input side against sol's correct one. See `summary_tokens`.
+    """
     lines = ["## 5. Who's cheaper per solved task? Sign-flip permutation test", "",
-             "Per-task median log(total tokens) over PASSING runs, Fable minus "
-             "Sol, paired by task. Exact test: all 2^k sign patterns "
-             "(k = tasks with passing runs on both sides).", ""]
+             "Per-task median log(**output** tokens) over PASSING runs, Fable "
+             "minus Sol, paired by task. Exact test: all 2^k sign patterns "
+             "(k = tasks with passing runs on both sides).", "",
+             "Output tokens, not total: fable's input side is quarantined and "
+             "sol's is measured (ticket 31 AC#3), so a total-token contrast here "
+             "would compare an undercount against a true count.", ""]
     passing = [r for r in results if is_pass(r)]
     fable = group([r for r in passing if r["model"] == "fable"], lambda r: r["task"])
     sol = group([r for r in passing if r["model"] == "sol"], lambda r: r["task"])
@@ -360,12 +383,12 @@ def section_permutation(results):
     if not tasks:
         lines.append("_(no task has passing fable and sol runs)_\n")
         return "\n".join(lines)
-    lines += ["| task | fable med log(tok) | sol med log(tok) | diff (F−S) |",
+    lines += ["| task | fable med log(out tok) | sol med log(out tok) | diff (F−S) |",
               "| --- | --- | --- | --- |"]
     diffs = []
     for t in tasks:
-        fmed = statistics.median([logtok(total_tokens(r)) for r in fable[t]])
-        smed = statistics.median([logtok(total_tokens(r)) for r in sol[t]])
+        fmed = statistics.median([logtok(summary_tokens(r)) for r in fable[t]])
+        smed = statistics.median([logtok(summary_tokens(r)) for r in sol[t]])
         diffs.append(fmed - smed)
         lines.append(f"| {t} | {fmed:.4f} | {smed:.4f} | {fmed - smed:+.4f} |")
     lines.append("")
