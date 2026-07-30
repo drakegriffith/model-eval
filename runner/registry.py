@@ -58,6 +58,13 @@ Limitations
       need not import the 1300-line worker to ask what family a model is.
 """
 
+# Membership in B''s core, declared on disk for runner/import_gate.py, which reads
+# this with ast and never imports the module. The declaration exists because this
+# module is import-free: an import scan alone cannot tell "opened it and found
+# nothing to object to" from "never opened it". Deleting this line does not
+# quietly shrink the core -- it fails the gate.
+CORE_MODULE = True
+
 # --------------------------------------------------------------------------- #
 # Model registry
 # --------------------------------------------------------------------------- #

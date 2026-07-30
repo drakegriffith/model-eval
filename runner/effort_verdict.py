@@ -41,6 +41,11 @@ import os
 import statistics
 from collections import defaultdict
 
+# Membership in B''s core, declared on disk for runner/import_gate.py (read via
+# ast, never imported). Deleting this line fails the gate rather than quietly
+# shrinking the core.
+CORE_MODULE = True
+
 REAL_SPREAD = 1.50
 NOOP_SPREAD = 1.20
 # Between-tier variation must exceed within-tier variation by this factor before the

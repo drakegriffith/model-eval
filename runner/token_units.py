@@ -62,6 +62,11 @@ import glob
 import json
 import os
 
+# Membership in B''s core, declared on disk for runner/import_gate.py (read via
+# ast, never imported). Deleting this line fails the gate rather than quietly
+# shrinking the core.
+CORE_MODULE = True
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER_DIR = os.path.join(ROOT, "runner")
 USAGE_PATH = os.path.join(RUNNER_DIR, "results", "usage.jsonl")
