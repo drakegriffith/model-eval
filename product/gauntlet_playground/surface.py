@@ -1030,8 +1030,10 @@ def format_chart(chart):
 # The printed sentence (14b "Item 2 -- RULING", ticket 44 AC#5)
 # --------------------------------------------------------------------------- #
 
-# Ticket 08 records no verified prices and tables.py:29-30 are self-labelled
-# placeholders, so spec §5 gates every slice from printing one. This is checked
+# Ticket 08 records no verified prices, and ticket 20 (option C) removed
+# tables.py's placeholder prices outright rather than verifying them -- a
+# price is the reader's to compute from a rate the reader supplies -- so spec
+# §5 gates every slice from printing one. This is checked
 # against the finished string rather than trusted to the format calls above it:
 # the executor knows each outcome's cost and the report carries `spent_usd`, so
 # the number is one attribute access away from anyone editing this function.
@@ -1185,6 +1187,6 @@ def _refuse_money(text):
         raise ValueError(
             f"printed sentence contains {', '.join(repr(m) for m in found)} -- "
             f"no slice may print a price (playground spec §5; ticket 08 records "
-            f"no verified prices and tables.py:29-30 are placeholders). "
-            f"Sentence was: {text!r}")
+            f"no verified prices, and ticket 20 removed tables.py's placeholder "
+            f"prices outright). Sentence was: {text!r}")
     return text

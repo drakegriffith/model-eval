@@ -1,9 +1,11 @@
 """disclosure.py -- what a visitor is told BEFORE their key spends (ticket 43).
 
-WHAT THIS MODULE IS. The pre-run disclosure: four labelled facts -- the
-invocation path, the CLI version, the billing-mode label, and the cost basis --
-assembled into a `Disclosure` the caller must hand back to executor.execute as
-`disclosed=`. The hand-back is the acknowledgement. Its fingerprint binds it to
+WHAT THIS MODULE IS. The pre-run disclosure: five labelled facts -- the
+billing-mode label, the cost basis, the corpus-derived expected spend, the
+invocation path, and the CLI version, in that order (14c Ruling 1: the two
+money items are what a stranger must read before spending; path and version
+are covariates and read second) -- assembled into a `Disclosure` the caller
+must hand back to executor.execute as `disclosed=`. The hand-back is the acknowledgement. Its fingerprint binds it to
 (model, task_ids, cap_usd), so a disclosure shown for one run does not
 authorize a different one, and execute() raises DisclosureRequired rather than
 proceeding without a match. The gate lives in execute() itself, not in a CLI
@@ -11,22 +13,32 @@ front end, for spend_cap's reason: a gate enforced in the surface that asks
 politely holds for exactly one caller, and the caller ticket 43 is about is the
 one that reaches the executor directly.
 
-OBSERVED vs INFERRED, and why every item carries one of the two words.
-An observed fact was produced by the machinery at disclosure time: the path row
-execute() will dispatch on, the version string the binary answered with just
-now, the probe usage the pricing formula returned a figure for. An inferred
-fact is a label something wrote down without observing it: billing_mode is
-usage_ledger.build_usage_row's family-name test -- a string comparison -- and a
-visitor deciding whether to trust "metered" is entitled to know the word came
-from a name check and not from a bill anyone has seen. Printing both kinds
-unmarked would let the weakest item borrow the strongest item's provenance.
+OBSERVED vs INFERRED vs CORPUS, and why every item carries one of the three
+words. An observed fact was produced by the machinery at disclosure time: the
+path row execute() will dispatch on, the version string the binary answered
+with just now, the probe usage the pricing formula returned a figure for. An
+inferred fact is a label something wrote down without observing it:
+billing_mode is usage_ledger.build_usage_row's family-name test -- a string
+comparison -- and a visitor deciding whether to trust "metered" is entitled to
+know the word came from a name check and not from a bill anyone has seen. A
+corpus fact is a statistic over past sealed-corpus runs -- neither observed
+now nor inferred from a name, and a reader weighing "expected spend" is
+entitled to know it is history, not a promise. Printing the kinds unmarked
+would let the weakest item borrow the strongest item's provenance.
 
-WHAT IS PENDING IS RENDERED AS PENDING. Ticket 20 §9's asymmetry copy is not
-written (§9 is still open), and 14c is open and unbuilt with no prototype
-outcome. The two lines that would carry their content therefore name the gap
-instead of filling it, and `asymmetry_sentence` raises NotSettled rather than
-returning a draft: a sentence composed here would be §9 settled by side effect,
-in a file nobody reviewing §9 would think to read.
+WHAT WAS PENDING HAS SETTLED, AND WHERE EACH SETTLEMENT LANDED. Both gaps this
+screen once rendered by name closed on 2026-07-31. 14c's prototype outcome
+(Ruling 1) is the item order above and the [CORPUS] expected-spend line; it
+also rules that PENDING lines group under a named gutter ("not yet stated on
+this screen:") that disappears when empty -- today it is empty, and
+format_disclosure keeps the mechanism so an absent gutter means no gap, not a
+deleted renderer. Ticket 20 §9 ratified the asymmetry copy (§9-SETTLED, draft
+A), which `asymmetry_sentence` now returns with a measured total substituted.
+That sentence deliberately does NOT render here: it is post-run copy ("This
+run used ...") and a pre-run screen has no measured total to state as fact,
+and its ratified text names a dollar figure -- the word, not a price -- which
+surface._refuse_money structurally refuses. Its gate is the verbatim pin in
+test_product_disclosure.py instead.
 
 NO MONEY WORDS. The finished string passes through surface._refuse_money, the
 same structural gate the printed sentence uses, because this module holds the
@@ -37,11 +49,14 @@ still records no verified prices, so no slice may print one.
 import hashlib
 import json
 import os
+import statistics
 import subprocess
 from typing import NamedTuple
 
+import corpus_gates
 import registry
 import spend_cap
+import stats
 import usage_ledger
 
 # Product-internal imports are legal under half B; `surface` is where the money
@@ -53,16 +68,8 @@ from gauntlet_playground import executor, surface
 
 OBSERVED = "observed"
 INFERRED = "inferred"
-LABELS = (OBSERVED, INFERRED)
-
-
-class NotSettled(Exception):
-    """Raised where settled copy would go, when the settling has not happened.
-
-    Not a placeholder string and not a TODO: a caller asking for the asymmetry
-    sentence gets this exception, which names the open ticket, instead of prose
-    this module has no authority to draft.
-    """
+CORPUS = "corpus"
+LABELS = (OBSERVED, INFERRED, CORPUS)
 
 
 class DisclosureRequired(Exception):
@@ -90,39 +97,54 @@ class Disclosure(NamedTuple):
     family: str
     task_ids: tuple
     cap_usd: float
-    items: tuple      # four DisclosureItem, each labelled
-    pending: tuple    # the structural gaps, named -- see PENDING_LINES
+    items: tuple      # five DisclosureItem, each labelled, money first
+    pending: tuple    # structural gaps, named -- see PENDING_LINES
     fingerprint: str
 
 
-# The gaps this disclosure refuses to paper over, rendered by name. These are
-# STRUCTURAL lines, not drafts-in-waiting: when ticket 20 §9 closes, the first
-# line is replaced by the copy §9 settles on, and `asymmetry_sentence` starts
-# returning it instead of raising.
-PENDING_LINES = (
-    "PENDING (ticket 20 §9): the asymmetry copy is not written and §9 is "
-    "still open -- this line renders the gap by name rather than drafting the "
-    "sentence; disclosure.asymmetry_sentence() raises NotSettled instead of "
-    "composing one",
-    "PENDING (14c): open, unbuilt, no prototype outcome -- no claim from it "
-    "appears in this disclosure",
-)
+# Empty since 2026-07-31, when both gaps that lived here settled the same day:
+# ticket 20 §9 by ratifying the asymmetry copy (see `asymmetry_sentence`), and
+# 14c by shipping its prototype outcome -- the item order and the [CORPUS]
+# expected-spend line ARE that outcome, cited. The tuple stays as the slot a
+# future gap goes in: format_disclosure renders these under 14c's named gutter
+# ("not yet stated on this screen:"), which disappears when this is empty.
+PENDING_LINES = ()
 
 
-def asymmetry_sentence():
-    """The asymmetry sentence -- NOT WRITTEN, and this function says so.
+def asymmetry_sentence(total_tokens):
+    """Ticket 20 §9's asymmetry copy -- ratified draft A (§9-SETTLED,
+    2026-07-31), with this run's measured token total substituted for the
+    example figure ("2.4 million" was §4's carried example, not a constant).
 
-    A NotSettled path rather than a drafted one: the copy is ticket 20 §9's to
-    settle, §9 is open, and 14c -- the other place an outcome could have come
-    from -- is open and unbuilt with no prototype outcome to cite. Returning a
-    draft from here would settle §9 by side effect in a module nobody
-    reviewing §9 reads.
+    Post-run copy, deliberately not rendered by format_disclosure: sentence
+    one states a measured total as fact, which a pre-run screen does not have,
+    and the ratified text names a dollar figure -- the word, not a price --
+    which surface._refuse_money structurally refuses. This sentence's gate is
+    therefore the verbatim pin in test_product_disclosure.py. That pin
+    restates the wording on purpose (the checker must not read its rule from
+    the worker); an edit here the pin does not also make is §9 re-litigated,
+    not a cleanup.
+
+    The three-sentence contract is binding: (1) measured tokens as fact,
+    (2) subscription marginal cost zero stated plainly, (3) dollars computed
+    only from reader-supplied fresh and cache-read rates, owned by the reader.
     """
-    raise NotSettled(
-        "the asymmetry copy is not written: ticket 20 §9 is still open, and "
-        "14c (open, unbuilt, no prototype outcome) has produced nothing to "
-        "cite. The disclosure carries the gap as a PENDING line by name; a "
-        "sentence drafted here would be §9 settled by side effect")
+    return (f"This run used {_token_figure(total_tokens)} tokens. On a "
+            f"subscription plan you paid nothing extra for it. To see a "
+            f"dollar figure, enter what you pay per million tokens — fresh "
+            f"and cached separately, because cached tokens bill at about a "
+            f"tenth — and the arithmetic runs on your numbers, not ours.")
+
+
+def _token_figure(total):
+    """The measured total at the ratified example's register: '2.4 million'
+    above a million, exact with separators below it."""
+    if total >= 1_000_000:
+        text = f"{total / 1_000_000:.1f}"
+        if text.endswith(".0"):
+            text = text[:-2]
+        return f"{text} million"
+    return f"{total:,}"
 
 
 def fingerprint(model, task_ids, cap_usd):
@@ -137,7 +159,7 @@ def fingerprint(model, task_ids, cap_usd):
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def disclose(request, path, probe_version=None):
+def disclose(request, path, probe_version=None, corpus_rows=()):
     """Build the pre-run disclosure for one executor.RunRequest.
 
     `path` is the executor.InvocationPath the run would take, or None for a
@@ -148,15 +170,25 @@ def disclose(request, path, probe_version=None):
     `probe_version` is injectable for the same reason execute()'s `invoke` is:
     the default asks the real binary, and tests that are not about the binary
     exercise the rest of the disclosure without shelling out.
+
+    `corpus_rows` feeds the expected-spend item, on printed_sentence's
+    argument: the caller who has the sealed corpus loaded passes it. A caller
+    without it still gets the item -- stating that no figure can be quoted and
+    over how many rows that was decided, which is a statement the screen owes
+    either way.
+
+    Item order is 14c Ruling 1 (money first): billing_mode, cost basis,
+    expected spend, then the covariates.
     """
     probe = _probe_cli_version if probe_version is None else probe_version
     model_id, spec = registry.resolve_model(request.model)
     family = spec["family"]
     items = (
-        _path_item(family, path),
-        _version_item(path, probe),
         _billing_item(request, model_id, family),
         _cost_item(model_id),
+        _expected_spend_item(model_id, request.effort, corpus_rows),
+        _path_item(family, path),
+        _version_item(path, probe),
     )
     return Disclosure(
         model_id=model_id,
@@ -285,6 +317,55 @@ def _cost_item(model_id):
     return DisclosureItem("cost_basis", OBSERVED, text)
 
 
+def _expected_spend_item(model_id, effort, corpus_rows):
+    """CORPUS: a statistic over past sealed-corpus runs, and labelled as one --
+    what runs like this one have spent, not what this run will.
+
+    14c Ruling 1's new element, satisfying ticket 43's "expected cost" AC:
+    token-denominated, no money words. The quantity is OUTPUT tokens because
+    that is the corpus's one comparable token axis -- ticket 31 struck the
+    summed input side (stats.summary_tokens holds the ruling) -- so the line
+    says so rather than borrowing the word "total" for a number that is not
+    one. Rows pass the instrument's own clean-exit gate
+    (corpus_gates.summarizable_rows), and the subjects are counted out loud in
+    both arms: a figure over N rows and a refusal over 0 must not print alike.
+    """
+    rows = list(corpus_rows)
+    kept, _ = corpus_gates.summarizable_rows(rows)
+    mine = [r for r in kept
+            if r.get("model") == model_id and r.get("effort") == effort]
+    if not mine:
+        return DisclosureItem(
+            "expected_spend", CORPUS,
+            f"expected spend: no figure -- of {len(rows)} corpus row(s) "
+            f"inspected, {len(kept)} survived the clean-exit gate and 0 are "
+            f"for {model_id} at effort={effort}. A median over zero runs is "
+            f"indistinguishable from one over all of them, so none is quoted")
+    by_task = {}
+    for r in mine:
+        by_task.setdefault(r.get("task"), []).append(stats.summary_tokens(r))
+    medians = [statistics.median(v) for v in by_task.values()]
+    return DisclosureItem(
+        "expected_spend", CORPUS,
+        f"expected spend: ~{_token_span(medians)} output tokens per task -- "
+        f"per-task corpus medians for {model_id} at effort={effort}, over "
+        f"{len(mine)} kept corpus run(s) across {len(by_task)} task(s) (14c "
+        f"prototype outcome, Ruling 1). Output tokens are the corpus's one "
+        f"comparable token axis (ticket 31); the billed session-total runs "
+        f"higher than this figure")
+
+
+def _token_span(values):
+    """'9k-14k' across per-task medians, or the single figure when they agree
+    at this rounding -- a span whose ends print alike is one number."""
+    lo, hi = _k(min(values)), _k(max(values))
+    return lo if lo == hi else f"{lo}-{hi}"
+
+
+def _k(n):
+    return f"{round(n / 1000)}k" if n >= 1000 else f"{round(n)}"
+
+
 def format_disclosure(d):
     """The disclosure as the screen the visitor reads, gated on the FINISHED
     string by surface._refuse_money -- the only place a money figure added by
@@ -294,8 +375,14 @@ def format_disclosure(d):
              f"{', '.join(d.task_ids)}"]
     for item in d.items:
         lines.append(f"  [{item.label}] {item.text}")
-    for line in d.pending:
-        lines.append(f"  {line}")
+    # 14c Ruling 1's gutter: pending lines group under a header that names
+    # what they are, and the whole gutter disappears when nothing is pending
+    # -- an absent header means an empty slot, not a dropped renderer, and
+    # the tests assert both directions.
+    if d.pending:
+        lines.append("  not yet stated on this screen:")
+        for line in d.pending:
+            lines.append(f"    {line}")
     lines.append(
         f"  to acknowledge, pass this disclosure back: "
         f"executor.execute(request, ..., disclosed=<this disclosure>). It is "
