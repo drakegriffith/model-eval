@@ -31,8 +31,10 @@ import import_gate  # noqa: E402
 # control and leaves the suite green -- reject that pass; this comment is the
 # standing reason to reject it.
 #
-# Pricing is deliberately absent: it is not yet a module (runner/tables.py:29-30
-# are placeholder prices). Adding it later is a deliberate edit here, in the
+# Pricing is deliberately absent: ticket 20 (option C) deleted the placeholder
+# prices that used to sit in tables.py, and a price is the reader's to compute
+# from a rate the reader supplies -- no module of ours renders one. Should a
+# reader-rate module ever land, adding it is a deliberate edit here, in the
 # gate, and in the new module's own declaration.
 #
 # corpus_gates.py joined 2026-07-30 (ticket 31 AC#3) because stats.py imports it
@@ -306,6 +308,12 @@ def test_report_refuses_to_overclaim():
     list would also have satisfied the old test's spirit while making the report
     claim a repair that never happened -- pinning both directions is what stops
     that. The repair itself is pinned by test_usage_ledger_portability.py.
+
+    Ticket 20 then removed the placeholder prices themselves, so the pricing
+    line is likewise rephrased to the new fact rather than relaxed: the stale
+    "tables.py:29-30 are placeholder prices" cite must be GONE and the removal
+    stated -- a report citing lines that no longer hold the claim is the gate
+    overclaiming its own currency.
     """
     text = import_gate.report(import_gate.run_gate())
     assert "import statements only" in text
@@ -316,7 +324,8 @@ def test_report_refuses_to_overclaim():
                    for site in import_gate.KNOWN_BROKEN_PORTABILITY)
     assert len(import_gate.KNOWN_BROKEN_PORTABILITY) == 1
     assert "pricing is absent" in text
-    assert "tables.py:29-30" in text
+    assert "removed tables.py's placeholder prices" in text
+    assert "tables.py:29-30" not in text
 
 
 def test_main_exits_zero_on_the_real_tree(capsys):
