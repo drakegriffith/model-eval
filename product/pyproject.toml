@@ -41,6 +41,16 @@ description = "The model-gauntlet product surface: what a visitor runs, held beh
 requires-python = ">=3.10"
 dependencies = []
 
+# matplotlib is an extra, not a dependency, because the split it mirrors is
+# load-bearing: surface.py (the data half, every sentence and every number) is
+# stdlib-plus-core and must import WITHOUT matplotlib installed -- that is what
+# lets runner/tests/test_result_surface.py prove the honesty argument in an
+# environment with no third-party packages. Only render.py (the drawing half)
+# and the chart script below need it. Moving it into [project.dependencies]
+# would make the whole product require a plotting library to state its claims.
+[project.optional-dependencies]
+chart = ["matplotlib>=3.8"]
+
 [project.scripts]
 gauntlet-playground = "gauntlet_playground.__main__:main"
 # Ticket 40, slice S2. A second script rather than a subcommand of the first:
@@ -49,6 +59,11 @@ gauntlet-playground = "gauntlet_playground.__main__:main"
 # pins the line above byte-for-byte, so growing it into an argv-dispatching
 # entry point would move a line another test is holding still.
 gauntlet-playground-run = "gauntlet_playground.executor:main"
+# Ticket 44, slice S4. A third script for the same reason the second is one:
+# __main__.py's report is pinned byte-for-byte by test_product_boundary.py, so
+# the chart cannot be a subcommand of it. Lives in render.py because saving a
+# PNG is the drawing half's job and the only one that needs the chart extra.
+gauntlet-playground-chart = "gauntlet_playground.render:main"
 
 [tool.setuptools]
 packages = ["gauntlet_playground"]
