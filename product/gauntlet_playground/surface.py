@@ -847,6 +847,10 @@ def _refuse_money(text):
     cost of every outcome is sitting on the report this function was handed.
     The check is on the finished string, which is the only place a price added
     by any future edit has to pass through.
+
+    Other slices restate this gate deliberately (each slice's gate stands on
+    its own, so one edit cannot weaken every printed surface at once); do not
+    DRY the copies into a shared helper.
     """
     found = [m for m in _MONEY_SYMBOLS if m in text]
     found += sorted({m.group(0) for m in _MONEY_WORD_RE.finditer(text)})

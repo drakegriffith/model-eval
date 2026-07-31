@@ -163,8 +163,7 @@ def _default_store_path():
 def main(argv=None):
     """CLI entry. By the convention in product/pyproject.toml this is its own
     console script (gauntlet-playground-intake), not a subcommand of the
-    pinned one; the script line is noted in the commit that adds this file
-    because another change owns pyproject.toml right now."""
+    pinned one."""
     import argparse
     parser = argparse.ArgumentParser(
         prog="gauntlet-playground-intake",

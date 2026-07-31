@@ -11,6 +11,10 @@ runner/results/STATS-APPENDIX.md
 # Build metadata left by `pip install -e product/`; the manifest is the source.
 *.egg-info/
 
+# The intake form's default store (ticket 41). Submissions are a visitor's
+# runtime data, not source; a submit must never dirty the tree.
+product/submissions.jsonl
+
 # The product's third-party dependency (matplotlib) cannot be installed into the
 # host interpreter -- Homebrew's python is PEP 668 externally-managed. This is
 # where it lives instead; product/pyproject.toml declares it, and this directory
