@@ -1,7 +1,8 @@
 """gauntlet_playground.__main__ -- the product's entry point (ticket 38, slice S7).
 
-This module is the whole of the product's code today, and its job is not to do
-product work -- tickets 39/40/41/43/44/45 own that. Its job is to make the
+This module was the whole of the product's code when it landed; executor.py
+(ticket 40) and surface.py/render.py (ticket 44) have since joined it. Its job
+is still not to do product work -- those modules own that. Its job is to make the
 product half of the one-way dependency rule ENFORCEABLE. runner/import_gate.py's
 half B inspects .py files under product/; until this file existed it had zero
 subjects and reported UNENFORCED, and a boundary with no subjects prints

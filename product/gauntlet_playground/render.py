@@ -27,11 +27,13 @@ surface.py already ran it at import time and the tests prove it in the tree
 they ran against; this call proves it in the process that is about to put a
 picture in front of somebody, which is the process the claim is about.
 """
+import argparse
 import textwrap
 
 from matplotlib.figure import Figure
 
 import provenance
+import stats
 
 from . import surface
 
@@ -116,3 +118,43 @@ def save(chart, path):
     went somewhere."""
     draw(chart).savefig(path, dpi=144, bbox_inches="tight")
     return path
+
+
+def main(argv=None):
+    """The gauntlet-playground-chart console script (../pyproject.toml).
+
+    Builds one tab of the surface from a corpus results file and saves it as a
+    PNG. --results is required rather than defaulted: the corpus lives in the
+    instrument's tree and the product does not know the repo layout it was
+    invoked from -- the same argument that keeps sys.path out of this package.
+
+    Prints format_chart before the path so the terminal carries the same
+    sentences the picture does, then the path itself -- the saved file is
+    asserted by naming it, not by exiting quietly.
+    """
+    parser = argparse.ArgumentParser(
+        description="Build the result-surface chart from sealed-corpus rows "
+                    "and save it as a PNG.")
+    parser.add_argument("--results", required=True,
+                        help="corpus results JSONL (the instrument's "
+                             "runner/results/results.jsonl)")
+    parser.add_argument("--out", required=True, help="path to write the PNG")
+    parser.add_argument("--tier", default=surface.DEFAULT_TIER,
+                        choices=[t.key for t in surface.TIERS])
+    parser.add_argument("--x-axis", default=surface.TOKENS_OUT.key,
+                        choices=sorted(surface.X_AXES))
+    parser.add_argument("--model", action="append", default=None,
+                        help="repeatable multi-select; omit for every model "
+                             "the tier has")
+    args = parser.parse_args(argv)
+
+    chart = surface.build_chart(stats.load_jsonl(args.results),
+                                tier_key=args.tier, x_axis_key=args.x_axis,
+                                models=args.model)
+    print(surface.format_chart(chart))
+    print(f"saved: {save(chart, args.out)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
