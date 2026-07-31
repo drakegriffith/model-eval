@@ -241,8 +241,16 @@ def _invoke_api_key_cli(cmd, env, timeout=900):
     return proc.stdout
 
 
-def execute(request, invoke=None):
+def execute(request, invoke=None, disclosed=None):
     """Run each requested task under the cap, ledger what ran, report what did not.
+
+    BEFORE THE LOOP: the disclosure gate (ticket 43). `disclosed` is the
+    Disclosure the caller was shown, and it must match THIS request --
+    disclosure.fingerprint over (model, task_ids, cap_usd) -- or nothing below
+    runs, spend_cap.authorize included. The check sits here rather than in a
+    CLI front end for the same reason the spend cap sits in the core: a caller
+    that reaches execute() directly has skipped every politer surface, and
+    this is the one gate on the way to spending.
 
     The loop, in order, per task:
 
@@ -261,6 +269,25 @@ def execute(request, invoke=None):
          append_usage_row, and add its cost to the running spend, which the next
          iteration's authorize() sees. That is how a multi-task run stops.
     """
+    # Imported here, not at module top: disclosure imports this module for the
+    # path table and the env allowlist; a top-level import back would be a cycle.
+    from gauntlet_playground import disclosure as _disclosure
+    expected = _disclosure.fingerprint(request.model, request.task_ids,
+                                       request.cap_usd)
+    supplied = getattr(disclosed, "fingerprint", None)
+    if supplied != expected:
+        what = ("nothing was disclosed: execute() was called without "
+                "disclosed=" if supplied is None else
+                f"the disclosure handed back carries fingerprint {supplied}, "
+                f"and this request's is {expected} -- it was shown for a "
+                f"different (model, task set, cap) and does not authorize "
+                f"this one")
+        raise _disclosure.DisclosureRequired(
+            f"{what}. Build the disclosure for THIS request with "
+            f"disclosure.disclose(request, path), show it, and pass it back "
+            f"as execute(request, ..., disclosed=<that disclosure>); nothing "
+            f"below this gate runs without a matching acknowledgement")
+
     invoke = _invoke_api_key_cli if invoke is None else invoke
     model_id, spec = registry.resolve_model(request.model)
     family = spec["family"]
