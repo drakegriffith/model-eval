@@ -38,6 +38,22 @@ and it is checked against the data rather than printed over it: an axis declared
 flat by design that comes back MEASURED means a de-saturated tier has arrived,
 which is news, and `flatness_note` says so instead of repeating a stale claim.
 
+THE EFFORT DIAL IS THREE ANSWERS, NOT ONE (ticket 45). Every dot carries a badge
+saying what pulling the effort knob does for that model: DEAD (the knob does
+nothing measurable), BACKWARDS (the knob runs the wrong way), WEAK-BUT-REAL (the
+knob does something we cannot yet credit) -- plus REAL, UNREPLICATED and
+INSUFFICIENT, because a map with a fallback bucket is a map that renders a state
+nobody decided on. Those are three different pieces of advice and they were one
+word before this ticket. The classification is NOT made here: `effort_verdict`
+is core, its thresholds were pre-committed before the data was inspected, and
+this module imports the module and asks it per model. No threshold is restated
+under product/ -- runner/tests/test_effort_badges.py asserts that two ways, and
+asserts the other direction too, that monkeypatching a core constant changes the
+badge this surface renders. The badges are told apart by GLYPH and LABEL here
+and by marker SHAPE in render.py; nothing about them is a colour, so they
+survive a greyscale print, and they ride in `honesty_lines`, so they survive a
+crop.
+
 WHAT THIS SURFACE DOES NOT COMPUTE. Pass is `stats.is_pass`, output tokens are
 `stats.summary_tokens` (output-only since ticket 31 quarantined `tokens_in`), the
 clean-exit filter is `corpus_gates.summarizable_rows`, and the detectable-effect
@@ -50,6 +66,7 @@ import re
 from typing import NamedTuple
 
 import corpus_gates
+import effort_verdict
 import provenance
 import stats
 
@@ -350,6 +367,284 @@ def refreshed_value(live_values, corpus_values):
 
 
 # --------------------------------------------------------------------------- #
+# The effort-dial badges (ticket 45)
+# --------------------------------------------------------------------------- #
+
+
+class Badge(NamedTuple):
+    """One state of the effort dial, told apart WITHOUT colour.
+
+    `glyph` is the mark that goes next to the dot and into the legend, and it is
+    the reason a greyscale print still separates the states -- shape and label
+    carry the whole distinction, so no field here is a colour. `meaning` is the
+    advice in the reader's words, not the classifier's: a verdict string names
+    the branch that fired, a badge names what to do about it.
+
+    `credited` is the one bit downstream may act on. REAL is the only credited
+    state, because that is the only one effort_verdict lets contribute a frontier
+    point per tier; everything else collapses to one. Reading it off the badge
+    keeps that rule where the badge is rather than re-derived at each caller.
+    """
+    key: str
+    glyph: str
+    label: str
+    meaning: str
+    credited: bool
+
+
+BADGE_DEAD = "dead"
+BADGE_BACKWARDS = "backwards"
+BADGE_WEAK_BUT_REAL = "weak-but-real"
+BADGE_REAL = "real"
+BADGE_UNREPLICATED = "unreplicated"
+BADGE_INSUFFICIENT = "insufficient"
+
+# THE MAP IS TOTAL AND HAS NO DEFAULT BUCKET. Every verdict effort_verdict can
+# emit is a key here, and no two verdicts share a badge. The collapse this ticket
+# exists to undo is the one where NO-OP, BACKWARDS and AMBIGUOUS all rendered as
+# a single hedge: "the knob does nothing", "the knob runs the wrong way" and "the
+# knob does something we cannot yet credit" are three pieces of advice, and a
+# reader given the wrong one of the three acts on it.
+#
+# The three the ticket does not name are here for the same reason FLAT is a
+# condition and not a kind of empty: a verdict with no badge would have to land
+# in some other badge's bucket, and a state rendered under a borrowed label is
+# advice nobody decided to give. UNREPLICATED and INSUFFICIENT in particular must
+# not read as DEAD -- a dial measured flat and a dial nobody measured are the
+# distinction AC#7 is about, and `badge_line` states each one's n so the two
+# cannot print alike.
+VERDICT_BADGES = {
+    "REAL": Badge(
+        BADGE_REAL, "(^^)", "REAL",
+        "the dial moves output size, and the move clears this model's own "
+        "run-to-run noise", True),
+    "NO-OP": Badge(
+        BADGE_DEAD, "(==)", "DEAD",
+        "the dial does nothing measurable -- every rung writes the same amount",
+        False),
+    "BACKWARDS": Badge(
+        BADGE_BACKWARDS, "(<<)", "BACKWARDS",
+        "the dial runs the wrong way -- the top rung writes LESS than the "
+        "bottom", False),
+    "AMBIGUOUS": Badge(
+        BADGE_WEAK_BUT_REAL, "(~~)", "WEAK-BUT-REAL",
+        "the dial does something we cannot yet credit -- forwards, but not "
+        "clear of the noise", False),
+    "UNREPLICATED": Badge(
+        BADGE_UNREPLICATED, "(?n)", "UNREPLICATED",
+        "nothing was re-run, so no spread can be credited yet -- the absence of "
+        "a reading, not a flat one", False),
+    "INSUFFICIENT": Badge(
+        BADGE_INSUFFICIENT, "(..)", "INSUFFICIENT",
+        "fewer than two rungs were probed, so there is no ladder to read -- "
+        "again an absent reading, not a flat one", False),
+}
+
+BADGES = tuple(VERDICT_BADGES.values())
+BADGES_BY_KEY = {b.key: b for b in BADGES}
+
+
+def badge_for(verdict):
+    """The badge for one core verdict. TOTAL, and with NO fallback bucket.
+
+    An unmapped verdict raises rather than landing in a default badge. The
+    failure mode being refused is the quiet one: core grows a seventh verdict,
+    the surface renders it under whichever badge the `.get` default named, and
+    the picture gives confident advice about a state this module has never heard
+    of. A KeyError naming the verdict is the loud version of the same event.
+    """
+    try:
+        return VERDICT_BADGES[verdict]
+    except (KeyError, TypeError):
+        raise KeyError(
+            f"no badge for verdict {verdict!r} -- the badge map is total over "
+            f"effort_verdict.classify()'s verdicts "
+            f"({', '.join(sorted(VERDICT_BADGES))}) and carries no default "
+            f"bucket, because a state rendered under a borrowed badge is "
+            f"advice nobody decided to give") from None
+
+
+def badge_rule(verdict):
+    """The threshold that decided this verdict, in a reader's words.
+
+    BUILT AT CALL TIME, and that is the point. A module-level f-string would
+    interpolate the constants once, when this file was written, and keep quoting
+    those numbers after core changed its mind -- the badge would then be right
+    and its stated reason wrong, which is worse than either. Every number below
+    is an attribute read on the core module at the moment the sentence is made,
+    so runner/tests/test_effort_badges.py can monkeypatch a constant and watch
+    the sentence follow.
+
+    Keyed by verdict like `VERDICT_BADGES`, and every verdict carrying a badge
+    is asserted to carry a rule too, so a state cannot reach the block with a
+    label and no stated reason -- and an unmapped verdict raises here for the
+    same reason it raises in `badge_for`.
+    """
+    rules = {
+        "REAL": (f"spread cleared {effort_verdict.REAL_SPREAD:.2f}x, the ladder "
+                 f"trends upward, and between-rung variation cleared "
+                 f"{effort_verdict.NOISE_MARGIN:.1f}x the within-rung noise"),
+        "NO-OP": (f"spread stayed under the {effort_verdict.NOOP_SPREAD:.2f}x "
+                  f"floor"),
+        "BACKWARDS": (f"unresolved, and the top rung wrote at or under "
+                      f"{effort_verdict.BACKWARDS_END_RATIO:.2f} of what the "
+                      f"bottom rung wrote"),
+        "AMBIGUOUS": (f"spread sat between the "
+                      f"{effort_verdict.NOOP_SPREAD:.2f}x floor and the "
+                      f"{effort_verdict.REAL_SPREAD:.2f}x bar, or the noise "
+                      f"swallowed it"),
+        "UNREPLICATED": (f"a rung has fewer than "
+                         f"{effort_verdict.MIN_N_FOR_VERDICT} run(s), so there "
+                         f"is no within-rung noise to compare the spread "
+                         f"against"),
+        "INSUFFICIENT": (f"fewer than two of the "
+                         f"{len(effort_verdict.TIER_ORDER)} rungs core ranks "
+                         f"were probed"),
+    }
+    return rules[verdict]
+
+
+class BadgeReading(NamedTuple):
+    """One model's badge, with everything a reader needs to judge it.
+
+    The counts are fields rather than a formatted string because AC#7 is about a
+    distinction that only survives if it is carried: a dial measured flat over
+    two runs per rung and a dial nobody re-ran are different facts that render
+    identically the moment the n stops travelling with the badge.
+
+    `off_ladder` is the rungs core's TIER_ORDER does not rank. They cannot enter
+    the verdict -- ordering is load-bearing, `end_ratio` is the top rung over the
+    bottom -- and a row that leaves the calculation uncounted is a row nobody
+    knows is missing, so it leaves counted.
+    """
+    model: str
+    badge: Badge
+    verdict: str
+    rungs: tuple
+    n_rows: int
+    off_ladder: tuple
+    tier: Tier
+    corpus_inspected: int
+    corpus_kept: int
+    spread: float
+    end_ratio: float
+
+
+def effort_badges(corpus_by_config, models, tier, corpus_inspected, corpus_kept):
+    """One BadgeReading per selected model -> {model: BadgeReading}.
+
+    THE KEY IS THE EXACT MODEL STRING. No prefix, no family, no split on a date
+    suffix: `claude-haiku-4-5` and `claude-haiku-4-5-20251001` are two endpoints
+    that ticket 13 measured behaving differently, and any grouping that treats
+    the shorter as a prefix of the longer merges a dead dial into a backwards one
+    and reports one answer where the corpus holds two.
+
+    READ ON OUTPUT TOKENS, whatever the visitor put on the X axis. The dial is a
+    claim about how much work the model does, and effort_verdict computes spread
+    on output tokens because that is where reasoning is billed. A badge that
+    changed meaning when the reader switched the X axis to latency would be a
+    different measurement wearing the same label.
+
+    CORPUS ROWS ONLY, never the visitor's live run. The verdict needs replication
+    to separate signal from a model differing from itself, which a handful of
+    live attempts cannot supply, and topping the corpus ladder up with live
+    numbers is exactly the pooling `refreshed_value` refuses.
+    """
+    read = _corpus_reader(TOKENS_OUT)
+    readings = {}
+    for model in sorted(models):
+        by_effort = {effort: rows for (m, effort), rows
+                     in corpus_by_config.items() if m == model}
+        tiers = [(effort, [float(read(r)) for r in by_effort[effort]])
+                 for effort in effort_verdict.TIER_ORDER if effort in by_effort]
+        result = effort_verdict.classify(tiers)
+        readings[model] = BadgeReading(
+            model=model,
+            badge=badge_for(result["verdict"]),
+            verdict=result["verdict"],
+            rungs=tuple((effort, len(v)) for effort, v in tiers),
+            n_rows=sum(len(v) for _, v in tiers),
+            off_ladder=tuple(sorted(
+                (effort, len(rows)) for effort, rows in by_effort.items()
+                if effort not in effort_verdict.TIER_ORDER)),
+            tier=tier,
+            corpus_inspected=corpus_inspected,
+            corpus_kept=corpus_kept,
+            spread=result["spread"],
+            end_ratio=result["end_ratio"],
+        )
+    return readings
+
+
+def _rung_text(rungs):
+    return " ".join(f"{effort}=n{n}" for effort, n in rungs) or "none"
+
+
+def badge_line(reading):
+    """One model's badge and its basis, on ONE line.
+
+    The basis is not decoration. "DEAD" over eighteen runs and "DEAD" over a
+    corpus nobody replicated are the same four letters and different advice, so
+    the n per rung, the row total, the tab the rows came from and the sealed
+    corpus's own inspected/kept counts all travel with the badge.
+
+    Terse on purpose, and the reason is geometric rather than aesthetic. This
+    line goes inside the axes rectangle (ticket 44's crop rule), the block grows
+    by one of these per model, and a chart over the current sealed corpus badges
+    eight. Spelling out what each badge MEANS here would repeat the same three
+    sentences eight times and push the block off the bottom of the frame, which
+    is the crop failing quietly. The meanings are stated once per badge present,
+    above, where the cost is bounded by the number of badges rather than by the
+    number of models.
+    """
+    badge = reading.badge
+    line = (f"  {badge.glyph} {badge.label} {reading.model} "
+            f"n={reading.n_rows} {_rung_text(reading.rungs)} "
+            f"tab {reading.tier.key} corpus inspected={reading.corpus_inspected}"
+            f" kept={reading.corpus_kept}")
+    if reading.off_ladder:
+        line += (f" NOT-ON-LADDER {_rung_text(reading.off_ladder)} "
+                 f"(effort name(s) core does not rank: counted here, left out "
+                 f"of the verdict, never dropped)")
+    return line
+
+
+def badge_lines(chart):
+    """The badge block: the legend, what each badge present means, then the
+    per-model basis.
+
+    Three parts because they scale differently, and the block has to fit inside
+    the axes rectangle to survive the crop. The legend is fixed at six entries.
+    The meanings cost one entry per badge ACTUALLY ON THIS CHART, so a tab where
+    every dial is dead says what dead means once. Only the last part grows with
+    the number of models, and it is one short line each.
+
+    The legend goes first and always, including on a chart that badges nothing,
+    because it is what lets somebody holding a cropped greyscale screenshot
+    decode a glyph they can see next to a dot.
+
+    Zero badged models is its own sentence. A block that simply stopped after the
+    legend would be byte-identical to one whose models all went missing, and zero
+    is a result that needs saying rather than a silence.
+    """
+    lines = ["effort-dial badges (shape and label, never colour): "
+             + " | ".join(f"{b.glyph} {b.label}" for b in BADGES)]
+    if not chart.badges:
+        lines.append(
+            "effort dial: 0 model(s) badged -- "
+            + (chart.zero_rows_reason
+               or "no selected model has corpus rows on this tab, so there is "
+                  "no ladder to read the dial off"))
+        return tuple(lines)
+    verdicts = {r.verdict for r in chart.badges.values()}
+    lines += [f"{badge.glyph} {badge.label} [{verdict}] -- {badge.meaning}; "
+              f"{badge_rule(verdict)}"
+              for verdict, badge in VERDICT_BADGES.items() if verdict in verdicts]
+    lines += [badge_line(chart.badges[model]) for model in sorted(chart.badges)]
+    return tuple(lines)
+
+
+# --------------------------------------------------------------------------- #
 # Points and the non-dominated set
 # --------------------------------------------------------------------------- #
 
@@ -357,13 +652,20 @@ def refreshed_value(live_values, corpus_values):
 class Point(NamedTuple):
     """One (model x effort) dot. Effort is a field, never marginalized into the
     model: 14a's ruling is that every effort tier of a selected model renders as
-    its own dot, so a model with four tiers is four rows here."""
+    its own dot, so a model with four tiers is four rows here.
+
+    `badge` is the model's effort-dial badge key -- the same badge on every rung
+    of one model, because the verdict is a reading of the whole ladder. It is
+    defaulted so a hand-built Point stays constructible; every Point `build_chart`
+    makes carries one, and render.py's marker map KeyErrors on anything else.
+    """
     model: str
     effort: str
     x: provenance.Value
     y: provenance.Value
     n_x: int
     n_y: int
+    badge: str = None
 
     @property
     def config(self):
@@ -443,6 +745,10 @@ class Chart(NamedTuple):
     `zero_rows_reason` is None or a sentence. It is a field rather than something
     the renderer infers from an empty `points` tuple, because "why" is the half
     that makes 0 rows a result instead of a blank.
+
+    `badges` maps EXACT model string to BadgeReading, one entry per selected
+    model -- a model, not a config, because the effort verdict is a reading of
+    the whole ladder and every rung of one model wears its answer.
     """
     tier: Tier
     x_axis: Axis
@@ -459,6 +765,7 @@ class Chart(NamedTuple):
     untiered: dict
     live_configs: tuple
     zero_rows_reason: str
+    badges: dict
 
 
 def build_chart(corpus_rows, tier_key=DEFAULT_TIER, x_axis_key=TOKENS_OUT.key,
@@ -503,6 +810,11 @@ def build_chart(corpus_rows, tier_key=DEFAULT_TIER, x_axis_key=TOKENS_OUT.key,
     configs = sorted({c for c in corpus_by_config if c[0] in selected}
                      | {c for c in live_by_config if c[0] in selected})
 
+    # Badged before the points are built, so every dot can carry its model's
+    # answer rather than the renderer joining two structures back together.
+    badges = effort_badges(corpus_by_config, selected, tier, inspected,
+                           len(kept))
+
     x_read_corpus, y_read_corpus = _corpus_reader(x_axis), _corpus_reader(y_axis)
     x_read_live = _live_reader(x_axis)
 
@@ -528,7 +840,11 @@ def build_chart(corpus_rows, tier_key=DEFAULT_TIER, x_axis_key=TOKENS_OUT.key,
 
         if x_value is None or y_value is None:
             continue
-        points.append(Point(model, effort, x_value, y_value, n_x, n_y))
+        # Indexed, not `.get`: a point whose model has no badge is a model that
+        # escaped the selection the badges were built over, and a dot with a
+        # blank badge would render as a state rather than as the defect it is.
+        points.append(Point(model, effort, x_value, y_value, n_x, n_y,
+                            badges[model].badge.key))
 
     points = tuple(points)
     x_condition = classify([p.x for p in points])
@@ -553,6 +869,7 @@ def build_chart(corpus_rows, tier_key=DEFAULT_TIER, x_axis_key=TOKENS_OUT.key,
         live_configs=tuple(sorted(live_by_config)),
         zero_rows_reason=_zero_rows_reason(tier, tier_rows, models, selected,
                                            points),
+        badges=badges,
     )
 
 
@@ -665,6 +982,11 @@ def honesty_lines(chart):
     alone, which is why render.py puts them INSIDE the plotting rectangle rather
     than in a title or a caption. The list is built here, in the module with no
     third-party dependency, so a test can check the sentences without drawing.
+
+    The badge block is part of the crop for the same reason (ticket 45 AC#1): a
+    reader looking at a cropped greyscale screenshot can see the marker shapes
+    but has nothing to decode them with, and "this dial is dead" and "nobody
+    measured this dial" are the two the legend and the stated n keep apart.
     """
     x_label, y_label = axis_labels(chart)
     lines = [f"X | {x_label}", f"Y | {y_label}"]
@@ -672,6 +994,7 @@ def honesty_lines(chart):
     lines.append(flatness_note(chart.y_axis, chart.y_condition, n_y))
     lines.append(frontier_note(chart))
     lines.append(format_row_count(chart))
+    lines += list(badge_lines(chart))
     return tuple(lines)
 
 
@@ -690,10 +1013,14 @@ def format_chart(chart):
             f"{k}={v} row(s)" for k, v in sorted(chart.untiered.items())))
     for p in sorted(chart.points, key=lambda p: (p.model, p.effort)):
         mark = "*" if p.config in chart.frontier else " "
+        # Indexed on the point's own badge key, so a dot and its line cannot
+        # disagree, and an unknown key is a KeyError rather than a blank column.
+        badge = BADGES_BY_KEY[p.badge]
         lines.append(
             f" {mark} {p.model:26s} effort={p.effort:7s} "
             f"{chart.x_axis.key}={p.x.number:10.2f} [{p.x.provenance}, n={p.n_x}] "
-            f"{chart.y_axis.key}={p.y.number:.3f} [{p.y.provenance}, n={p.n_y}]")
+            f"{chart.y_axis.key}={p.y.number:.3f} [{p.y.provenance}, n={p.n_y}] "
+            f"{badge.glyph} {badge.label:13s}")
     lines.append("  * = non-dominated. No score, no rank, no ordering below the "
                  "frontier")
     return "\n".join(lines)

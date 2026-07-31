@@ -21,6 +21,13 @@ rectangle and is the first thing a crop or a screenshot loses; the dots are
 the last. So the block is drawn in axes coordinates, inside the frame, and
 whatever survives a crop of this picture survives with its caveats attached.
 
+SHAPE CARRIES THE EFFORT-DIAL BADGE, NOT COLOUR (ticket 45). Colour on a dot
+already means provenance, and a second meaning on the same channel would be
+unreadable even before the print goes greyscale. So each badge gets its own
+marker shape, the badge's glyph and label are spelled out in the dot's own
+annotation, and the legend that decodes the shapes rides inside the honesty
+block. All three survive a crop; none of them survives being told apart by hue.
+
 THE GATE IS CHECKED IN THE PROCESS THAT DRAWS. `draw` calls
 surface.assert_flatness_is_not_missing_data() before it touches the canvas.
 surface.py already ran it at import time and the tests prove it in the tree
@@ -45,7 +52,30 @@ _PROVENANCE_COLOR = {
     provenance.CORPUS: "#1f5fa8",
 }
 
-_HONESTY_WRAP_COLS = 96
+# One fixed MARKER SHAPE per effort-dial badge, and shape rather than colour is
+# the whole point (ticket 45 AC#1): the colour on a dot already means its
+# provenance, a greyscale print keeps none of it, and a reader deciding whether
+# to touch the effort knob needs the answer to survive both. Keyed by
+# surface's badge keys and total over them -- an unbadged dot is a KeyError
+# here, not a default marker pretending it was classified, the same rule
+# _PROVENANCE_COLOR follows one line up.
+_BADGE_MARKER = {
+    surface.BADGE_REAL: "^",            # rises with the dial
+    surface.BADGE_DEAD: "s",            # flat, four square sides
+    surface.BADGE_BACKWARDS: "v",       # points the other way
+    surface.BADGE_WEAK_BUT_REAL: "D",
+    surface.BADGE_UNREPLICATED: "P",
+    surface.BADGE_INSUFFICIENT: "X",
+}
+
+# Widened from 96 on 2026-07-31 (ticket 45). The block now carries one basis
+# line per badged model, and the block has to fit INSIDE the axes rectangle or
+# the crop rule it exists for stops holding. Wrapping a 110-column basis line at
+# 96 spent a second line on eight characters, eight times over. 108 columns is
+# still comfortably inside the frame horizontally -- test_render.py measures
+# both directions against the real sealed corpus, which is the chart that has
+# the most models on it and the one that caught the overflow.
+_HONESTY_WRAP_COLS = 108
 
 
 def _wrap(lines):
@@ -83,15 +113,21 @@ def draw(chart):
     x_mid = (min(xs) + max(xs)) / 2 if xs else 0.0
     for p in chart.points:
         color = _PROVENANCE_COLOR[p.x.provenance]
-        ax.scatter(p.x.number, p.y.number, s=42, color=color, zorder=3)
+        badge = surface.BADGES_BY_KEY[p.badge]
+        ax.scatter(p.x.number, p.y.number, s=42, color=color,
+                   marker=_BADGE_MARKER[p.badge], zorder=3)
         if p.config in chart.frontier:
             ax.scatter(p.x.number, p.y.number, s=160, facecolors="none",
                        edgecolors="#333333", linewidths=1.2, zorder=2)
         # Labels hang off their dot toward the frame; a dot in the right half
         # of the span would push its label past the right edge, so those hang
         # left instead. On a flat X every dot is at x_mid and hangs right.
+        # The badge is spelled out beside the dot as well as drawn as its
+        # shape: a marker is only decodable against the legend, and the label
+        # is what a reader who cropped the legend away still has.
         on_right = p.x.number > x_mid
-        ax.annotate(f"{p.model} @ {p.effort} [{p.x.provenance}]",
+        ax.annotate(f"{p.model} @ {p.effort} [{p.x.provenance}] "
+                    f"{badge.glyph} {badge.label}",
                     (p.x.number, p.y.number), textcoords="offset points",
                     xytext=(-7, -3) if on_right else (7, -3),
                     ha="right" if on_right else "left", fontsize=8)
