@@ -64,11 +64,12 @@ PRODUCT_DIR = os.path.join(REPO_ROOT, "product")
 # comment is the standing reason to reject it.
 #
 # Membership is B''s core as of 2026-07-29: the modules extracted or already
-# leaf. PRICING IS ABSENT BY FACT, NOT OVERSIGHT -- the consult's fifth core
-# surface is not yet a module (runner/tables.py:29-30 are self-labelled
-# placeholder prices). When the pricing ticket lands, adding it here is a
-# deliberate edit in BOTH copies plus a `CORE_MODULE = True` in the new module.
-# That three-place cost is the intended friction, not a defect to design away.
+# leaf. PRICING IS ABSENT BY RULING, NOT OVERSIGHT -- ticket 20 (option C)
+# removed tables.py's placeholder prices outright: a price is the reader's to
+# compute from a rate the reader supplies, so no module of ours renders one.
+# If a reader-rate module ever lands, adding it here is a deliberate edit in
+# BOTH copies plus a `CORE_MODULE = True` in the new module. That three-place
+# cost is the intended friction, not a defect to design away.
 #
 # corpus_gates.py joined 2026-07-30 (ticket 31 AC#3): stats.py imports it, and a
 # core module may only import the stdlib and other core modules, so leaving it
@@ -304,8 +305,8 @@ def report(directions):
     lines.append("  core is portable or extractable. Known-broken, unaffected by this gate:")
     for site in KNOWN_BROKEN_PORTABILITY:
         lines.append(f"    - {site}")
-    lines.append("  pricing is absent from the core list by fact, not oversight: it is not")
-    lines.append("  yet a module (runner/tables.py:29-30 are placeholder prices).")
+    lines.append("  pricing is absent from the core list by ruling, not oversight: ticket 20")
+    lines.append("  removed tables.py's placeholder prices; no module renders a price.")
     lines.append("")
     lines.append(f"GATE: {summary(directions)}")
     return "\n".join(lines)
