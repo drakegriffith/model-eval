@@ -64,6 +64,9 @@ gauntlet-playground-run = "gauntlet_playground.executor:main"
 # the chart cannot be a subcommand of it. Lives in render.py because saving a
 # PNG is the drawing half's job and the only one that needs the chart extra.
 gauntlet-playground-chart = "gauntlet_playground.render:main"
+# Ticket 41, slice S6. Same reasoning: the intake form stores submissions and
+# runs nothing, a different report than either script above.
+gauntlet-playground-intake = "gauntlet_playground.intake:main"
 
 [tool.setuptools]
 packages = ["gauntlet_playground"]
