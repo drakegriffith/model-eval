@@ -438,14 +438,26 @@ class TestAxisLabels:
 
 class TestHonestyLines:
 
-    def test_the_five_claims_in_drawing_order(self):
+    def test_the_claims_in_drawing_order(self):
+        """Ticket 44's five claims, then ticket 45's badge block -- the legend
+        and one line per badged model, in that order.
+
+        Counted, not merely present: a claim that stopped being drawn and a
+        claim drawn twice both pass a "the text is in there somewhere" check,
+        and every line in this tuple is one render.py puts inside the crop.
+        """
         chart = surface.build_chart(_corpus_two_configs())
         lines = surface.honesty_lines(chart)
-        assert len(lines) == 5
+        verdicts = {r.verdict for r in chart.badges.values()}
+        assert (len(chart.badges), len(verdicts)) == (2, 1)
+        assert len(lines) == 5 + 1 + len(verdicts) + len(chart.badges) == 9
         assert lines[0].startswith("X | ") and lines[1].startswith("Y | ")
         assert "FLAT BY DESIGN" in lines[2]
         assert "cost ordering" in lines[3]
         assert "inspected=4 kept=4" in lines[4]
+        assert lines[5].startswith("effort-dial badges")
+        assert lines[6].startswith(surface.badge_for("INSUFFICIENT").glyph)
+        assert [line.split()[2] for line in lines[7:]] == sorted(chart.badges)
 
     def test_format_chart_shows_all_four_tabs_and_no_ranking(self):
         text = surface.format_chart(surface.build_chart(_corpus_two_configs()))
