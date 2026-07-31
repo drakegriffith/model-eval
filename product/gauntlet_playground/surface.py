@@ -740,7 +740,10 @@ def printed_sentence(report, corpus_rows=(), tier_key=DEFAULT_TIER):
     no matter how long the visitor runs. The visitor's own attempt count says
     what size of gap they could have seen if one existed. Printing only the
     second reads as "run more attempts and you will find out", which is false on
-    a saturated catalog.
+    a saturated catalog. The saturation leg is conditioned on what the corpus
+    actually shows -- `_quality_sentence` withdraws it the same way
+    `flatness_note` withdraws FLAT BY DESIGN -- so a de-saturated tier is
+    announced, not papered over with the ruling's stale claim.
 
     A run where nothing ran gets a sentence saying so. It does not get a mean
     over zero attempts -- provenance.mean refuses that, and this returns the
@@ -753,12 +756,22 @@ def printed_sentence(report, corpus_rows=(), tier_key=DEFAULT_TIER):
 
     if not ran:
         statuses = ", ".join(sorted({o.status for o in report.outcomes})) or "none"
+        corpus_n, corpus_passes = _corpus_quality_counts(corpus_rows, tier_key)
+        if corpus_n and corpus_passes == corpus_n:
+            no_quality = ("the public catalog is saturated, so a run that had "
+                          "completed would still not have produced a quality "
+                          "comparison")
+        elif corpus_n:
+            no_quality = ("the public catalog is no longer saturated on this "
+                          "tier, but a run where nothing completed produces "
+                          "no quality evidence to compare against it")
+        else:
+            no_quality = ("the sealed corpus has no rows on this tier, and a "
+                          "run where nothing completed adds none")
         text = (f"0 of {n_total} task(s) ran on your key for "
                 f"{report.model_id} (outcome: {statuses}), so there is no "
                 f"latency and no output-token size to report -- and no quality "
-                f"result either: the public catalog is saturated, so a run that "
-                f"had completed would still not have produced a quality "
-                f"comparison.")
+                f"result either: {no_quality}.")
         return _refuse_money(text)
 
     tasks = ", ".join(sorted({o.task_id for o in ran}))
@@ -774,22 +787,48 @@ def printed_sentence(report, corpus_rows=(), tier_key=DEFAULT_TIER):
     mde_txt = (f"{round(mde * 100)} points" if mde is not None
                else "any gap at all -- your attempt count cannot resolve one")
 
-    saturation = (
-        f"all {corpus_passes} of {corpus_n} sealed-corpus runs on this tier "
-        f"passed" if corpus_n else
-        "the sealed corpus has no rows on this tier")
-
     text = (
         f"On {len(ran)} of {n_total} task(s) ({tasks}) at effort={effort}, on "
         f"your key: {report.model_id} finished in {latency.number:.1f}s and "
         f"wrote {tokens.number:,.0f} output tokens. "
-        f"Quality is a non-result here, twice over: {saturation}, so the public "
-        f"catalog is saturated and its quality axis is flat by design; and at "
-        f"{len(ran)} attempt(s) you could not have seen a quality gap smaller "
-        f"than {mde_txt} even on a catalog that discriminated. "
+        f"{_quality_sentence(corpus_n, corpus_passes, len(ran), mde_txt)} "
         f"This is a speed-and-size measurement, not a verdict on which model is "
         f"better.")
     return _refuse_money(text)
+
+
+def _quality_sentence(corpus_n, corpus_passes, n_ran, mde_txt):
+    """The quality clause, conditioned the way `flatness_note` is.
+
+    Three cases, because the catalog leg of the non-result can fail while the
+    power leg stands:
+
+      - saturated (every kept row on the tier passed): the ruling's claim,
+        verbatim -- the catalog cannot discriminate, and the visitor's attempt
+        count could not have resolved a gap. Two legs, both standing.
+      - de-saturated (a kept row failed): repeating "flat by design" here would
+        be a stale label over live data -- the same argument as
+        `flatness_note`'s NO LONGER FLAT arm -- so this says the opposite out
+        loud, and the non-result stands on the power leg alone.
+      - no rows on the tier: a saturation claim over zero runs is
+        indistinguishable from one over all of them, so none is made; the
+        non-result stands on the absence of corpus evidence plus the power leg.
+    """
+    power = (f"at {n_ran} attempt(s) you could not have seen a quality gap "
+             f"smaller than {mde_txt} even on a catalog that discriminated")
+    if not corpus_n:
+        return (f"Quality is a non-result here, twice over: the sealed corpus "
+                f"has no rows on this tier, so no saturation claim is made "
+                f"over zero runs; and {power}.")
+    if corpus_passes == corpus_n:
+        return (f"Quality is a non-result here, twice over: all "
+                f"{corpus_passes} of {corpus_n} sealed-corpus runs on this "
+                f"tier passed, so the public catalog is saturated and its "
+                f"quality axis is flat by design; and {power}.")
+    return (f"Quality is still a non-result for your run: only "
+            f"{corpus_passes} of {corpus_n} sealed-corpus runs on this tier "
+            f"passed, so the public catalog is no longer saturated and the "
+            f"flat-by-design ruling does not hold on this tier; but {power}.")
 
 
 def _corpus_quality_counts(corpus_rows, tier_key):

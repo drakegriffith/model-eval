@@ -487,6 +487,31 @@ class TestPrintedSentence:
     def test_an_empty_corpus_is_said_not_papered_over(self):
         text = surface.printed_sentence(report([ran()]), corpus_rows=())
         assert "no rows on this tier" in text
+        assert "no saturation claim" in text
+        assert "catalog is saturated" not in text
+
+    def test_a_desaturated_corpus_is_not_called_saturated(self):
+        """The stale-label defect: one failing corpus row must flip the
+        sentence the way flatness_note flips to NO LONGER FLAT -- the by-design
+        claim is withdrawn out loud, not repeated over live contrary data."""
+        rows = _corpus_two_configs() + [crow("kimi-k3", passed=False)]
+        text = surface.printed_sentence(report([ran()]), rows)
+        assert "only 4 of 5 sealed-corpus runs" in text
+        assert "no longer saturated" in text
+        assert "is flat by design" not in text
+        assert "any gap at all" in text      # the power leg still stands alone
+
+    def test_nothing_ran_on_a_desaturated_corpus_stays_honest_too(self):
+        rows = _corpus_two_configs() + [crow("kimi-k3", passed=False)]
+        text = surface.printed_sentence(report([refused()]), rows)
+        assert "no quality result either" in text
+        assert "no longer saturated" in text
+        assert "catalog is saturated" not in text
+
+    def test_nothing_ran_and_no_corpus_makes_no_catalog_claim(self):
+        text = surface.printed_sentence(report([refused()]), ())
+        assert "no rows on this tier" in text
+        assert "saturated" not in text
 
     def test_a_run_where_nothing_ran_gets_a_sentence_not_a_traceback(self):
         rep = report([refused(), refused(task_id="t1-py-b")])
