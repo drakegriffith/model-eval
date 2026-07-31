@@ -9,21 +9,28 @@ Tables (per spec section 5):
   3. Harness delta per model (pass% + tokens, bare -> harnessed)
   4. Hybrid vs solo on T3
   5. Variance min/med/max per cell ("same prompt, 3 outcomes")
-  6. When-to-use-which decision matrix + $/task
+  6. When-to-use-which decision matrix + true input tokens/task
 
 Emits GitHub-flavored markdown to stdout (or --out FILE).
 Degrades gracefully: any table with no matching rows prints "(no data)".
 
-$/task uses documented list-price PLACEHOLDERS (runs are on subscription, so the
-dollar column is a list-price-equivalent estimate, not billed spend).
+NO MONEY COLUMN (ticket 20, option C). These tables publish measured tokens
+only. A price is the reader's to compute from a rate the READER supplies, and
+any such rate input must take a cache-read rate as well as a fresh-input rate:
+86-94% of session tokens are cache reads billed at roughly a tenth, so one rate
+times these totals overstates 4.4x-6.5x (ticket 20 §5). The per-alias
+list-price placeholders that used to live here were removed under ticket 20
+("must never reach the dashboard"); the one real metered rate (kimi via
+Moonshot) stays in usage_ledger, where it caps spend rather than rendering.
 
 TOKEN AXIS (ticket 31 AC#3). Every `tokens_in + tokens_out` total is gone; the
 token columns report `tokens_out` ONLY and say so in their headers. 64 of 268
 rows carry a pre-fix `tokens_in` undercounted 30x-400x, and a total that silently
 mixes 204 good inputs with 64 bad ones is worse than no input axis at all.
-`$/task` is the one cell that genuinely needs both axes, so it cannot fall back
-to tokens_out; it resolves each row's input through `corpus_gates` +
-`usage_ledger` and drops -- loudly, with a count -- what it cannot resolve.
+Table 6's input column is the one cell that genuinely needs the other axis, so
+it cannot fall back to tokens_out; it resolves each row's input through
+`corpus_gates` + `usage_ledger` and drops -- loudly, with a count -- what it
+cannot resolve.
 
 Both dispositions come from `corpus_gates`; this module holds no private copy of
 either rule.
@@ -40,19 +47,6 @@ sys.path.insert(0, RUNNER_DIR)
 
 import corpus_gates  # noqa: E402
 import usage_ledger  # noqa: E402
-
-# List-price ESTIMATES, USD per 1M tokens (input, output). Placeholders — edit to
-# taste; the dollar column is labelled as an estimate everywhere it appears.
-PRICES = {
-    "fable":  {"in": 15.0, "out": 75.0},
-    "opus":   {"in": 15.0, "out": 75.0},
-    "sol":    {"in": 10.0, "out": 40.0},
-    "hybrid": {"in": 15.0, "out": 75.0},
-    # Kimi K3 is BILLED (Moonshot API), not subscription. Cache-miss input $3.00,
-    # output $15.00 per 1M; cache-hit input is $0.30 (Moonshot reports >90% hit in
-    # coding workloads, so effective cost trends well below this row).
-    "kimi":   {"in": 3.0, "out": 15.0},
-}
 
 EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
 
@@ -90,11 +84,6 @@ def quality_by_run(judgments):
                              judge_mean(row.get("judge_codex"))) if m is not None]
         out[row.get("run_id")] = round(sum(means) / len(means), 2) if means else None
     return out
-
-
-def dollars(model, tin, tout):
-    p = PRICES.get(model, {"in": 15.0, "out": 75.0})
-    return (tin / 1e6) * p["in"] + (tout / 1e6) * p["out"]
 
 
 def out_tokens(r):
@@ -280,31 +269,32 @@ def table6_decision_matrix(rows, qual, ledger=None):
                 best, best_key = score, (key, rate, toks, rs)
         (effort, htag), rate, toks, rs = best_key
 
-        # $/task is the ONE cell that needs both axes, so it may not quietly fall
-        # back to the tokens_out-only axis the other five tables use -- a dollar
-        # figure priced off output alone is not a cheaper task, it is a wrong
-        # number wearing a dollar sign. Rows whose input cannot be resolved are
-        # dropped WITH their count; a cell that lost every row says unavailable
-        # and why, because an empty average and a real one must not render alike.
-        priced = []
+        # The input column is the ONE cell that needs the other axis, so it may
+        # not quietly fall back to the tokens_out-only axis the other five tables
+        # use. Rows whose input cannot be resolved are dropped WITH their count;
+        # a cell that lost every row says unavailable and why, because an empty
+        # average and a real one must not render alike. No money renders here:
+        # a price is the reader's to compute (ticket 20, option C), and it needs
+        # the fresh/cache-read split, which a single mean cannot carry.
+        resolved = []
         for r in rs:
             tin = resolve_tokens_in(r, ledger)
             if tin is None:
                 continue
-            priced.append(dollars(model, tin, out_tokens(r)))
-        n_cell, n_priced = len(rs), len(priced)
-        if n_priced == 0:
-            dol_cell = "unavailable"
+            resolved.append(tin)
+        n_cell, n_resolved = len(rs), len(resolved)
+        if n_resolved == 0:
+            tin_cell = "unavailable"
             dropped_note.append(
                 f"`{model}`: 0 of {n_cell} rows in the winning cell have a true "
                 f"`tokens_in` (all quarantined pre-fix)")
-        elif n_priced < n_cell:
-            dol_cell = f"${mean(priced):.4f} (n={n_priced}/{n_cell})"
+        elif n_resolved < n_cell:
+            tin_cell = f"{fnum(mean(resolved))} (n={n_resolved}/{n_cell})"
             dropped_note.append(
-                f"`{model}`: priced over {n_priced} of {n_cell} rows; "
-                f"{n_cell - n_priced} dropped for want of a true `tokens_in`")
+                f"`{model}`: resolved over {n_resolved} of {n_cell} rows; "
+                f"{n_cell - n_resolved} dropped for want of a true `tokens_in`")
         else:
-            dol_cell = f"${mean(priced):.4f}"
+            tin_cell = fnum(mean(resolved))
 
         q = mean([qual.get(r["run_id"]) for r in rs
                   if r.get("pass") and corpus_gates.summarizable(r)])
@@ -318,18 +308,22 @@ def table6_decision_matrix(rows, qual, ledger=None):
         data.append([
             model, f"{effort}/{htag}", f"{rate_pct:.0f}%",
             fnum(q, 2) if q is not None else "-",
-            dol_cell, use,
+            tin_cell, use,
         ])
-    note = ("\n\n> `$/task` is a **list-price estimate** (runs execute on "
-            "subscription, so no per-run billing); token counts are 0 under `--mock`. "
-            "It is priced from each row's TRUE input tokens — measured on the row, "
-            "or joined from `usage.jsonl` by `run_id` for `recovered_in_ledger` "
-            "rows — never from the pre-fix `tokens_in`.\n")
+    note = ("\n\n> `input tokens/task` is each row's TRUE cache-inclusive input "
+            "— measured on the row, or joined from `usage.jsonl` by `run_id` for "
+            "`recovered_in_ledger` rows — never the pre-fix `tokens_in`; counts "
+            "are 0 under `--mock`. **No price renders here** (ticket 20, option "
+            "C): a price is computed from a rate the reader supplies, and that "
+            "computation must rate cache reads separately from fresh input — "
+            "86–94% of these tokens are cache reads billed at roughly a tenth, "
+            "so one flat rate times this column overstates 4.4×–6.5×.\n")
     if dropped_note:
-        note += "\n> **rows dropped from `$/task`**: " + "; ".join(dropped_note) + ".\n"
+        note += ("\n> **rows dropped from `input tokens/task`**: "
+                 + "; ".join(dropped_note) + ".\n")
     return md_table(
         ["model", "best config", "pass_rate", "avg_quality(/10)",
-         "$/task (est)", "when to use"], data) + note
+         "input tokens/task (true)", "when to use"], data) + note
 
 
 def build_report(results, judgments, ledger=None):
@@ -356,8 +350,8 @@ def build_report(results, judgments, ledger=None):
         + corpus_gates.format_exclusions(
             "input tokens on the row", len(results), kept_t, excl_t)
         + f"; {n_recoverable} of the excluded are recoverable from `usage.jsonl` "
-          "by `run_id` and are priced into `$/task` through that join. Token "
-          "columns elsewhere report `tokens_out` only.",
+          "by `run_id` and reach table 6's input column through that join. "
+          "Token columns elsewhere report `tokens_out` only.",
         "",
         "## 1. Pass rate x effort ladder", "",
         table1_effort_ladder(results, qual),
@@ -369,7 +363,7 @@ def build_report(results, judgments, ledger=None):
         table4_hybrid_vs_solo(results),
         "## 5. Variance per cell (same prompt, N outcomes)", "",
         table5_variance(results),
-        "## 6. When-to-use-which decision matrix + $/task", "",
+        "## 6. When-to-use-which decision matrix + true input tokens/task", "",
         table6_decision_matrix(results, qual, ledger),
     ]
     return "\n".join(parts)
