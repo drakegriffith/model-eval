@@ -77,15 +77,22 @@ def draw(chart):
         f"{'' if chart.tier.published else '  (no published tasks)'}",
         loc="left")
 
+    xs = [p.x.number for p in chart.points]
+    x_mid = (min(xs) + max(xs)) / 2 if xs else 0.0
     for p in chart.points:
         color = _PROVENANCE_COLOR[p.x.provenance]
         ax.scatter(p.x.number, p.y.number, s=42, color=color, zorder=3)
         if p.config in chart.frontier:
             ax.scatter(p.x.number, p.y.number, s=160, facecolors="none",
                        edgecolors="#333333", linewidths=1.2, zorder=2)
+        # Labels hang off their dot toward the frame; a dot in the right half
+        # of the span would push its label past the right edge, so those hang
+        # left instead. On a flat X every dot is at x_mid and hangs right.
+        on_right = p.x.number > x_mid
         ax.annotate(f"{p.model} @ {p.effort} [{p.x.provenance}]",
                     (p.x.number, p.y.number), textcoords="offset points",
-                    xytext=(7, -3), fontsize=8)
+                    xytext=(-7, -3) if on_right else (7, -3),
+                    ha="right" if on_right else "left", fontsize=8)
 
     # The quality axis is 0-1 by declaration. Fixed limits rather than
     # autoscale: a saturated tier's dots all sit at 1.0, and autoscale would
