@@ -17,10 +17,15 @@ with counters and line counts rather than absences:
      gate as the printed sentence, and the cap participates in the fingerprint
      without appearing in the text.
   EVERY ITEM IS LABELLED, AND THE VERSION IS LIVE. billing_mode says INFERRED
-     and names the family-name test it came from; the CLI version is what the
-     binary answered at disclosure time, not a recorded constant.
-  WHAT IS PENDING SAYS SO BY NAME. asymmetry_sentence raises NotSettled, and
-     the formatted text carries both PENDING lines instead of drafts.
+     and names the family-name test it came from; expected spend says CORPUS
+     and counts its subjects out loud in both arms; the CLI version is what
+     the binary answered at disclosure time, not a recorded constant.
+  WHAT WAS PENDING HAS SETTLED, AND THE COPY IS PINNED HERE. The gutter is
+     empty and therefore absent -- and the positive arm re-populates it to
+     prove absent-because-empty, not deleted. asymmetry_sentence returns
+     ticket 20 §9's ratified draft A (§9-SETTLED), pinned verbatim here
+     because THE PIN IS THE WORDING'S GATE (harness #5, checker != worker);
+     the sentence is post-run copy and never renders on the pre-run screen.
 
 No test here spends money, and none shells out to a real CLI: the version probe
 is either injected or pointed at a script this file wrote.
@@ -43,6 +48,7 @@ import registry  # noqa: E402
 import usage_ledger  # noqa: E402
 from gauntlet_playground import disclosure  # noqa: E402
 from gauntlet_playground import executor  # noqa: E402
+from gauntlet_playground import surface  # noqa: E402
 
 METERED_MODEL = "kimi-k3"
 LOCAL_TASK = "t1-py-a"
@@ -100,12 +106,13 @@ def stub_probe(binary, env):
     return "stub-version"
 
 
-def disclose_for(req):
+def disclose_for(req, corpus_rows=()):
     """Disclose the way a well-behaved caller does: path looked up in the same
     table execute() dispatches on, which may have no row (path=None)."""
     _, spec = registry.resolve_model(req.model)
     path = executor.INVOCATION_PATHS.get(spec["family"])
-    return disclosure.disclose(req, path, probe_version=stub_probe)
+    return disclosure.disclose(req, path, probe_version=stub_probe,
+                               corpus_rows=corpus_rows)
 
 
 # --------------------------------------------------------------------------- #
@@ -215,16 +222,19 @@ def test_the_clean_disclosure_prints_no_symbol_and_not_the_caps_figure(tmp_path)
 # Every item is labelled, and the label is honest about its provenance.
 # --------------------------------------------------------------------------- #
 
-def test_four_items_each_labelled_and_billing_mode_names_its_inference(tmp_path):
+def test_five_items_money_first_each_labelled_with_honest_provenance(tmp_path):
     """billing_mode is the one fact nobody observed -- it is
     usage_ledger.build_usage_row's family-name test -- and its item must say
-    INFERRED and say why. The other three happened at disclosure time and say
-    OBSERVED. An unmarked mix would let the weakest item borrow the strongest
-    item's provenance."""
+    INFERRED and say why. expected_spend is history, not a promise, and says
+    CORPUS; here, with no corpus rows passed, its zero arm refuses a figure
+    and counts its zero subjects out loud. The rest happened at disclosure
+    time and say OBSERVED. An unmarked mix would let the weakest item borrow
+    the strongest item's provenance. Order is 14c Ruling 1: money first."""
     d = disclose_for(request(tmp_path, cap_usd=100.0))
-    assert len(d.items) == 4
+    assert len(d.items) == 5
     assert [i.key for i in d.items] == [
-        "invocation_path", "cli_version", "billing_mode", "cost_basis"]
+        "billing_mode", "cost_basis", "expected_spend",
+        "invocation_path", "cli_version"]
     for item in d.items:
         assert item.label in disclosure.LABELS
 
@@ -238,6 +248,12 @@ def test_four_items_each_labelled_and_billing_mode_names_its_inference(tmp_path)
         {"run_id": "x", "model": METERED_MODEL, "tokens_in": 0,
          "tokens_out": 0}, "kimi", model_id="kimi-k3")
     assert f"{row['billing_mode']!r}" in billing.text
+
+    spend = by_key["expected_spend"]
+    assert spend.label == disclosure.CORPUS
+    assert "no figure" in spend.text
+    assert "of 0 corpus row(s) inspected" in spend.text
+    assert "effort=low" in spend.text
 
     for key in ("invocation_path", "cli_version", "cost_basis"):
         assert by_key[key].label == disclosure.OBSERVED, \
@@ -307,20 +323,102 @@ def test_the_version_probe_carries_no_key(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# What is pending is rendered as pending, by name.
+# What was pending has settled: the copy is pinned, and the gutter is empty.
 # --------------------------------------------------------------------------- #
 
-def test_the_asymmetry_sentence_is_not_written_and_the_function_says_so():
-    """NotSettled, naming the open ticket -- not a draft that would settle §9
-    by side effect in a file nobody reviewing §9 reads."""
-    with pytest.raises(disclosure.NotSettled, match="ticket 20"):
-        disclosure.asymmetry_sentence()
+# THE PIN IS THE WORDING'S GATE (harness #5, checker != worker): this string
+# deliberately restates ticket 20 §9's ratified draft A (§9-SETTLED,
+# 2026-07-31) rather than reading it off disclosure.asymmetry_sentence -- a
+# gate must not read its rule from a worker-writable file. Both copies carry
+# this annotation so a tidy-up does not DRY them back together. An edit to
+# either copy the other does not also make is §9 re-litigated, not a cleanup.
+# The em-dashes are the ratified characters, not "--".
+RATIFIED_ASYMMETRY_COPY = (
+    "This run used 2.4 million tokens. On a subscription plan you paid "
+    "nothing extra for it. To see a dollar figure, enter what you pay per "
+    "million tokens — fresh and cached separately, because cached tokens "
+    "bill at about a tenth — and the arithmetic runs on your numbers, not "
+    "ours.")
 
 
-def test_the_formatted_disclosure_carries_both_gaps_by_name(tmp_path):
+def test_the_asymmetry_sentence_is_the_ratified_draft_verbatim():
+    """Verbatim at the ratified example's figure, and the substitution slot is
+    live: a different measured total prints its own first sentence, so the
+    2.4-million case cannot be a recorded constant that happens to match."""
+    assert disclosure.asymmetry_sentence(2_400_000) == RATIFIED_ASYMMETRY_COPY
+    assert disclosure.asymmetry_sentence(150_000).startswith(
+        "This run used 150,000 tokens.")
+
+
+def test_the_asymmetry_sentence_never_renders_on_the_pre_run_screen(tmp_path):
+    """Both directions of "post-run copy": the ratified text names a dollar
+    figure -- the word, not a price -- so the structural money gate refuses
+    it (positively: the raise is observed), and the formatted pre-run screen
+    does not carry its opening claim."""
+    with pytest.raises(ValueError, match="no slice may print a price"):
+        surface._refuse_money(disclosure.asymmetry_sentence(1))
+    d = disclose_for(request(tmp_path, cap_usd=100.0))
+    assert "This run used" not in disclosure.format_disclosure(d)
+
+
+def test_the_pending_gutter_is_absent_because_empty_not_deleted(tmp_path):
+    """The clean screen carries no PENDING line and no gutter header -- both
+    gaps settled 2026-07-31, and the [corpus] line is on screen where the 14c
+    gap used to be. Absence alone is silence, so the positive arm re-populates
+    the slot and watches the renderer still draw the header and the indented
+    line: absent because empty, not because deleted."""
     d = disclose_for(request(tmp_path, cap_usd=100.0))
     text = disclosure.format_disclosure(d)
-    pending = [line for line in text.splitlines() if "PENDING" in line]
-    assert len(pending) == 2, "a PENDING line was dropped or drafted over"
-    assert "ticket 20 §9" in pending[0] and "asymmetry" in pending[0]
-    assert "14c" in pending[1] and "no prototype outcome" in pending[1]
+    assert "PENDING" not in text
+    assert "not yet stated on this screen" not in text
+    assert "[corpus]" in text
+
+    repopulated = d._replace(pending=("PENDING (example): x",))
+    repop_text = disclosure.format_disclosure(repopulated)
+    assert "  not yet stated on this screen:" in repop_text
+    assert "    PENDING (example): x" in repop_text
+
+
+# --------------------------------------------------------------------------- #
+# Expected spend is a corpus statistic over counted, gated subjects.
+# --------------------------------------------------------------------------- #
+
+def corpus_row(task, tokens_out, model=METERED_MODEL, effort="low",
+               exit_reason="ok"):
+    return {"model": model, "effort": effort, "task": task,
+            "tokens_out": tokens_out, "exit_reason": exit_reason,
+            "pass": True}
+
+
+# Per-task medians: t1-py-a -> 9_000 (of three runs), t1-py-b -> 14_000.
+KEPT_ROWS = (
+    corpus_row(LOCAL_TASK, 9_000),
+    corpus_row(LOCAL_TASK, 9_400),
+    corpus_row(LOCAL_TASK, 8_600),
+    corpus_row("t1-py-b", 14_000),
+)
+
+
+def test_expected_spend_is_a_span_of_per_task_medians_in_output_tokens(tmp_path):
+    d = disclose_for(request(tmp_path, cap_usd=100.0), corpus_rows=KEPT_ROWS)
+    spend = [i for i in d.items if i.key == "expected_spend"][0]
+    assert spend.label == disclosure.CORPUS
+    assert "~9k-14k output tokens per task" in spend.text
+    assert "over 4 kept" in spend.text
+    assert "effort=low" in spend.text
+
+
+def test_excluded_rows_move_neither_the_figure_nor_the_kept_count(tmp_path):
+    """The excluded rows are louder than the kept ones -- a 999_999 surviving
+    any of the three filters (clean exit, effort, model) would drag the span's
+    top end -- so an unmoved figure plus an unmoved count is positive evidence
+    the gates ran, not an absence."""
+    noisy = KEPT_ROWS + (
+        corpus_row(LOCAL_TASK, 999_999, exit_reason="timeout"),
+        corpus_row(LOCAL_TASK, 999_999, effort="high"),
+        corpus_row(LOCAL_TASK, 999_999, model="claude-opus-5"),
+    )
+    d = disclose_for(request(tmp_path, cap_usd=100.0), corpus_rows=noisy)
+    spend = [i for i in d.items if i.key == "expected_spend"][0]
+    assert "~9k-14k output tokens per task" in spend.text
+    assert "over 4 kept" in spend.text
