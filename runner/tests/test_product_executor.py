@@ -39,8 +39,10 @@ TASKS_DIR = os.path.join(REPO_ROOT, "tasks")
 
 sys.path.insert(0, RUNNER_DIR)
 sys.path.insert(0, PRODUCT_DIR)
+import registry  # noqa: E402
 import spend_cap  # noqa: E402
 import usage_ledger  # noqa: E402
+from gauntlet_playground import disclosure  # noqa: E402
 from gauntlet_playground import executor  # noqa: E402
 
 METERED_MODEL = "kimi-k3"
@@ -519,5 +521,12 @@ def test_the_latency_clock_is_monotonic():
 
 def execute_and_return(req, invoke):
     """One call site for `execute`, so every test above exercises the same
-    entry point rather than a per-test variation of it."""
-    return executor.execute(req, invoke=invoke)
+    entry point rather than a per-test variation of it. Discloses first --
+    ticket 43's gate runs nothing unacknowledged -- with a stub version probe
+    because none of these tests is about the binary. A family with no path row
+    still discloses (path=None): the gate guards the report, not just a run."""
+    _, spec = registry.resolve_model(req.model)
+    path = executor.INVOCATION_PATHS.get(spec["family"])
+    disclosed = disclosure.disclose(
+        req, path, probe_version=lambda binary, env: "stub-version")
+    return executor.execute(req, invoke=invoke, disclosed=disclosed)
