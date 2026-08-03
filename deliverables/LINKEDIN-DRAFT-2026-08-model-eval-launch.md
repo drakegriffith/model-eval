@@ -1,5 +1,23 @@
 # LinkedIn draft — model-eval public release (2026-08-03)
 
+**CORRECTION (2026-08-03, later same day) — DO NOT POST AS-IS.** The "Fable
+matched Sol on pass rate using ~1/5 the tokens, p=0.004" claim below is
+WRONG. It was computed as `tokens_in + tokens_out` for both models, but
+Fable's `tokens_in` is `quarantined` on 100% of its rows (no true value
+exists anywhere for it — see `runner/usage_ledger.py` and
+`runner/corpus_gates.py`). The repo's own canonical stats script
+(`runner/stats.py`, fixed 2026-07-30 per ticket 31 AC#3, ratified by Drake)
+uses **output tokens only** for exactly this reason and was not re-run before
+this draft was written. Re-run under that methodology
+(`python3 runner/stats.py`, §5), the Fable-vs-Sol token gap is **not
+statistically significant** (p = 0.68, direction mixed across tasks — see
+`deliverables/STATS-CURRENT-2026-08-03.md` §5). The chart asset this draft
+pointed to has been renamed to
+`deliverables/assets/model-eval-token-chart-WRONG-DO-NOT-USE.{html,png}` —
+do not use it. Next session: rewrite this post's cost claim (or drop it) and
+regenerate a chart, if any, from `runner/stats.py`'s output, not a hand
+computation.
+
 Status: DRAFT, not posted. Drake posts manually. No LinkedIn posting tool used.
 
 Numbers below verified against the live corpus this session:
