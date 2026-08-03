@@ -4,7 +4,7 @@ Every number below is an **exact** test rendered with its raw counts (Wilson int
 
 Source: 267 run row(s), 267 passing, 154 judged.
 
-> **exclusions** — results rows: inspected=268 kept=267 excluded=1 — cli_error=1. Excluded rows are gone from every test on this page, counts included. §6 is the one section computed over the FULL judgment set: it measures whether the two judges agree with each other, not how a model performed, and a truncated run's judges either agreed or did not. Token axes here are `tokens_out` only (ticket 31 AC#3).
+> **exclusions** — results rows: inspected=268 kept=267 excluded=1 — cli_error=1. Excluded rows are gone from every test on this page, counts included. §7 is the one section computed over the FULL judgment set: it measures whether the two judges agree with each other, not how a model performed, and a truncated run's judges either agreed or did not. Token axes here are `tokens_out` only (ticket 31 AC#3).
 
 ## 1. Per-cell pass rate — 95% Wilson score intervals
 
@@ -256,21 +256,91 @@ Per-task median log(**output** tokens) over PASSING runs, Fable minus Sol, paire
 
 Output tokens, not total: fable's input side is quarantined and sol's is measured (ticket 31 AC#3), so a total-token contrast here would compare an undercount against a true count.
 
-| task | fable med log(out tok) | sol med log(out tok) | diff (F−S) |
-| --- | --- | --- | --- |
-| t1-py-a | 7.0214 | 6.8916 | +0.1298 |
-| t1-py-b | 6.9788 | 7.0596 | -0.0809 |
-| t1-ts-a | 6.9022 | 7.0579 | -0.1557 |
-| t1-ts-b | 7.4494 | 7.4495 | -0.0001 |
-| t2-py-a | 7.7915 | 7.4902 | +0.3014 |
-| t2-py-b | 7.9593 | 7.8628 | +0.0964 |
-| t2-ts-a | 8.0740 | 8.0994 | -0.0254 |
-| t2-ts-b | 7.8932 | 7.7483 | +0.1449 |
-| t3-a | 7.8083 | 8.0053 | -0.1969 |
+**This section pools tiers.** Every passing run of each model counts, across whatever effort levels and harness states that model was run at — which are not the same set for the two models. It answers "what did each model cost me over this campaign," not "which model is cheaper at a fixed setting." §6 fixes the cell and gets a different answer; read both.
+
+**Fable vs Sol, all tiers pooled**
+
+| task | Fable med out tok | Sol med out tok | Fable med log | Sol med log | diff (log) |
+| --- | --- | --- | --- | --- | --- |
+| t1-py-a | 1,120 | 984 | 7.0214 | 6.8916 | +0.1298 |
+| t1-py-b | 1,074 | 1,164 | 6.9788 | 7.0596 | -0.0809 |
+| t1-ts-a | 994 | 1,162 | 6.9022 | 7.0579 | -0.1557 |
+| t1-ts-b | 1,719 | 1,719 | 7.4494 | 7.4495 | -0.0001 |
+| t2-py-a | 2,420 | 1,790 | 7.7915 | 7.4902 | +0.3014 |
+| t2-py-b | 2,862 | 2,600 | 7.9593 | 7.8628 | +0.0964 |
+| t2-ts-a | 3,210 | 3,293 | 8.0740 | 8.0994 | -0.0254 |
+| t2-ts-b | 2,679 | 2,318 | 7.8932 | 7.7483 | +0.1449 |
+| t3-a | 2,461 | 3,013 | 7.8083 | 8.0053 | -0.1969 |
+
+Fable spends more on **4 of 9** tasks, less on 5, ties on 0.
 
 Observed sum of diffs = +0.2136 over k=9 tasks. 348 of 512 sign patterns are as-or-more extreme -> two-sided **p = 0.6796875**.
 
-## 6. Can we trust the judges? Dual-judge agreement
+## 6. Cost at a matched cell (tier-controlled sign-flip)
+
+Same exact test as §5 — per-task median log(output tokens) over passing runs, paired by task, all 2^k sign patterns — but computed inside fixed cells instead of over pooled rows. Bare runs only.
+
+### 6a. Each model at its winning effort (Fable/medium vs Sol/low)
+
+The same two cells §2 tests for pass/fail, now on cost. Read the cell names before the p-value: `best_effort` breaks ties on fewer tokens, so when pass rates saturate at 100% the winning effort is simply each model's cheapest one, and the two sides need not be the same tier. Where they are not, part of any gap below is the tier, not the model. 6b removes that.
+
+**Fable/medium vs Sol/low**
+
+| task | Fable/medium med out tok | Sol/low med out tok | Fable/medium med log | Sol/low med log | diff (log) |
+| --- | --- | --- | --- | --- | --- |
+| t1-py-a | 1,105 | 715 | 7.0076 | 6.5723 | +0.4353 |
+| t1-py-b | 1,039 | 638 | 6.9460 | 6.4583 | +0.4877 |
+| t1-ts-a | 987 | 793 | 6.8947 | 6.6758 | +0.2188 |
+| t1-ts-b | 1,546 | 752 | 7.3434 | 6.6223 | +0.7211 |
+| t2-py-a | 2,420 | 1,128 | 7.7915 | 7.0282 | +0.7633 |
+| t2-py-b | 2,326 | 1,572 | 7.7519 | 7.3600 | +0.3919 |
+| t2-ts-a | 3,379 | 1,490 | 8.1253 | 7.3065 | +0.8188 |
+| t2-ts-b | 2,679 | 1,414 | 7.8932 | 7.2542 | +0.6390 |
+| t3-a | 2,088 | 2,466 | 7.6440 | 7.8061 | -0.1621 |
+
+Fable/medium spends more on **8 of 9** tasks, less on 1, ties on 0.
+
+Observed sum of diffs = +4.3139 over k=9 tasks. 4 of 512 sign patterns are as-or-more extreme -> two-sided **p = 0.0078125**.
+
+### 6b. Same effort label, both models
+
+The literal tier-for-tier contrast: one block per effort label both models were run at bare. Nothing varies here but the model.
+
+**effort medium: Fable vs Sol**
+
+| task | Fable/medium med out tok | Sol/medium med out tok | Fable/medium med log | Sol/medium med log | diff (log) |
+| --- | --- | --- | --- | --- | --- |
+| t1-py-a | 1,105 | 984 | 7.0076 | 6.8916 | +0.1160 |
+| t1-py-b | 1,039 | 1,164 | 6.9460 | 7.0596 | -0.1136 |
+| t1-ts-a | 987 | 1,162 | 6.8947 | 7.0579 | -0.1632 |
+| t1-ts-b | 1,546 | 1,517 | 7.3434 | 7.3245 | +0.0189 |
+| t2-py-a | 2,420 | 1,427 | 7.7915 | 7.2633 | +0.5282 |
+| t2-py-b | 2,326 | 2,498 | 7.7519 | 7.8232 | -0.0713 |
+| t2-ts-a | 3,379 | 3,344 | 8.1253 | 8.1149 | +0.0104 |
+| t2-ts-b | 2,679 | 2,069 | 7.8932 | 7.6348 | +0.2584 |
+
+Fable/medium spends more on **5 of 8** tasks, less on 3, ties on 0.
+
+Observed sum of diffs = +0.5837 over k=8 tasks. 110 of 256 sign patterns are as-or-more extreme -> two-sided **p = 0.4296875**.
+
+**effort high: Fable vs Sol**
+
+| task | Fable/high med out tok | Sol/high med out tok | Fable/high med log | Sol/high med log | diff (log) |
+| --- | --- | --- | --- | --- | --- |
+| t1-py-a | 1,136 | 1,277 | 7.0353 | 7.1523 | -0.1170 |
+| t1-py-b | 1,104 | 1,408 | 7.0067 | 7.2499 | -0.2432 |
+| t1-ts-a | 1,002 | 1,678 | 6.9098 | 7.4254 | -0.5156 |
+| t1-ts-b | 1,990 | 1,812 | 7.5959 | 7.5021 | +0.0937 |
+| t2-py-a | 2,185 | 1,997 | 7.6894 | 7.5994 | +0.0900 |
+| t2-py-b | 2,862 | 2,999 | 7.9593 | 8.0058 | -0.0466 |
+| t2-ts-a | 3,589 | 4,152 | 8.1856 | 8.3313 | -0.1457 |
+| t2-ts-b | 2,385 | 2,755 | 7.7770 | 7.9212 | -0.1442 |
+
+Fable/high spends more on **2 of 8** tasks, less on 6, ties on 0.
+
+Observed sum of diffs = -1.0286 over k=8 tasks. 22 of 256 sign patterns are as-or-more extreme -> two-sided **p = 0.0859375**.
+
+## 7. Can we trust the judges? Dual-judge agreement
 
 Per run, each judge's score is averaged across its four axes; we compare Claude's average to Codex's average.
 
@@ -279,7 +349,7 @@ Per run, each judge's score is averaged across its four axes; we compare Claude'
 - Pearson r (Claude avg vs Codex avg): **0.7589**
 - Within ±1 point: **133/139 = 96%**
 
-## 7. Power — what this experiment can and cannot detect
+## 8. Power — what this experiment can and cannot detect
 
 Two-proportion test, per-arm n=24, α=0.05 two-sided, 80% power, baseline p=0.5.
 

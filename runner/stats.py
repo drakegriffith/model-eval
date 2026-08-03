@@ -366,6 +366,71 @@ def section_harness(results):
     return "\n".join(lines)
 
 
+def task_cost_diffs(rows_a, rows_b):
+    """Per-task cost contrast over PASSING runs only, paired by task.
+
+    One entry per task that has at least one passing run on BOTH sides:
+    (task, raw_median_a, raw_median_b, log_median_a, log_median_b, diff_log).
+    The raw medians are carried alongside the log ones because every published
+    per-task token figure is a raw median and the reader should not have to
+    exponentiate a table to check one.
+
+    The medians are taken over log(tokens) rather than logged after the fact:
+    the test statistic is a difference of log-medians, and for an even count the
+    two are not the same number.
+    """
+    pa = group([r for r in rows_a if is_pass(r)], lambda r: r["task"])
+    pb = group([r for r in rows_b if is_pass(r)], lambda r: r["task"])
+    entries = []
+    for t in sorted(set(pa) & set(pb)):
+        raw_a = statistics.median([summary_tokens(r) for r in pa[t]])
+        raw_b = statistics.median([summary_tokens(r) for r in pb[t]])
+        log_a = statistics.median([logtok(summary_tokens(r)) for r in pa[t]])
+        log_b = statistics.median([logtok(summary_tokens(r)) for r in pb[t]])
+        entries.append((t, raw_a, raw_b, log_a, log_b, log_a - log_b))
+    return entries
+
+
+def cost_block(title, label_a, label_b, rows_a, rows_b):
+    """Render one sign-flip cost comparison: the per-task median table, the
+    task-by-task direction count, and the exact permutation p-value.
+
+    Shared by §5 (pooled) and §6 (matched cells) so the two can never drift into
+    computing "the same" statistic two different ways — the pooled and the
+    matched answer disagree on this corpus, and that disagreement is only
+    readable if the arithmetic underneath them is identical.
+    """
+    out = [f"**{title}**", ""]
+    entries = task_cost_diffs(rows_a, rows_b)
+    if not entries:
+        out += ["_(no task has passing runs on both sides)_", ""]
+        return "\n".join(out)
+    out += [f"| task | {label_a} med out tok | {label_b} med out tok | "
+            f"{label_a} med log | {label_b} med log | diff (log) |",
+            "| --- | --- | --- | --- | --- | --- |"]
+    for t, raw_a, raw_b, log_a, log_b, d in entries:
+        out.append(f"| {t} | {raw_a:,.0f} | {raw_b:,.0f} | {log_a:.4f} | "
+                   f"{log_b:.4f} | {d:+.4f} |")
+    out.append("")
+    diffs = [e[5] for e in entries]
+    p, k, n_extreme, total = signflip_p(diffs)
+    higher = sum(1 for d in diffs if d > 0)
+    lower = sum(1 for d in diffs if d < 0)
+    out += [
+        f"{label_a} spends more on **{higher} of {k}** tasks, less on {lower}, "
+        f"ties on {k - higher - lower}.",
+        "",
+        f"Observed sum of diffs = {sum(diffs):+.4f} over k={k} tasks. "
+        f"{n_extreme} of {total} sign patterns are as-or-more extreme "
+        f"-> two-sided **p = {p:.7f}**.",
+        "",
+    ]
+    if all(abs(d) == 0 for d in diffs):
+        out += ["_(all diffs are 0 — token counts are identical or 0 under "
+                "--mock, so there is nothing to distinguish.)_", ""]
+    return "\n".join(out)
+
+
 def section_permutation(results):
     """(3) exact sign-flip permutation on per-task median log(OUTPUT tokens) of
     PASSING runs, fable vs sol, paired by task.
@@ -381,39 +446,83 @@ def section_permutation(results):
              "(k = tasks with passing runs on both sides).", "",
              "Output tokens, not total: fable's input side is quarantined and "
              "sol's is measured (ticket 31 AC#3), so a total-token contrast here "
-             "would compare an undercount against a true count.", ""]
-    passing = [r for r in results if is_pass(r)]
-    fable = group([r for r in passing if r["model"] == "fable"], lambda r: r["task"])
-    sol = group([r for r in passing if r["model"] == "sol"], lambda r: r["task"])
-    tasks = sorted(set(fable) & set(sol))
-    if not tasks:
-        lines.append("_(no task has passing fable and sol runs)_\n")
+             "would compare an undercount against a true count.", "",
+             "**This section pools tiers.** Every passing run of each model "
+             "counts, across whatever effort levels and harness states that "
+             "model was run at — which are not the same set for the two models. "
+             "It answers \"what did each model cost me over this campaign,\" not "
+             "\"which model is cheaper at a fixed setting.\" §6 fixes the cell "
+             "and gets a different answer; read both.", ""]
+    fable = [r for r in results if r["model"] == "fable"]
+    sol = [r for r in results if r["model"] == "sol"]
+    lines.append(cost_block("Fable vs Sol, all tiers pooled", "Fable", "Sol",
+                            fable, sol))
+    return "\n".join(lines)
+
+
+def section_cost_matched(results):
+    """(3b) the tier-controlled companion to §5: the same exact sign-flip test,
+    run inside fixed (model x effort) cells instead of over pooled rows.
+
+    Why this exists as its own section. §5's pool is unbalanced by construction —
+    Sol was run at low/medium/high/xhigh/ultra, Fable at medium/high — so a
+    pooled contrast mixes "which model is cheaper" with "which tiers each model
+    happened to be run at". Both matched views below are bare runs only; the
+    harness is a separate factor and §4 owns it.
+
+    The two views disagree on this corpus, and neither is the whole answer:
+    the winning-effort contrast (a) is the cost side of §2's exact cells, but
+    with pass rates saturated the winning effort is just the cheapest one, so it
+    partly measures tier choice. The same-label contrast (b) is the literal
+    tier-for-tier comparison.
+    """
+    lines = ["## 6. Cost at a matched cell (tier-controlled sign-flip)", "",
+             "Same exact test as §5 — per-task median log(output tokens) over "
+             "passing runs, paired by task, all 2^k sign patterns — but computed "
+             "inside fixed cells instead of over pooled rows. Bare runs only.", ""]
+    bare = [r for r in results if not r.get("harness")]
+    fable = [r for r in bare if r["model"] == "fable"]
+    sol = [r for r in bare if r["model"] == "sol"]
+    if not fable or not sol:
+        lines.append("_(no bare fable/sol runs to compare)_\n")
         return "\n".join(lines)
-    lines += ["| task | fable med log(out tok) | sol med log(out tok) | diff (F−S) |",
-              "| --- | --- | --- | --- |"]
-    diffs = []
-    for t in tasks:
-        fmed = statistics.median([logtok(summary_tokens(r)) for r in fable[t]])
-        smed = statistics.median([logtok(summary_tokens(r)) for r in sol[t]])
-        diffs.append(fmed - smed)
-        lines.append(f"| {t} | {fmed:.4f} | {smed:.4f} | {fmed - smed:+.4f} |")
-    lines.append("")
-    res = signflip_p(diffs)
-    p, k, n_extreme, total = res
-    lines.append(f"Observed sum of diffs = {sum(diffs):+.4f} over k={k} tasks. "
-                 f"{n_extreme} of {total} sign patterns are as-or-more extreme "
-                 f"-> two-sided **p = {p:.7f}**.")
-    lines.append("")
-    if all(abs(d) == 0 for d in diffs):
-        lines.append("_(all diffs are 0 — token counts are identical or 0 under "
-                     "--mock, so there is nothing to distinguish.)_")
-        lines.append("")
+
+    # (a) each model at its own winning effort — the cells §2 compares.
+    fe, se = best_effort(fable), best_effort(sol)
+    lines += [f"### 6a. Each model at its winning effort (Fable/{fe} vs Sol/{se})",
+              "",
+              "The same two cells §2 tests for pass/fail, now on cost. Read the "
+              "cell names before the p-value: `best_effort` breaks ties on fewer "
+              "tokens, so when pass rates saturate at 100% the winning effort is "
+              "simply each model's cheapest one, and the two sides need not be "
+              "the same tier. Where they are not, part of any gap below is the "
+              "tier, not the model. 6b removes that.", ""]
+    lines.append(cost_block(f"Fable/{fe} vs Sol/{se}", f"Fable/{fe}",
+                            f"Sol/{se}", [r for r in fable if r["effort"] == fe],
+                            [r for r in sol if r["effort"] == se]))
+
+    # (b) literal tier-for-tier: every effort label both models ran bare.
+    shared = sorted(({r["effort"] for r in fable} & {r["effort"] for r in sol}),
+                    key=lambda e: EFFORT_ORDER.get(e, 9))
+    lines += ["### 6b. Same effort label, both models", "",
+              "The literal tier-for-tier contrast: one block per effort label "
+              "both models were run at bare. Nothing varies here but the model.",
+              ""]
+    if not shared:
+        lines += ["_(fable and sol share no bare effort label — no tier-for-tier "
+                  "comparison is possible on this corpus)_", ""]
+    else:
+        for eff in shared:
+            lines.append(cost_block(f"effort {eff}: Fable vs Sol",
+                                    f"Fable/{eff}", f"Sol/{eff}",
+                                    [r for r in fable if r["effort"] == eff],
+                                    [r for r in sol if r["effort"] == eff]))
     return "\n".join(lines)
 
 
 def section_judges(judgments):
     """(4) dual-judge agreement: mean |gap|, Pearson r, % within +/-1."""
-    lines = ["## 6. Can we trust the judges? Dual-judge agreement", "",
+    lines = ["## 7. Can we trust the judges? Dual-judge agreement", "",
              "Per run, each judge's score is averaged across its four axes; we "
              "compare Claude's average to Codex's average.", ""]
     claude, codex = [], []
@@ -444,7 +553,7 @@ def section_judges(judgments):
 
 def section_power(results):
     """(5) approximate minimum detectable effect at n=24/arm."""
-    lines = ["## 7. Power — what this experiment can and cannot detect", "",
+    lines = ["## 8. Power — what this experiment can and cannot detect", "",
              "Two-proportion test, per-arm n=24, α=0.05 two-sided, 80% power, "
              "baseline p=0.5.", ""]
     mde = min_detectable_effect(n=24, p1=0.5, target_power=0.80)
@@ -492,7 +601,7 @@ def build_report(results, judgments):
         "> **exclusions** — "
         + corpus_gates.format_exclusions("results rows", n_in, kept, excluded)
         + ". Excluded rows are gone from every test on this page, counts "
-          "included. §6 is the one section computed over the FULL judgment set: "
+          "included. §7 is the one section computed over the FULL judgment set: "
           "it measures whether the two judges agree with each other, not how a "
           "model performed, and a truncated run's judges either agreed or did "
           "not. Token axes here are `tokens_out` only (ticket 31 AC#3).",
@@ -502,6 +611,7 @@ def build_report(results, judgments):
         section_effort_rungs(results),
         section_harness(results),
         section_permutation(results),
+        section_cost_matched(results),
         section_judges(judgments),
         section_power(results),
     ]
@@ -538,6 +648,47 @@ def selftest():
     r = pearson_r(xs, ys)
     check("Pearson perfectly linear -> 1.0",
           r is not None and abs(r - 1.0) < 1e-9, r, 1.0)
+
+    def srow(model, effort, task, rep, tok, harness=False, passed=True):
+        return {"model": model, "effort": effort, "task": task, "rep": rep,
+                "tokens_out": tok, "harness": harness, "pass": passed}
+
+    # 5. task_cost_diffs: passing runs only, tasks paired on both sides, and the
+    #    median taken over logs (not the log of the median).
+    entries = task_cost_diffs(
+        [srow("fable", "medium", "t1", 1, 100), srow("fable", "medium", "t1", 2, 300),
+         srow("fable", "medium", "t1", 3, 9999, passed=False),
+         srow("fable", "medium", "t2", 1, 500)],
+        [srow("sol", "low", "t1", 1, 200)])
+    want_diff = (math.log(100) + math.log(300)) / 2.0 - math.log(200)
+    check("task_cost_diffs drops the unpaired task", len(entries) == 1,
+          [e[0] for e in entries], ["t1"])
+    check("task_cost_diffs ignores the failing run",
+          bool(entries) and entries[0][1] == 200, entries[0][1] if entries else None,
+          200)
+    check("task_cost_diffs medians the logs",
+          bool(entries) and abs(entries[0][5] - want_diff) < 1e-12,
+          entries[0][5] if entries else None, want_diff)
+
+    # 6. section_cost_matched actually holds the cell fixed. A §6 that quietly
+    #    pooled tiers or swept in harnessed rows would still render a table and a
+    #    p-value; the decoy rows below are what makes that visible. The decoys are
+    #    priced so the winning effort stays medium/low: `best_effort` breaks ties
+    #    on FEWER tokens, so a cheap decoy tier would win and change the cell.
+    matched = section_cost_matched([
+        srow("fable", "medium", "t1", 1, 1000),
+        srow("sol", "low", "t1", 1, 500),
+        srow("sol", "low", "t1", 1, 1, harness=True),   # decoy: harnessed
+        srow("fable", "high", "t1", 1, 1000000),        # decoy: other tier
+        srow("sol", "ultra", "t1", 1, 900000),          # decoy: other tier
+    ])
+    want_line = "| t1 | 1,000 | 500 |"
+    check("section_cost_matched picks the winning cells",
+          "Fable/medium vs Sol/low" in matched, "Fable/medium vs Sol/low" in matched,
+          True)
+    check("section_cost_matched excludes other tiers and harnessed rows",
+          want_line in matched and f"{math.log(1000) - math.log(500):+.4f}" in matched,
+          want_line in matched, True)
 
     ok = True
     for name, cond, got, want in checks:

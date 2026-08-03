@@ -85,7 +85,7 @@ the tasks get harder or I stop treating pass/fail as the metric that matters.
 For this corpus, I did the second one: the real signal turned out to be cost
 and judged quality, not whether the test suite went green.
 
-## Finding 2: the cost difference between the two big models is noise
+## Finding 2: at matched tiers, the cost difference between the two big models is noise
 
 ![Nine tasks, and the cheaper model keeps changing.](assets/model-eval-token-chart-per-task.png)
 
@@ -123,13 +123,41 @@ Two scoping notes. First, the axis is **output tokens only**. Fable's
 input-token counts are quarantined as unreliable on all 64 of its rows while
 Sol's are measured on all 112, so a total-token contrast would put an
 undercount against a true count and manufacture a gap out of a measurement
-artifact. Second, this comparison pools every passing run of each model
-across the effort tiers each was run at: Sol's pool spans `low` through
-`ultra`, Fable's covers `medium` and `high`. Tier does move token spend, as
-Finding 3 shows, so this is a model-level contrast and not a matched-tier
-one. A tier-for-tier cost comparison is a different test, it isn't in
-`stats.py` today, and I'm not going to quote a number for it from a
-spreadsheet I did by hand. Adding it to the script is on the list.
+artifact. Second, that table pools every passing run of each model across the
+effort tiers each was run at: Sol's pool spans `low` through `ultra`, Fable's
+covers `medium` and `high`. Tier does move token spend, as Finding 3 shows,
+so it's a model-level contrast and not a matched-tier one.
+
+When I first drafted this section, the matched version wasn't in `stats.py`
+and I wasn't going to quote a number for it off a spreadsheet I'd done by
+hand. It's in the script now, as §6, and it earns its own paragraphs because
+it doesn't just repeat §5.
+
+Take a literally matched tier first: same effort label, both models, bare
+runs only. At `medium`, Fable spends more on 5 of the 8 shared tasks, p =
+0.43. At `high`, it spends less on 6 of 8, p = 0.086. Two tiers, opposite
+signs, neither resolvable at n=8. The pooled answer survives the control.
+
+The one contrast that does come back significant is the pair of cells §2 uses
+for pass/fail: each model at its own winning effort. That's Fable at `medium`
+against Sol at `low`, and there Fable spends more on 8 of 9 tasks, only 4 of
+the 512 sign patterns are as-or-more extreme, p = 0.008. Read the cell names
+before you read the p-value. Because effort never flipped an outcome (Finding
+3), "winning effort" collapses to "cheapest tier this model was run at", so
+this compares a medium-tier configuration against a low-tier one and some
+unknown part of the gap is the tier rather than the model. It's also not a
+symmetric matrix: Sol was run at five tiers starting at `low`, Fable at two
+starting at `medium`. Fable's cheapest passing configuration here is `medium`
+because `medium` is the floor of the run matrix, not because anything tested
+a lower one.
+
+So: no claim that either model is inherently cheaper survives the matched-tier
+test, in either direction. What does survive is narrower and more useful. If
+you're picking a configuration to deploy on work in this difficulty band, Sol
+at `low` is the cheapest thing in this corpus that passes everything, and it
+does it at roughly a 1.6x output-token advantage over Fable at `medium`
+(geometric mean across the 9 shared tasks). Whether Fable at some lower tier
+would close that gap is a run I haven't done.
 
 ## Finding 3: the effort knob never flipped a single outcome
 
@@ -207,9 +235,10 @@ reading:
 Sol scores slightly higher across all four dimensions in this corpus, by
 about half a point on a 0-10 scale. Put next to Finding 2, that's the only
 axis on which the two models separate at all here: identical pass rates, no
-detectable cost difference, and a small judged-quality edge to Sol. Half a
-point is also inside the judges' own mean disagreement with each other (0.53
-points, §6), so I'd treat it as a hint about where to look next rather than a
+detectable cost difference at matched tiers, and a small judged-quality edge
+to Sol. Half a point is also inside the judges' own mean disagreement with
+each other (0.53 points, §7), so I'd treat it as a hint about where to look
+next rather than a
 result. It's a smaller and duller claim than "model X is better," and it's
 the one this data actually carries.
 

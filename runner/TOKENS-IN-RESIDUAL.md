@@ -223,11 +223,14 @@ here because "unavailable" for the analysis backbone is itself a published
 result about the corpus, and because it means **the headline cost comparison the
 project exists to make cannot currently be made for Fable at all.**
 
-### `stats.py` §6 is over the full judgment set, on purpose
+### `stats.py` §7 is over the full judgment set, on purpose
+
+(Numbered §6 until 2026-08-03, when the matched-cell cost test was inserted as
+§6 and every section below it shifted by one.)
 
 `build_report` applies the summarizable gate once, at the top, so no section can
-skip it — except §6, which is computed over the full judgment set by design.
-The exclusion note (`stats.py:492-498`) states the reason inline: §6 measures
+skip it — except §7, which is computed over the full judgment set by design.
+The exclusion note (`stats.py`'s header block) states the reason inline: §7 measures
 whether the two judges agreed with each other, not how a model performed, and a
 truncated run's judges either agreed or did not. Recorded as a deliberate
 deviation so a later reader does not "fix" it.

@@ -38,7 +38,15 @@ Vault refs: `random-variables`, `sampling-distributions`.
 | Does more effort actually help, per model? | pairwise **McNemar exact** between adjacent effort rungs | sweep 1 |
 | Does the harness help, per model? | **McNemar exact** on paired bare-vs-harness runs (same task, same rep) | sweep 1 T2 vs sweep 2a |
 | Who's cheaper per solved task? | **exact sign-flip permutation test** (2⁸ = 256 sign patterns) on per-task median log-tokens, paired by task | passing runs |
+| Who's cheaper at a *fixed* setting? | the same sign-flip test run inside a fixed (model × effort) cell: each model at its winning effort, then every effort label both models ran | passing bare runs |
 | Can we trust the judges? | dual-judge agreement: mean absolute score gap, Pearson r, % within ±1 point | judgments |
+
+The two cost rows are separate tests because they answer separate questions and
+disagree on this corpus. The models were not run at the same set of effort
+levels, so the pooled contrast (§5 of the appendix) mixes "which model is
+cheaper" with "which tiers each model happened to be run at". The matched-cell
+contrast (§6) holds the cell fixed. Neither one supersedes the other; a cost
+claim has to name which of the two it comes from.
 
 Vault refs: `hypothesis-testing-2pop`, `confidence-intervals-1pop`,
 `confidence-intervals-2pop`, `effect-size-estimation`.
@@ -72,5 +80,6 @@ python3 runner/stats.py --results runner/results/results.jsonl \
 ```
 
 Emits `STATS-APPENDIX.md`: per-cell Wilson CIs, every McNemar 2×2 table with its
-exact p-value, the token permutation test, judge agreement, and the power
-statement — the exact data behind every on-camera claim.
+exact p-value, the token permutation test both pooled and at matched cells,
+judge agreement, and the power statement — the exact data behind every on-camera
+claim.
