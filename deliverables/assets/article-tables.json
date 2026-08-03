@@ -1,0 +1,52 @@
+{
+ "_README": "Two derived tables for the Actual Intelligence Labs post, in the site's {\"table\": ...} prose-block shape. The effort-ladder medians are NOT in STATS-CURRENT-2026-08-03.md (section 3 there is McNemar pair tables, not medians); they are recomputed from runner/results/results.jsonl with corpus_gates.summarizable_rows, bare runs, passing rows only, median tokens_out per model x effort, rounded half up. Command to reproduce is in _reproduce. The ceiling table condenses section 1's 25 Wilson cells to one row per model; Runs column sums to 267, the kept-row count.",
+ "_reproduce": "python3 -c \"import sys,json,statistics;from collections import defaultdict;from decimal import Decimal,ROUND_HALF_UP;sys.path.insert(0,'runner');import corpus_gates;rows=[json.loads(l) for l in open('runner/results/results.jsonl') if l.strip()];kept,_=corpus_gates.summarizable_rows(rows);b=[r for r in kept if not r.get('harness') and r['pass']];d=defaultdict(list);[d[(r['model'],r['effort'])].append(r['tokens_out']) for r in b];print({k:int(Decimal(str(statistics.median(v))).quantize(0,ROUND_HALF_UP)) for k,v in sorted(d.items())})\"",
+
+ "effortLadder": {
+  "table": {
+   "caption": "Median output tokens per solved run, bare invocation, by effort tier",
+   "columns": ["Model", "low", "medium", "high", "xhigh", "max or ultra"],
+   "rows": [
+    ["GPT-5.6 Sol", "1,124", "1,534", "1,993", "2,708", "4,943 (ultra)"],
+    ["GPT-5.6 Luna", "1,551", "", "2,874", "", "5,249 (max)"],
+    ["GPT-5.3 Codex Spark", "2,308", "", "3,530", "4,250", ""],
+    ["Kimi K3", "1,385", "", "1,631", "", "1,972 (max)"],
+    ["Claude Fable 5", "", "1,737", "2,008", "", ""],
+    ["Claude Haiku 4.5", "2,861", "", "2,675", "", "2,745 (max)"],
+    ["Claude Haiku 4.5 (pinned)", "5,228", "", "5,758", "", "4,840 (max)"]
+   ],
+   "source": "model-eval corpus, 267 scorable runs. Medians over passing bare runs only. Blank cells were not run."
+  },
+  "_facts": {
+   "sol_ultra_over_low": 4.4,
+   "luna_max_over_low": 3.38,
+   "spark_xhigh_over_low": 1.84,
+   "haiku_non_monotonic": "both Haiku rows step backwards: low is not the cheapest tier for either"
+  }
+ },
+
+ "ceiling": {
+  "table": {
+   "caption": "Every model passed every run it was scored on",
+   "columns": ["Model", "Cells", "Runs", "Passed", "Best Wilson lower bound"],
+   "rows": [
+    ["GPT-5.6 Sol", "6", "112", "112", "89%"],
+    ["Claude Fable 5", "3", "63", "63", "87%"],
+    ["GPT-5.6 Luna", "3", "18", "18", "61%"],
+    ["GPT-5.3 Codex Spark", "3", "18", "18", "61%"],
+    ["Kimi K3", "3", "18", "18", "61%"],
+    ["Claude Haiku 4.5", "3", "18", "18", "61%"],
+    ["Claude Haiku 4.5 (pinned)", "3", "18", "18", "61%"],
+    ["Hybrid (harnessed)", "1", "2", "2", "34%"]
+   ],
+   "source": "Stats appendix section 1, 25 model x effort x harness cells condensed to one row per model. The bound shown is from each model's largest cell; across all 25 cells the lower bounds run from 34% to 89%."
+  },
+  "_facts": {
+   "runs_total": 267,
+   "excluded": 1,
+   "excluded_reason": "cli_error, the process died before the model got a fair attempt",
+   "wilson_lower_bound_range": "34% to 89%",
+   "minimum_detectable_effect_pp": 36.7
+  }
+ }
+}
