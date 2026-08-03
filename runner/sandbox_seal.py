@@ -43,7 +43,9 @@ import os
 import subprocess
 import tempfile
 
-VAULT = os.path.expanduser("~/brain-actual-intelligence")
+# Generic default; override GAUNTLET_VAULT_DIR to point at wherever your own
+# private notes/secrets tree actually lives.
+VAULT = os.path.expanduser(os.environ.get("GAUNTLET_VAULT_DIR", "~/.gauntlet-vault"))
 
 # Ticket 26. Read by run.py to stamp `write_contained` on every results row.
 # A constant rather than a literal True at the call site so that deleting write

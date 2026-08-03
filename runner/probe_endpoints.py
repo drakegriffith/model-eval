@@ -39,7 +39,9 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS_DIR = os.path.join(ROOT, "runner", "results")
-KIMI_KEY_FILE = os.path.expanduser("~/brain-actual-intelligence/.secrets/kimi.env")
+KIMI_KEY_FILE = os.path.expanduser(
+    os.environ.get("GAUNTLET_KIMI_KEY_FILE", "~/.gauntlet/secrets/kimi.env")
+)
 MOONSHOT_ANTHROPIC_URL = "https://api.moonshot.ai/anthropic"
 CODEX_MODEL_CACHE = os.path.expanduser("~/.codex/models_cache.json")
 

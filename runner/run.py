@@ -55,9 +55,13 @@ USAGE_PATH = usage_ledger.paths_for_repo(ROOT).usage
 
 # --- Kimi K3 (Moonshot) ---------------------------------------------------- #
 # K3 has no native agent CLI; we drive it through Codex's OpenAI-compatible
-# provider path. Its API key lives in a gitignored secrets file in the vault and
-# is read here at runtime only — never hard-coded, echoed, or committed.
-KIMI_KEY_FILE = os.path.expanduser("~/brain-actual-intelligence/.secrets/kimi.env")
+# provider path. Its API key lives in a gitignored secrets file, whose location
+# is read here at runtime only — never hard-coded, echoed, or committed. The
+# default is a generic per-user path; override GAUNTLET_KIMI_KEY_FILE to point
+# at wherever your own secrets actually live.
+KIMI_KEY_FILE = os.path.expanduser(
+    os.environ.get("GAUNTLET_KIMI_KEY_FILE", "~/.gauntlet/secrets/kimi.env")
+)
 # Codex 0.144 only speaks the Responses API, which Moonshot doesn't serve; instead
 # we drive K3 through Claude Code against Moonshot's Anthropic-compatible endpoint.
 MOONSHOT_ANTHROPIC_URL = "https://api.moonshot.ai/anthropic"

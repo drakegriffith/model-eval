@@ -27,7 +27,7 @@ sys.path.insert(0, RUNNER_DIR)
 import sandbox_seal  # noqa: E402
 
 PROBE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "seal_probe.py")
-VAULT = os.path.expanduser("~/brain-actual-intelligence")
+VAULT = sandbox_seal.VAULT
 
 
 @pytest.fixture
@@ -35,6 +35,7 @@ def vault_canary():
     """Plant a uniquely-tagged file inside the real vault -- standing in for a
     seeded task's answer -- and guarantee its removal even on assertion failure."""
     token = f"GAUNTLET-SEAL-CANARY-{uuid.uuid4().hex[:12]}"
+    os.makedirs(VAULT, exist_ok=True)  # GAUNTLET_VAULT_DIR's generic default won't pre-exist
     path = os.path.join(VAULT, f".gauntlet-seal-canary-{uuid.uuid4().hex[:8]}.md")
     assert not os.path.exists(path), "canary path collided; pick a new token"
     with open(path, "w", encoding="utf-8") as f:

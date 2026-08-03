@@ -87,8 +87,8 @@ ANTHROPIC_BASE_URL=https://api.moonshot.ai/anthropic \
 ANTHROPIC_API_KEY=<MOONSHOT_API_KEY> ANTHROPIC_AUTH_TOKEN=<same> \
 claude -p "<prompt>" --output-format json --model kimi-k3 --dangerously-skip-permissions
 ```
-Key from `~/brain-actual-intelligence/.secrets/kimi.env` (600). Injected into the
-subprocess env only — never in argv, never logged.
+Key read from the file at `GAUNTLET_KIMI_KEY_FILE` (default `~/.gauntlet/secrets/kimi.env`,
+mode 600). Injected into the subprocess env only — never in argv, never logged.
 
 ## Effort tiers
 

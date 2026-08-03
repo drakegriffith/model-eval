@@ -44,6 +44,7 @@ def vault_canary():
     """A uniquely-tagged file inside the REAL vault, standing in for the answer
     a seeded task could be cheated with. Planted and removed per test, so a
     failing assertion cannot leave one behind."""
+    os.makedirs(VAULT, exist_ok=True)  # GAUNTLET_VAULT_DIR's generic default won't pre-exist
     path = os.path.join(VAULT, f".gauntlet-live-seal-canary-{uuid.uuid4().hex[:8]}.md")
     assert not os.path.exists(path), "canary path collided; rerun"
     with open(path, "w", encoding="utf-8") as f:
