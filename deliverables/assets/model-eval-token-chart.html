@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>model-eval — token efficiency</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--page);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .canvas {
+    width: 1200px;
+    height: 630px;
+    background: var(--page);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .card {
+    width: 1120px;
+    height: 550px;
+    background: var(--surface-1);
+    border-radius: 20px;
+    padding: 56px 64px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .eyebrow {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 14px 0;
+  }
+  h1 {
+    font-size: 42px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 8px 0;
+    line-height: 1.15;
+  }
+  .subtitle {
+    font-size: 18px;
+    color: var(--text-secondary);
+    margin: 0;
+  }
+  .chart {
+    margin-top: 36px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 28px;
+  }
+  .row:last-child { margin-bottom: 0; }
+  .label-col {
+    width: 190px;
+    flex-shrink: 0;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .label-sub {
+    display: block;
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .bar-track {
+    flex-grow: 1;
+    position: relative;
+    height: 24px;
+  }
+  .bar {
+    height: 24px;
+    border-radius: 4px;
+  }
+  .bar.b1 { background: var(--series-1); }
+  .bar.b2 { background: var(--series-2); }
+  .value {
+    margin-left: 16px;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    width: 150px;
+    flex-shrink: 0;
+  }
+  .value-sub {
+    display: block;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+  .baseline {
+    height: 1px;
+    background: var(--baseline);
+    margin-top: 6px;
+    margin-left: 190px;
+  }
+  .footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-top: 28px;
+    border-top: 1px solid var(--gridline);
+    padding-top: 20px;
+  }
+  .footnote {
+    font-size: 14px;
+    color: var(--text-muted);
+    max-width: 640px;
+    line-height: 1.5;
+  }
+  .repo {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <div class="card viz-root">
+      <div>
+        <p class="eyebrow">model-eval &middot; open benchmark harness</p>
+        <h1>Same pass rate. About a fifth of the tokens.</h1>
+        <p class="subtitle">Median total tokens per solved run, matched task pairs, each model at its own best-performing effort setting</p>
+      </div>
+
+      <div class="chart">
+        <div class="row">
+          <div class="label-col">Claude Fable<span class="label-sub">effort: medium &middot; bare</span></div>
+          <div class="bar-track">
+            <div class="bar b1" style="width: 20.9%;"></div>
+          </div>
+          <div class="value">20,567<span class="value-sub">tokens/run</span></div>
+        </div>
+        <div class="baseline"></div>
+        <div class="row" style="margin-top: 28px;">
+          <div class="label-col">Codex Sol<span class="label-sub">effort: low &middot; bare</span></div>
+          <div class="bar-track">
+            <div class="bar b2" style="width: 100%;"></div>
+          </div>
+          <div class="value">98,536<span class="value-sub">tokens/run</span></div>
+        </div>
+        <div class="baseline"></div>
+      </div>
+
+      <div class="footer">
+        <div class="footnote">Both models solved 100% of matched tasks at their winning effort tier. The token gap held under an exact sign-flip permutation test (9 tasks, p = 0.004), not an average across mixed difficulty.</div>
+        <div class="repo">github.com/drakegriffith/model-eval</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
