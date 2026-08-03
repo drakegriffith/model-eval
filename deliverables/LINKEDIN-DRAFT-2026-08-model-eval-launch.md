@@ -2,46 +2,51 @@
 
 Status: DRAFT, not posted. Drake posts manually. No LinkedIn posting tool used.
 
-Rewritten 2026-08-03 as a short teaser pointing at the blog post, replacing
-the earlier full-analysis draft (which carried the retracted "~1/5 the
-tokens, p=0.004" claim; see git history for that version and
-`deliverables/BLOG-POST-2026-08-model-eval-launch.md` for why it was wrong).
+Rewritten 2026-08-03 (v3) at Drake's direction: shorter, first person, leading
+with the correction rather than the harness feature list. v2 was a teaser
+pointing at the blog post; v1 carried the retracted "~1/5 the tokens, p=0.004"
+claim. Both are in git history.
+
+Link target: the post is live at drakegriffith.github.io today. An Actual
+Intelligence Labs `/research/` version is IN PROGRESS (see
+`docs/` handoff in this commit message and the ai-labs repo). If the AIL post
+ships first, swap the closing URL to
+`https://actualintelligencelabs.ai/research/<slug>` before posting.
 
 Every number below comes from `deliverables/STATS-CURRENT-2026-08-03.md`, the
-verbatim output of `python3 runner/stats.py` over the live corpus:
-- `runner/results/results.jsonl`: 268 rows, 267 scorable, 8 models/modes
-- `runner/results/judgments.jsonl`: 154 dual-judged rows
-- `runner/results/transcripts/`: 241 files
-- Effort-tier claim: §3 (15 adjacent-rung McNemar comparisons, 144 matched
-  pairs, zero discordant). Token ladder: median output tokens per solved run,
-  bare invocation.
-
-Blog post published 2026-08-03; the live URL is filled in below. Ready to
-paste. Drake posts it manually.
+verbatim output of `python3 runner/stats.py` over the live corpus (268 rows,
+267 scorable, 154 dual-judged). Effort claim: §3. Cost retraction: §5 vs the
+hand-rolled version. Ladder multiple: §3 medians.
 
 ---
 
-I open-sourced the benchmark harness I've been using to compare frontier
-coding models: github.com/drakegriffith/model-eval
+I open-sourced the benchmark harness I've been running my model comparisons
+on: github.com/drakegriffith/model-eval
 
-It runs models headlessly against small, verifiable coding tasks (real bugs
-in real repos, with a script that decides pass or fail, not a vibe check),
-grades the diffs with two independent LLM judges, and commits the transcripts
-and judgments next to the code that produced them. Every number in it can be
-checked against the receipts.
+The part I didn't plan on writing: I had to retract my own headline the same
+day I drafted it.
 
-Where it stands: 268 runs across 8 models, 241 archived transcripts, 154 runs
-scored by both judges.
+I had Claude Fable using fewer tokens than Codex Sol on 9 of 9 matched tasks,
+p = 0.004. It was a great chart. I had computed cost as input tokens plus
+output tokens, and Fable's input counts are quarantined as unreliable on all
+64 of its rows while Sol's are measured on all 112. I was comparing an
+undercount against a true count and reading the measurement gap as a
+performance gap. The repo's own stats script had been corrected for exactly
+this four days earlier. I recomputed by hand instead of running it.
 
-The result I did not expect: the effort knob never mattered. Across 15
-comparisons of adjacent effort tiers, 144 runs matched task for task, turning
-effort up never once changed a pass/fail outcome. It only changed the bill.
-Sol's top tier costs about 4.4x its cheapest tier for zero additional passes.
-The honest caveat is that on tasks this size nearly everything passes at
-every tier, which is its own finding, and the reason the next batch of tasks
-is going to be harder.
+Ran the script: p = 0.68, direction mixed, nothing detectable in either
+direction.
 
-The write-up also covers the headline finding I had to retract the same day I
-drafted it, and how the repo's own tooling caught a mistake I made by hand.
+What did survive, across 268 runs on 8 models: every model passed every task
+it attempted, which is a ceiling effect and not a tie. And the effort knob
+never flipped a single outcome. 15 comparisons of adjacent effort tiers, 144
+matched pairs, zero discordant. Sol's top tier costs about 4.4x its cheapest
+tier and buys zero additional passes.
 
-Full detail: https://drakegriffith.github.io/drakes-website/blog/2026-08-03-model-eval-what-happens-when-every-model-passes.html
+Transcripts, judgments and raw token counts are committed next to the code
+that produced them, so every number above can be checked against the
+receipts. The wrong chart is still in the repo under
+`assets/model-eval-token-chart-WRONG-DO-NOT-USE.png`, because it looks
+completely convincing, and that is the point.
+
+Full write-up: https://drakegriffith.github.io/drakes-website/blog/2026-08-03-model-eval-what-happens-when-every-model-passes.html
