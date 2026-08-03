@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>model-eval — per-task token difference, Fable vs Sol</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --zero:           #8d8b84;
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--page);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .canvas {
+    width: 1200px;
+    height: 630px;
+    background: var(--page);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .card {
+    width: 1120px;
+    height: 550px;
+    background: var(--surface-1);
+    border-radius: 20px;
+    padding: 34px 56px 26px 56px;
+    display: flex;
+    flex-direction: column;
+  }
+  .eyebrow {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 10px 0;
+  }
+  h1 {
+    font-size: 34px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 6px 0;
+    line-height: 1.15;
+  }
+  .subtitle {
+    font-size: 15px;
+    color: var(--text-secondary);
+    margin: 0;
+    max-width: 900px;
+    line-height: 1.4;
+  }
+  .axis-head {
+    display: flex;
+    margin-top: 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+  }
+  .axis-head .spacer { width: 108px; flex-shrink: 0; }
+  .axis-head .half {
+    width: 50%;
+    padding-bottom: 6px;
+  }
+  .axis-head .left  { text-align: right; padding-right: 12px; color: var(--series-1); }
+  .axis-head .right { text-align: left;  padding-left: 12px;  color: var(--series-2); }
+  .chart { margin-top: 4px; }
+  .row {
+    display: flex;
+    align-items: center;
+    height: 30px;
+  }
+  .label-col {
+    width: 108px;
+    flex-shrink: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .track {
+    flex-grow: 1;
+    position: relative;
+    height: 30px;
+  }
+  .track::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 0; bottom: 0;
+    width: 1px;
+    background: var(--zero);
+  }
+  .bar {
+    position: absolute;
+    top: 8px;
+    height: 15px;
+    border-radius: 3px;
+  }
+  .bar.pos { left: 50%; background: var(--series-2); }
+  .bar.neg { right: 50%; background: var(--series-1); }
+  .val {
+    position: absolute;
+    top: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+  .footer {
+    margin-top: auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-top: 1px solid var(--gridline);
+    padding-top: 14px;
+  }
+  .footnote {
+    font-size: 13px;
+    color: var(--text-muted);
+    max-width: 700px;
+    line-height: 1.45;
+  }
+  .repo {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    padding-left: 24px;
+  }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <div class="card viz-root">
+      <div>
+        <p class="eyebrow">model-eval &middot; open benchmark harness</p>
+        <h1>Nine tasks, and the cheaper model keeps changing</h1>
+        <p class="subtitle">Median output tokens per solved run, Claude Fable relative to Codex Sol, one row per task. All passing runs of each model, effort tiers pooled.</p>
+      </div>
+
+      <div class="axis-head">
+        <div class="spacer"></div>
+        <div class="half left">&#8592; Fable used fewer</div>
+        <div class="half right">Fable used more &#8594;</div>
+      </div>
+
+      <div class="chart">
+        <div class="row">
+          <div class="label-col">t1-py-a</div>
+          <div class="track">
+            <div class="bar pos" style="width: 17.4%;"></div>
+            <div class="val" style="left: 67.4%; margin-left: 10px;">+14%</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label-col">t1-py-b</div>
+          <div class="track">
+            <div class="bar neg" style="width: 9.8%;"></div>
+            <div class="val" style="right: 59.8%; margin-right: 10px;">&#8722;8%</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label-col">t1-ts-a</div>
+          <div class="track">
+            <div class="bar neg" style="width: 18.0%;"></div>
+            <div class="val" style="right: 68.0%; margin-right: 10px;">&#8722;14%</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label-col">t1-ts-b</div>
+          <div class="track">
+            <div class="bar pos" style="width: 0.3%;"></div>
+            <div class="val" style="left: 50.3%; margin-left: 10px;">0%</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label-col">t2-py-a</div>
+          <div class="track">
+            <div class="bar pos" style="width: 44.0%;"></div>
+            <div class="val" style="left: 94.0%; margin-left: 10px;">+35%</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label-col">t2-py-b</div>
+          <div class="track">
+            <div class="bar pos" style="width: 12.6%;"></div>
+            <div class="val" style="left: 62.6%; margin-left: 10px;">+10%</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label-col">t2-ts-a</div>
+          <div class="track">
+            <div class="bar neg" style="width: 3.1%;"></div>
+            <div class="val" style="right: 53.1%; margin-right: 10px;">&#8722;3%</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label-col">t2-ts-b</div>
+          <div class="track">
+            <div class="bar pos" style="width: 19.5%;"></div>
+            <div class="val" style="left: 69.5%; margin-left: 10px;">+16%</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label-col">t3-a</div>
+          <div class="track">
+            <div class="bar neg" style="width: 22.4%;"></div>
+            <div class="val" style="right: 72.4%; margin-right: 10px;">&#8722;18%</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div class="footnote">Five tasks one way, four the other. Exact sign-flip permutation test on the per-task log differences: 348 of 512 sign patterns are as-or-more extreme, two-sided p = 0.68. No detectable difference at this sample size, in either direction. Output tokens only: Fable&rsquo;s input-token counts are quarantined as unreliable.</div>
+        <div class="repo">github.com/drakegriffith/model-eval</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
