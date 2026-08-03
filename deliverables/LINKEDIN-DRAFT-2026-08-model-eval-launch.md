@@ -2,51 +2,67 @@
 
 Status: DRAFT, not posted. Drake posts manually. No LinkedIn posting tool used.
 
-Rewritten 2026-08-03 (v3) at Drake's direction: shorter, first person, leading
-with the correction rather than the harness feature list. v2 was a teaser
-pointing at the blog post; v1 carried the retracted "~1/5 the tokens, p=0.004"
-claim. Both are in git history.
+Rewritten 2026-08-03 (v4) at Drake's direction: retargeted at the now-live
+Actual Intelligence Labs post. v3 pointed at drakegriffith.github.io and led on
+the ceiling effect; v2 was a teaser; v1 carried the retracted "~1/5 the tokens,
+p=0.004" claim. All in git history.
 
-Link target: the post is live at drakegriffith.github.io today. An Actual
-Intelligence Labs `/research/` version is IN PROGRESS (see
-`docs/` handoff in this commit message and the ai-labs repo). If the AIL post
-ships first, swap the closing URL to
-`https://actualintelligencelabs.ai/research/<slug>` before posting.
+Link target (RESOLVED): https://actualintelligencelabs.ai/research/open-source-llm-eval-harness
+Live as of 2026-08-03, PR #33 in zachk-alt/actual-intelligence-labs, commit 88f4571.
 
-Every number below comes from `deliverables/STATS-CURRENT-2026-08-03.md`, the
-verbatim output of `python3 runner/stats.py` over the live corpus (268 rows,
-267 scorable, 154 dual-judged). Effort claim: §3. Cost retraction: §5 vs the
-hand-rolled version. Ladder multiple: §3 medians.
+Body follows that post's angle: harness is open source + one cost question has
+four defensible framings that give four different answers + the retraction. The
+"every model passed everything" / ceiling story belongs to the predecessor post
+`/research/claude-vs-gpt-154-run-experiment`, so it is deliberately NOT the hook
+here. The effort-ladder finding (4.4x spend, zero flipped outcomes) is also cut
+for length; it lives in the AIL post's FAQ.
+
+Numbers: retraction figures from `deliverables/STATS-CURRENT-2026-08-03.md`
+(verbatim `python3 runner/stats.py` over 268 rows, 267 scorable, 154
+dual-judged). The four cost cells and their p-values match the AIL post's FAQ
+and cost section verbatim.
+
+Style constraints applied: no emojis, no em dashes, no en dashes,
+correction-first framing.
 
 ---
 
-I open-sourced the benchmark harness I've been running my model comparisons
-on: github.com/drakegriffith/model-eval
+I open-sourced the benchmark harness I run my model comparisons on:
+github.com/drakegriffith/model-eval
 
-The part I didn't plan on writing: I had to retract my own headline the same
-day I drafted it.
+Then I had to retract my own headline the same day I drafted it.
 
 I had Claude Fable using fewer tokens than Codex Sol on 9 of 9 matched tasks,
-p = 0.004. It was a great chart. I had computed cost as input tokens plus
-output tokens, and Fable's input counts are quarantined as unreliable on all
-64 of its rows while Sol's are measured on all 112. I was comparing an
-undercount against a true count and reading the measurement gap as a
-performance gap. The repo's own stats script had been corrected for exactly
-this four days earlier. I recomputed by hand instead of running it.
+p = 0.004. It was a great chart. I had computed cost as input tokens plus output
+tokens, and Fable's input counts are quarantined as unreliable on all 64 of its
+rows while Sol's are measured on all 112. I was comparing an undercount against
+a true count and reading the measurement gap as a performance gap. The repo's
+own stats script had been corrected for exactly this four days earlier. I
+recomputed by hand instead of running it.
 
-Ran the script: p = 0.68, direction mixed, nothing detectable in either
-direction.
+Ran the script. p = 0.68. Nothing detectable in either direction.
 
-What did survive, across 268 runs on 8 models: every model passed every task
-it attempted, which is a ceiling effect and not a tie. And the effort knob
-never flipped a single outcome. 15 comparisons of adjacent effort tiers, 144
-matched pairs, zero discordant. Sol's top tier costs about 4.4x its cheapest
-tier and buys zero additional passes.
+What replaced it is the more useful result. "Which model is cheaper per solved
+task" turns out to have four defensible ways to ask it, and the same 267 runs
+answer all four differently:
 
-Transcripts, judgments and raw token counts are committed next to the code
-that produced them, so every number above can be checked against the
-receipts. The wrong chart is still in the repo under
-`assets/model-eval-token-chart-WRONG-DO-NOT-USE.png`, because it looks
-completely convincing, and that is the point.
+Pooled across all effort tiers: no detectable difference, p = 0.68.
+Both held at medium: no detectable difference, p = 0.43.
+Both held at high: the direction reverses, p = 0.086.
+Each at its own cheapest passing tier: Sol beats Fable by roughly 1.6x, p = 0.0078.
 
-Full write-up: https://drakegriffith.github.io/drakes-website/blog/2026-08-03-model-eval-what-happens-when-every-model-passes.html
+One corpus, four framings, four answers. Only the last one clears a
+significance bar, and it compares two different tiers against each other, so the
+cell names matter more than the p-value does. Every vendor cost chart you have
+seen picked one of these framings and did not show you the other three.
+
+The harness is public so you can pick your own. Python runner, tasks that prove
+their own difficulty with a verify script that fails before the reference fix
+and passes after it, two blind judges scoring every diff, and every transcript
+and raw token count committed next to the code that produced it.
+
+The wrong chart is still in the repo, at
+assets/model-eval-token-chart-WRONG-DO-NOT-USE.png, because it looks completely
+convincing. That is the point.
+
+Full write-up: https://actualintelligencelabs.ai/research/open-source-llm-eval-harness
