@@ -71,6 +71,8 @@ idiomatic style, spec adherence) without seeing each other's verdict.
 
 ## Finding 1: pass/fail stopped being the interesting number
 
+![Pass rate with 95% Wilson intervals for all 25 model x effort x harness cells. Every dot sits at 100%; the whiskers, which run back to each cell's Wilson lower bound, range from 34% to 89% depending on sample size.](assets/model-eval-pass-rate-ceiling.png)
+
 Across the 267 scorable runs in the current corpus, every model passed every
 task it attempted. 100%. Sol, Fable, Kimi K3, GPT-5.6 Luna, GPT-5.3 Codex
 Spark, both Claude Haiku 4.5 snapshots, all of it. (There are 268 rows on
@@ -164,6 +166,8 @@ would close that gap is a run I haven't done.
 
 ## Finding 3: the effort knob never flipped a single outcome
 
+![Median output tokens per solved run for every bare model, one dot per effort rung on a shared 0-6,000 token axis. Sol spans 4.40x from low to ultra; both Claude Haiku 4.5 rows step backwards, spending less at a higher tier.](assets/model-eval-effort-ladder.png)
+
 Every model in this corpus exposes an "effort" knob (low/medium/high, or
 similar), and the working assumption going in was that higher effort should
 mean better outcomes. This is the one claim in the post where the corpus is
@@ -186,13 +190,13 @@ invocation:
 
 | model | low | medium | high | xhigh | max/ultra |
 |---|---|---|---|---|---|
-| Sol | 1,123 | 1,533 | 1,992 | 2,707 | 4,942 (ultra) |
-| GPT-5.6 Luna | 1,551 | | 2,873 | | 5,249 (max) |
-| GPT-5.3 Codex Spark | 2,308 | | 3,529 | 4,250 | |
-| Kimi K3 | 1,384 | | 1,630 | | 1,971 (max) |
+| Sol | 1,124 | 1,534 | 1,992 | 2,708 | 4,942 (ultra) |
+| GPT-5.6 Luna | 1,551 | | 2,874 | | 5,249 (max) |
+| GPT-5.3 Codex Spark | 2,308 | | 3,530 | 4,250 | |
+| Kimi K3 | 1,384 | | 1,630 | | 1,972 (max) |
 | Fable | | 1,737 | 2,008 | | |
 | Claude Haiku 4.5 | 2,860 | | 2,674 | | 2,745 (max) |
-| Claude Haiku 4.5 (pinned) | 5,227 | | 5,757 | | 4,840 (max) |
+| Claude Haiku 4.5 (pinned) | 5,228 | | 5,758 | | 4,840 (max) |
 
 Sol's `ultra` costs about 4.4x its `low`, and Luna's `max` about 3.4x its
 `low`, for zero additional passing runs. Kimi climbs gently. Both Haiku rows

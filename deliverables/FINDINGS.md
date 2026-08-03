@@ -46,4 +46,4 @@ ladder and model gaps get a real test. Same rig, harder exam.
 ## Assets
 - `assets/1-pass-rate-ceiling.png` — pass rates w/ Wilson CIs (the honesty chart)
 - `assets/2-effort-buys-nothing.png` — output tokens by effort, all 100% pass
-- `assets/3-input-token-economics.png` — input tokens by config (w/ accounting caveat)
+- `assets/3-input-token-economics-DO-NOT-USE.png` — input tokens by config (w/ accounting caveat)

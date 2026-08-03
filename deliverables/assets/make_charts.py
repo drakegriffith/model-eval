@@ -107,7 +107,7 @@ ax.set_ylabel("median input tokens", fontsize=9, color=INK)
 legend(ax)
 fig.text(0.06, -0.03, "Caution: the two CLIs count input tokens differently (context resends / cache reads). Within-model comparison is safe; cross-model is indicative only.",
          fontsize=8, color=MUTED)
-fig.savefig(os.path.join(HERE, "3-input-token-economics.png"), bbox_inches="tight")
+fig.savefig(os.path.join(HERE, "3-input-token-economics-DO-NOT-USE.png"), bbox_inches="tight")
 
 # aggregates for FINDINGS ----------------------------------------------------
 print(f"{'config':16} {'pass':>6} {'out':>6} {'in':>8} {'wall':>6} {'turns':>5}")

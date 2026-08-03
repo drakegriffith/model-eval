@@ -36,6 +36,10 @@
     display: flex;
     flex-direction: column;
   }
+  /* A card is a fixed-height flex column. Without this the browser shrinks
+     whichever child is tallest to make the content fit, which silently
+     compresses a plot instead of failing visibly. */
+  .card > * { flex-shrink: 0; }
   .eyebrow {
     font-size: 13px;
     font-weight: 600;
@@ -112,8 +116,8 @@
     padding-left: 24px;
   }
 
-  .canvas { width: 1200px; height: 1040px; }
-  .card { width: 1136px; height: 976px; }
+  .canvas { width: 1200px; height: 1120px; }
+  .card { width: 1136px; height: 1056px; }
 
   .lplot { position: relative; margin-top: 10px; }
   .laxis {
@@ -142,7 +146,7 @@
   .lrow {
     display: flex;
     align-items: center;
-    height: 88px;
+    height: 96px;
     position: relative;
   }
   .lrow + .lrow { border-top: 1px solid var(--gridline); }
@@ -162,17 +166,17 @@
     color: var(--text-muted);
     margin-top: 2px;
   }
-  .ltrack { flex-grow: 1; position: relative; height: 88px; }
+  .ltrack { flex-grow: 1; position: relative; height: 96px; }
   .seg {
     position: absolute;
-    top: 43px;
+    top: 49px;
     height: 2px;
     background: var(--zero);
   }
-  .seg.back { background: var(--series-2); height: 3px; top: 42.5px; }
+  .seg.back { background: var(--series-2); height: 3px; top: 48.5px; }
   .ldot {
     position: absolute;
-    top: 38px;
+    top: 42px;
     width: 12px;
     height: 12px;
     margin-left: -6px;
@@ -186,6 +190,9 @@
     transform: translateX(-50%);
     white-space: nowrap;
     text-align: center;
+    /* line-height 1 so a label's box is its font size; EFF_TOP/TOK_TOP stack
+       three levels inside one row and the arithmetic assumes no extra leading. */
+    line-height: 1;
   }
   .eff {
     font-size: 10.5px;
@@ -266,13 +273,13 @@
           <div class="gl" style="left: 83.333%;"></div>
           <div class="gl" style="left: 100.000%;"></div>
           </div>
-        <div class="lrow"><div class="lmodel"><div class="nm">Sol</div><div class="sub">5 rungs &middot; cheapest at low</div></div><div class="ltrack"><div class="seg" style="left: 18.725%; width: 6.833%;"></div><div class="seg" style="left: 25.558%; width: 7.650%;"></div><div class="seg" style="left: 33.208%; width: 11.917%;"></div><div class="seg" style="left: 45.125%; width: 37.250%;"></div><div class="ldot" style="left: 18.725%;"></div><div class="eff" style="left: 18.725%; top: 16px;">low</div><div class="tok" style="left: 18.725%; top: 54px;">1,124</div><div class="ldot" style="left: 25.558%;"></div><div class="eff" style="left: 25.558%; top: 2px;">medium</div><div class="tok" style="left: 25.558%; top: 66px;">1,534</div><div class="ldot" style="left: 33.208%;"></div><div class="eff" style="left: 33.208%; top: 16px;">high</div><div class="tok" style="left: 33.208%; top: 54px;">1,992</div><div class="ldot" style="left: 45.125%;"></div><div class="eff" style="left: 45.125%; top: 16px;">xhigh</div><div class="tok" style="left: 45.125%; top: 54px;">2,708</div><div class="ldot last" style="left: 82.375%;"></div><div class="eff" style="left: 82.375%; top: 16px;">ultra</div><div class="tok" style="left: 82.375%; top: 54px;">4,942</div></div><div class="lspread"><div class="mult">4.40&times;</div><div class="cap2">dearest / cheapest</div></div></div>
-        <div class="lrow"><div class="lmodel"><div class="nm">GPT-5.6 Luna</div><div class="sub">3 rungs &middot; cheapest at low</div></div><div class="ltrack"><div class="seg" style="left: 25.850%; width: 22.042%;"></div><div class="seg" style="left: 47.892%; width: 39.592%;"></div><div class="ldot" style="left: 25.850%;"></div><div class="eff" style="left: 25.850%; top: 16px;">low</div><div class="tok" style="left: 25.850%; top: 54px;">1,551</div><div class="ldot" style="left: 47.892%;"></div><div class="eff" style="left: 47.892%; top: 16px;">high</div><div class="tok" style="left: 47.892%; top: 54px;">2,874</div><div class="ldot last" style="left: 87.483%;"></div><div class="eff" style="left: 87.483%; top: 16px;">max</div><div class="tok" style="left: 87.483%; top: 54px;">5,249</div></div><div class="lspread"><div class="mult">3.38&times;</div><div class="cap2">dearest / cheapest</div></div></div>
-        <div class="lrow"><div class="lmodel"><div class="nm">GPT-5.3 Codex Spark</div><div class="sub">3 rungs &middot; cheapest at low</div></div><div class="ltrack"><div class="seg" style="left: 38.467%; width: 20.358%;"></div><div class="seg" style="left: 58.825%; width: 12.008%;"></div><div class="ldot" style="left: 38.467%;"></div><div class="eff" style="left: 38.467%; top: 16px;">low</div><div class="tok" style="left: 38.467%; top: 54px;">2,308</div><div class="ldot" style="left: 58.825%;"></div><div class="eff" style="left: 58.825%; top: 16px;">high</div><div class="tok" style="left: 58.825%; top: 54px;">3,530</div><div class="ldot last" style="left: 70.833%;"></div><div class="eff" style="left: 70.833%; top: 16px;">xhigh</div><div class="tok" style="left: 70.833%; top: 54px;">4,250</div></div><div class="lspread"><div class="mult">1.84&times;</div><div class="cap2">dearest / cheapest</div></div></div>
-        <div class="lrow"><div class="lmodel"><div class="nm">Kimi K3</div><div class="sub">3 rungs &middot; cheapest at low</div></div><div class="ltrack"><div class="seg" style="left: 23.075%; width: 4.100%;"></div><div class="seg" style="left: 27.175%; width: 5.683%;"></div><div class="ldot" style="left: 23.075%;"></div><div class="eff" style="left: 23.075%; top: 16px;">low</div><div class="tok" style="left: 23.075%; top: 54px;">1,384</div><div class="ldot" style="left: 27.175%;"></div><div class="eff" style="left: 27.175%; top: 2px;">high</div><div class="tok" style="left: 27.175%; top: 66px;">1,630</div><div class="ldot last" style="left: 32.858%;"></div><div class="eff" style="left: 32.858%; top: 16px;">max</div><div class="tok" style="left: 32.858%; top: 54px;">1,972</div></div><div class="lspread"><div class="mult">1.42&times;</div><div class="cap2">dearest / cheapest</div></div></div>
-        <div class="lrow"><div class="lmodel"><div class="nm">Fable</div><div class="sub">2 rungs &middot; cheapest at medium</div></div><div class="ltrack"><div class="seg" style="left: 28.950%; width: 4.517%;"></div><div class="ldot" style="left: 28.950%;"></div><div class="eff" style="left: 28.950%; top: 16px;">medium</div><div class="tok" style="left: 28.950%; top: 54px;">1,737</div><div class="ldot last" style="left: 33.467%;"></div><div class="eff" style="left: 33.467%; top: 2px;">high</div><div class="tok" style="left: 33.467%; top: 66px;">2,008</div></div><div class="lspread"><div class="mult">1.16&times;</div><div class="cap2">dearest / cheapest</div></div></div>
-        <div class="lrow"><div class="lmodel"><div class="nm">Claude Haiku 4.5 (pinned)</div><div class="sub">3 rungs &middot; cheapest at max</div></div><div class="ltrack"><div class="seg" style="left: 87.125%; width: 8.833%;"></div><div class="seg back" style="left: 80.667%; width: 15.292%;"></div><div class="ldot" style="left: 87.125%;"></div><div class="eff" style="left: 87.125%; top: 2px;">low</div><div class="tok" style="left: 87.125%; top: 66px;">5,228</div><div class="ldot" style="left: 95.958%;"></div><div class="eff" style="left: 95.958%; top: 16px;">high</div><div class="tok" style="left: 95.958%; top: 54px;">5,758</div><div class="ldot last" style="left: 80.667%;"></div><div class="eff" style="left: 80.667%; top: 16px;">max</div><div class="tok" style="left: 80.667%; top: 54px;">4,840</div></div><div class="lspread"><div class="mult">1.19&times;</div><div class="cap2">dearest / cheapest</div><div class="chip">non-monotonic</div></div></div>
-        <div class="lrow"><div class="lmodel"><div class="nm">Claude Haiku 4.5</div><div class="sub">3 rungs &middot; cheapest at high</div></div><div class="ltrack"><div class="seg back" style="left: 44.575%; width: 3.100%;"></div><div class="seg" style="left: 44.575%; width: 1.175%;"></div><div class="ldot" style="left: 47.675%;"></div><div class="eff" style="left: 47.675%; top: 2px;">low</div><div class="tok" style="left: 47.675%; top: 66px;">2,860</div><div class="ldot" style="left: 44.575%;"></div><div class="eff" style="left: 44.575%; top: 16px;">high</div><div class="tok" style="left: 44.575%; top: 54px;">2,674</div><div class="ldot last" style="left: 45.750%;"></div><div class="eff" style="left: 45.750%; top: 2px;">max</div><div class="tok" style="left: 45.750%; top: 66px;">2,745</div></div><div class="lspread"><div class="mult">1.07&times;</div><div class="cap2">dearest / cheapest</div><div class="chip">non-monotonic</div></div></div>
+        <div class="lrow"><div class="lmodel"><div class="nm">Sol</div><div class="sub">5 rungs &middot; cheapest at low</div></div><div class="ltrack"><div class="seg" style="left: 18.725%; width: 6.833%;"></div><div class="seg" style="left: 25.558%; width: 7.650%;"></div><div class="seg" style="left: 33.208%; width: 11.917%;"></div><div class="seg" style="left: 45.125%; width: 37.250%;"></div><div class="ldot" style="left: 18.725%;"></div><div class="eff" style="left: 18.725%; top: 28px;">low</div><div class="tok" style="left: 18.725%; top: 59px;">1,124</div><div class="ldot" style="left: 25.558%;"></div><div class="eff" style="left: 25.558%; top: 15px;">medium</div><div class="tok" style="left: 25.558%; top: 72px;">1,534</div><div class="ldot" style="left: 33.208%;"></div><div class="eff" style="left: 33.208%; top: 28px;">high</div><div class="tok" style="left: 33.208%; top: 59px;">1,992</div><div class="ldot" style="left: 45.125%;"></div><div class="eff" style="left: 45.125%; top: 28px;">xhigh</div><div class="tok" style="left: 45.125%; top: 59px;">2,708</div><div class="ldot last" style="left: 82.375%;"></div><div class="eff" style="left: 82.375%; top: 28px;">ultra</div><div class="tok" style="left: 82.375%; top: 59px;">4,942</div></div><div class="lspread"><div class="mult">4.40&times;</div><div class="cap2">dearest / cheapest</div></div></div>
+        <div class="lrow"><div class="lmodel"><div class="nm">GPT-5.6 Luna</div><div class="sub">3 rungs &middot; cheapest at low</div></div><div class="ltrack"><div class="seg" style="left: 25.850%; width: 22.042%;"></div><div class="seg" style="left: 47.892%; width: 39.592%;"></div><div class="ldot" style="left: 25.850%;"></div><div class="eff" style="left: 25.850%; top: 28px;">low</div><div class="tok" style="left: 25.850%; top: 59px;">1,551</div><div class="ldot" style="left: 47.892%;"></div><div class="eff" style="left: 47.892%; top: 28px;">high</div><div class="tok" style="left: 47.892%; top: 59px;">2,874</div><div class="ldot last" style="left: 87.483%;"></div><div class="eff" style="left: 87.483%; top: 28px;">max</div><div class="tok" style="left: 87.483%; top: 59px;">5,249</div></div><div class="lspread"><div class="mult">3.38&times;</div><div class="cap2">dearest / cheapest</div></div></div>
+        <div class="lrow"><div class="lmodel"><div class="nm">GPT-5.3 Codex Spark</div><div class="sub">3 rungs &middot; cheapest at low</div></div><div class="ltrack"><div class="seg" style="left: 38.467%; width: 20.358%;"></div><div class="seg" style="left: 58.825%; width: 12.008%;"></div><div class="ldot" style="left: 38.467%;"></div><div class="eff" style="left: 38.467%; top: 28px;">low</div><div class="tok" style="left: 38.467%; top: 59px;">2,308</div><div class="ldot" style="left: 58.825%;"></div><div class="eff" style="left: 58.825%; top: 28px;">high</div><div class="tok" style="left: 58.825%; top: 59px;">3,530</div><div class="ldot last" style="left: 70.833%;"></div><div class="eff" style="left: 70.833%; top: 28px;">xhigh</div><div class="tok" style="left: 70.833%; top: 59px;">4,250</div></div><div class="lspread"><div class="mult">1.84&times;</div><div class="cap2">dearest / cheapest</div></div></div>
+        <div class="lrow"><div class="lmodel"><div class="nm">Kimi K3</div><div class="sub">3 rungs &middot; cheapest at low</div></div><div class="ltrack"><div class="seg" style="left: 23.075%; width: 4.100%;"></div><div class="seg" style="left: 27.175%; width: 5.683%;"></div><div class="ldot" style="left: 23.075%;"></div><div class="eff" style="left: 23.075%; top: 28px;">low</div><div class="tok" style="left: 23.075%; top: 59px;">1,384</div><div class="ldot" style="left: 27.175%;"></div><div class="eff" style="left: 27.175%; top: 15px;">high</div><div class="tok" style="left: 27.175%; top: 72px;">1,630</div><div class="ldot last" style="left: 32.858%;"></div><div class="eff" style="left: 32.858%; top: 28px;">max</div><div class="tok" style="left: 32.858%; top: 59px;">1,972</div></div><div class="lspread"><div class="mult">1.42&times;</div><div class="cap2">dearest / cheapest</div></div></div>
+        <div class="lrow"><div class="lmodel"><div class="nm">Fable</div><div class="sub">2 rungs &middot; cheapest at medium</div></div><div class="ltrack"><div class="seg" style="left: 28.950%; width: 4.517%;"></div><div class="ldot" style="left: 28.950%;"></div><div class="eff" style="left: 28.950%; top: 28px;">medium</div><div class="tok" style="left: 28.950%; top: 59px;">1,737</div><div class="ldot last" style="left: 33.467%;"></div><div class="eff" style="left: 33.467%; top: 15px;">high</div><div class="tok" style="left: 33.467%; top: 72px;">2,008</div></div><div class="lspread"><div class="mult">1.16&times;</div><div class="cap2">dearest / cheapest</div></div></div>
+        <div class="lrow"><div class="lmodel"><div class="nm">Claude Haiku 4.5 (pinned)</div><div class="sub">3 rungs &middot; cheapest at max</div></div><div class="ltrack"><div class="seg" style="left: 87.125%; width: 8.833%;"></div><div class="seg back" style="left: 80.667%; width: 15.292%;"></div><div class="ldot" style="left: 87.125%;"></div><div class="eff" style="left: 87.125%; top: 15px;">low</div><div class="tok" style="left: 87.125%; top: 72px;">5,228</div><div class="ldot" style="left: 95.958%;"></div><div class="eff" style="left: 95.958%; top: 28px;">high</div><div class="tok" style="left: 95.958%; top: 59px;">5,758</div><div class="ldot last" style="left: 80.667%;"></div><div class="eff" style="left: 80.667%; top: 28px;">max</div><div class="tok" style="left: 80.667%; top: 59px;">4,840</div></div><div class="lspread"><div class="mult">1.19&times;</div><div class="cap2">dearest / cheapest</div><div class="chip">non-monotonic</div></div></div>
+        <div class="lrow"><div class="lmodel"><div class="nm">Claude Haiku 4.5</div><div class="sub">3 rungs &middot; cheapest at high</div></div><div class="ltrack"><div class="seg back" style="left: 44.575%; width: 3.100%;"></div><div class="seg" style="left: 44.575%; width: 1.175%;"></div><div class="ldot" style="left: 47.675%;"></div><div class="eff" style="left: 47.675%; top: 2px;">low</div><div class="tok" style="left: 47.675%; top: 84px;">2,860</div><div class="ldot" style="left: 44.575%;"></div><div class="eff" style="left: 44.575%; top: 28px;">high</div><div class="tok" style="left: 44.575%; top: 59px;">2,674</div><div class="ldot last" style="left: 45.750%;"></div><div class="eff" style="left: 45.750%; top: 15px;">max</div><div class="tok" style="left: 45.750%; top: 72px;">2,745</div></div><div class="lspread"><div class="mult">1.07&times;</div><div class="cap2">dearest / cheapest</div><div class="chip">non-monotonic</div></div></div>
         </div>
       </div>
       <div class="callout">Every dot on this card is a <strong>100% pass rate</strong> &mdash; all 237 charted runs passed. Across 15 adjacent-rung comparisons and <strong>144 matched pairs</strong>, the number of discordant pairs, meaning a task that passed at one tier and failed at the tier next to it, is <strong>0</strong>. Sol charges 4.40&times; more at the top of its ladder than the bottom and buys nothing measurable with it.</div>

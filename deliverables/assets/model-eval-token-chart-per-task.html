@@ -36,6 +36,10 @@
     display: flex;
     flex-direction: column;
   }
+  /* A card is a fixed-height flex column. Without this the browser shrinks
+     whichever child is tallest to make the content fit, which silently
+     compresses a plot instead of failing visibly. */
+  .card > * { flex-shrink: 0; }
   .eyebrow {
     font-size: 13px;
     font-weight: 600;

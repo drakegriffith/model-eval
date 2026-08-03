@@ -147,7 +147,7 @@ Result: a perfect 100% tie — and that's the finding. Benchmark saturation, a "
 
 ## PRODUCTION NOTES
 
-- Charts to shoot: `assets/1-pass-rate-ceiling.png`, `assets/2-effort-buys-nothing.png`, `assets/3-input-token-economics.png` (1600×900, light surface).
+- Charts to shoot: `assets/1-pass-rate-ceiling.png`, `assets/2-effort-buys-nothing.png`, `assets/3-input-token-economics-DO-NOT-USE.png` (1600×900, light surface).
 - B-roll to capture from repo: 9-line green selftest run · empty `diff harness/AGENTS.md harness/CLAUDE.md` · a resumed run skipping completed rows · hybrid NOTES.md failure vs passing diff · STATS-APPENDIX.md scroll.
 - On-camera stats phrasing is already written into the beats — say the plain-English line, let the lower-third carry the term ("McNemar exact test, paired" / "95% Wilson interval, n=24").
 - Do NOT quote dollar figures — token counts and percentages only (accounting caveat).

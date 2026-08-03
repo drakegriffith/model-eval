@@ -85,7 +85,7 @@ Look back at the config table and you will see Claude reporting around 19.4k med
 
 The practical rule: **within-model** comparisons are safe, because each CLI is consistent with itself. **Cross-model** input-token or dollar comparisons are indicative only, and I refuse to publish them as hard claims. The axes that *are* honestly comparable across models are output tokens, turns, and wall-clock time. Those are what I lean on.
 
-*[Figure: assets/3-input-token-economics.png — Input tokens by configuration, annotated with the accounting caveat. The gap between the two models is an artifact of CLI bookkeeping, not workload, and the chart says so on its face.]*
+*[Figure: assets/3-input-token-economics-DO-NOT-USE.png — Input tokens by configuration, annotated with the accounting caveat. The gap between the two models is an artifact of CLI bookkeeping, not workload, and the chart says so on its face.]*
 
 ### The one configuration that wobbled
 

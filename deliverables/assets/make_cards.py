@@ -105,6 +105,10 @@ BASE_CSS = """
     display: flex;
     flex-direction: column;
   }
+  /* A card is a fixed-height flex column. Without this the browser shrinks
+     whichever child is tallest to make the content fit, which silently
+     compresses a plot instead of failing visibly. */
+  .card > * { flex-shrink: 0; }
   .eyebrow {
     font-size: 13px;
     font-weight: 600;
@@ -481,7 +485,7 @@ def card_cost(kept):
 # --------------------------------------------------------------------------- #
 # Card 2 — pass-rate ceiling: every cell at 100%, Wilson intervals below it (§1)
 # --------------------------------------------------------------------------- #
-CEIL_W, CEIL_H = 1200, 1000
+CEIL_W, CEIL_H = 1200, 1100
 
 # The x axis of the ceiling card, in percentage points. The lower bound has to
 # sit under the smallest Wilson lower bound in the corpus or a whisker runs off
@@ -542,20 +546,23 @@ CEIL_CSS = """
     font-variant-numeric: tabular-nums;
   }
   .ctrack { flex-grow: 1; position: relative; height: 24px; }
-  .whisk {
+  /* Namespaced `ci-` because the shared legend has .sw.dot and .sw.whisk
+     swatches; an unprefixed .dot/.whisk here wins on `position: absolute`
+     and throws those swatches out of the card. */
+  .ci-whisk {
     position: absolute;
     top: 11px;
     height: 2px;
     background: var(--series-1);
   }
-  .cap {
+  .ci-cap {
     position: absolute;
     top: 6px;
     width: 2px;
     height: 12px;
     background: var(--series-1);
   }
-  .dot {
+  .ci-dot {
     position: absolute;
     top: 7px;
     width: 10px;
@@ -564,7 +571,7 @@ CEIL_CSS = """
     border-radius: 50%;
     background: var(--text-primary);
   }
-  .lo {
+  .ci-lo {
     position: absolute;
     top: 5px;
     font-size: 11px;
@@ -622,11 +629,11 @@ def card_ceiling(kept):
             f'<div class="ccell">{esc(c["effort"])} &middot; {c["harness"]}</div>'
             f'<div class="cn">{c["k"]}/{c["n"]}</div>'
             '<div class="ctrack">'
-            f'<div class="whisk" style="left: {x_lo:.3f}%; '
+            f'<div class="ci-whisk" style="left: {x_lo:.3f}%; '
             f'width: {x_hi - x_lo:.3f}%;"></div>'
-            f'<div class="cap" style="left: {x_lo:.3f}%;"></div>'
-            f'<div class="dot" style="left: {x_hi:.3f}%;"></div>'
-            f'<div class="lo" style="left: {x_lo:.3f}%; margin-left: -46px;">'
+            f'<div class="ci-cap" style="left: {x_lo:.3f}%;"></div>'
+            f'<div class="ci-dot" style="left: {x_hi:.3f}%;"></div>'
+            f'<div class="ci-lo" style="left: {x_lo:.3f}%; margin-left: -46px;">'
             f'{c["lo"] * 100.0:.0f}%</div>'
             '</div></div>')
 
@@ -689,7 +696,7 @@ def card_ceiling(kept):
 # --------------------------------------------------------------------------- #
 # Card 3 — the effort ladder: what the knob moves is spend, not outcomes (§1, §3)
 # --------------------------------------------------------------------------- #
-LADDER_W, LADDER_H = 1200, 1040
+LADDER_W, LADDER_H = 1200, 1120
 
 LADDER_X_MAX = 6000.0
 LADDER_TRACK_PX = 660.0   # must match .ltrack's rendered width, for collision maths
@@ -723,7 +730,7 @@ LADDER_CSS = """
   .lrow {
     display: flex;
     align-items: center;
-    height: 88px;
+    height: 96px;
     position: relative;
   }
   .lrow + .lrow { border-top: 1px solid var(--gridline); }
@@ -743,17 +750,17 @@ LADDER_CSS = """
     color: var(--text-muted);
     margin-top: 2px;
   }
-  .ltrack { flex-grow: 1; position: relative; height: 88px; }
+  .ltrack { flex-grow: 1; position: relative; height: 96px; }
   .seg {
     position: absolute;
-    top: 43px;
+    top: 49px;
     height: 2px;
     background: var(--zero);
   }
-  .seg.back { background: var(--series-2); height: 3px; top: 42.5px; }
+  .seg.back { background: var(--series-2); height: 3px; top: 48.5px; }
   .ldot {
     position: absolute;
-    top: 38px;
+    top: 42px;
     width: 12px;
     height: 12px;
     margin-left: -6px;
@@ -767,6 +774,9 @@ LADDER_CSS = """
     transform: translateX(-50%);
     white-space: nowrap;
     text-align: center;
+    /* line-height 1 so a label's box is its font size; EFF_TOP/TOK_TOP stack
+       three levels inside one row and the arithmetic assumes no extra leading. */
+    line-height: 1;
   }
   .eff {
     font-size: 10.5px;
@@ -856,25 +866,33 @@ def ladder_x(tokens):
     return tokens / LADDER_X_MAX * 100.0
 
 
-def label_levels(xs_pct):
-    """Assign each dot's labels to level 0 or 1 so close neighbours don't collide.
+# Vertical offset from the top of a row, in px, per label level. Level 0 sits
+# closest to the dot line and each further level steps away from it. Three
+# levels because Claude Haiku 4.5's three rungs land inside 190 tokens of each
+# other, which two levels cannot separate.
+EFF_TOP = {0: 28, 1: 15, 2: 2}
+TOK_TOP = {0: 59, 1: 72, 2: 84}
 
-    Greedy left to right against the last x placed on each level; a dot closer
-    than LADDER_MIN_GAP_PX to the level-0 neighbour drops to level 1.
+
+def label_levels(xs_pct):
+    """Assign each dot's labels to a level so close neighbours don't collide.
+
+    Greedy left to right against the last x placed on each level: a dot takes
+    the lowest level whose previous occupant is at least LADDER_MIN_GAP_PX
+    away, falling through to the next level when it is not. Dots too crowded
+    for any level land on the last one and may still overlap, so the caller
+    checks for that rather than shipping a silently unreadable row.
     """
+    n_levels = len(EFF_TOP)
     levels = []
-    last = [-1e9, -1e9]
+    last = [-1e9] * n_levels
     for x in xs_pct:
         px = x / 100.0 * LADDER_TRACK_PX
-        lvl = 0 if px - last[0] >= LADDER_MIN_GAP_PX else 1
+        lvl = next((i for i in range(n_levels)
+                    if px - last[i] >= LADDER_MIN_GAP_PX), n_levels - 1)
         levels.append(lvl)
         last[lvl] = px
     return levels
-
-
-# Vertical offsets from a row's centre line, in px, per label level.
-EFF_TOP = {0: 16, 1: 2}
-TOK_TOP = {0: 54, 1: 66}
 
 
 def card_ladder(kept):
@@ -891,10 +909,22 @@ def card_ladder(kept):
     rows = []
     for m in models:
         xs = [ladder_x(d["median"]) for d in m["dots"]]
-        levels = label_levels(sorted(xs))
+        ordered = sorted(xs)
+        levels = label_levels(ordered)
+        # Levels only avoid collisions if each one is used at most as densely as
+        # the gap allows; when the rungs are tighter than that the labels would
+        # print on top of each other, which is exactly the bug this guards.
+        placed = {}
+        for x, lvl in zip(ordered, levels):
+            px = x / 100.0 * LADDER_TRACK_PX
+            if lvl in placed and px - placed[lvl] < LADDER_MIN_GAP_PX:
+                sys.exit(f"{display(m['model'])}: rungs are too close to label "
+                         f"with {len(EFF_TOP)} levels — add another level to "
+                         f"EFF_TOP/TOK_TOP (and row height) before regenerating")
+            placed[lvl] = px
         # label_levels works in x order; map its assignment back onto the dots,
         # which are in effort order and may run backwards.
-        by_x = {x: lvl for x, lvl in zip(sorted(xs), levels)}
+        by_x = {x: lvl for x, lvl in zip(ordered, levels)}
 
         parts = []
         for x1, x2 in zip(xs, xs[1:]):

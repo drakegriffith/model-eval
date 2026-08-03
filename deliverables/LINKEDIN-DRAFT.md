@@ -37,7 +37,7 @@ Attach all three charts, in this order:
    Alt text: "Pass rates by model and reasoning effort, all at 100% with Wilson 95% confidence intervals — the ceiling effect."
 2. `assets/2-effort-buys-nothing.png`
    Alt text: "Output tokens by reasoning effort level for both models, showing cost rising while pass rate stays flat at 100%."
-3. `assets/3-input-token-economics.png`
+3. `assets/3-input-token-economics-DO-NOT-USE.png`
    Alt text: "Input tokens by model configuration, with a caveat that cross-vendor input-token accounting is not directly comparable."
 
 Order rationale: chart 1 backs the headline (both hit ceiling), chart 2 backs the cost claim (effort dial = tokens, not quality), chart 3 is the honest caveat for anyone who wants to dig into the token numbers.
