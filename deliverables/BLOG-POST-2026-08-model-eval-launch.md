@@ -90,7 +90,7 @@ and judged quality, not whether the test suite went green.
 
 ## Finding 2: at matched tiers, the cost difference between the two big models is noise
 
-![Nine tasks, and the cheaper model keeps changing.](assets/model-eval-token-chart-per-task.png)
+![Four ways to ask which model is cheaper, four different answers. Small-multiple bar charts, one row per task, of median output tokens per solved run for Claude Fable relative to Codex Sol. All tiers pooled: Fable higher on 4 of 9 tasks, p = 0.68. Matched effort medium: higher on 5 of 8, p = 0.43. Matched effort high: higher on 2 of 8, p = 0.086. Each model at its own winning effort, Fable/medium against Sol/low: higher on 8 of 9, p = 0.0078.](assets/model-eval-token-chart-per-task.png)
 
 With pass/fail saturated, cost is the obvious next axis. Comparing Claude's
 Fable against Codex's Sol on the 9 tasks both models solved, taking each
@@ -103,10 +103,10 @@ model's median output tokens per solved run on each task (§5):
 | t1-ts-a | 994 | 1,162 | -14% |
 | t1-ts-b | 1,719 | 1,719 | 0% |
 | t2-py-a | 2,420 | 1,790 | +35% |
-| t2-py-b | 2,862 | 2,599 | +10% |
+| t2-py-b | 2,862 | 2,600 | +10% |
 | t2-ts-a | 3,210 | 3,293 | -3% |
 | t2-ts-b | 2,679 | 2,318 | +16% |
-| t3-a | 2,461 | 2,997 | -18% |
+| t3-a | 2,461 | 3,013 | -18% |
 
 Five tasks lean one way, four lean the other, and the largest gap in the set
 is 35%. Run the exact sign-flip permutation test over the per-task log

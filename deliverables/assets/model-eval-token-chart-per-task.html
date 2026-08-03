@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>model-eval — per-task token difference, Fable vs Sol</title>
+<title>model-eval &mdash; per-task token difference, Fable vs Sol, four cells</title>
 <style>
   .viz-root {
     color-scheme: light;
@@ -12,7 +12,7 @@
     --text-secondary: #52514e;
     --text-muted:     #898781;
     --gridline:       #e1e0d9;
-    --zero:           #8d8b84;
+    --zero:           #b3b1aa;
     --series-1:       #2a78d6;
     --series-2:       #eb6834;
   }
@@ -24,100 +24,141 @@
   }
   .canvas {
     width: 1200px;
-    height: 630px;
+    height: 900px;
     background: var(--page);
     display: flex;
     align-items: center;
     justify-content: center;
   }
   .card {
-    width: 1120px;
-    height: 550px;
+    width: 1136px;
+    height: 836px;
     background: var(--surface-1);
     border-radius: 20px;
-    padding: 34px 56px 26px 56px;
+    padding: 30px 44px 22px 44px;
     display: flex;
     flex-direction: column;
   }
   .eyebrow {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--text-muted);
-    margin: 0 0 10px 0;
+    margin: 0 0 9px 0;
   }
   h1 {
-    font-size: 34px;
+    font-size: 31px;
     font-weight: 700;
     color: var(--text-primary);
-    margin: 0 0 6px 0;
+    margin: 0 0 7px 0;
     line-height: 1.15;
   }
   .subtitle {
-    font-size: 15px;
+    font-size: 14px;
     color: var(--text-secondary);
     margin: 0;
-    max-width: 900px;
-    line-height: 1.4;
+    max-width: 1000px;
+    line-height: 1.45;
   }
-  .axis-head {
+  .legend {
     display: flex;
-    margin-top: 18px;
+    align-items: center;
+    gap: 22px;
+    margin: 14px 0 4px 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--gridline);
     font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .legend .key { display: flex; align-items: center; gap: 7px; }
+  .legend .sw { width: 13px; height: 13px; border-radius: 3px; }
+  .legend .sw.a { background: var(--series-1); }
+  .legend .sw.b { background: var(--series-2); }
+  .legend .scale { margin-left: auto; color: var(--text-muted); }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 40px;
+    row-gap: 18px;
+    margin-top: 16px;
+  }
+  .panel-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .panel-title {
+    font-size: 15.5px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .panel-sec {
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
-    letter-spacing: 0.02em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  .axis-head .spacer { width: 108px; flex-shrink: 0; }
-  .axis-head .half {
-    width: 50%;
-    padding-bottom: 6px;
+  .panel-meta {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    margin: 2px 0 8px 0;
   }
-  .axis-head .left  { text-align: right; padding-right: 12px; color: var(--series-1); }
-  .axis-head .right { text-align: left;  padding-left: 12px;  color: var(--series-2); }
-  .chart { margin-top: 4px; }
+  .panel-meta strong { color: var(--text-primary); }
+  .panel-meta .sig { font-weight: 700; color: var(--text-primary); }
   .row {
     display: flex;
     align-items: center;
-    height: 30px;
+    height: 23px;
   }
   .label-col {
-    width: 108px;
+    width: 76px;
     flex-shrink: 0;
-    font-size: 15px;
+    font-size: 12.5px;
     font-weight: 600;
     color: var(--text-primary);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
+  .row.absent .label-col { color: var(--text-muted); font-weight: 500; }
   .track {
     flex-grow: 1;
     position: relative;
-    height: 30px;
+    height: 23px;
   }
   .track::before {
     content: "";
     position: absolute;
     left: 50%;
-    top: 0; bottom: 0;
+    top: 1px; bottom: 1px;
     width: 1px;
     background: var(--zero);
   }
   .bar {
     position: absolute;
-    top: 8px;
-    height: 15px;
-    border-radius: 3px;
+    top: 6px;
+    height: 12px;
+    border-radius: 2px;
   }
   .bar.pos { left: 50%; background: var(--series-2); }
   .bar.neg { right: 50%; background: var(--series-1); }
   .val {
     position: absolute;
-    top: 6px;
-    font-size: 14px;
+    top: 4px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-secondary);
     white-space: nowrap;
+  }
+  .none {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    top: 4px;
+    font-size: 11.5px;
+    font-style: italic;
+    color: var(--text-muted);
+    background: var(--surface-1);
+    padding: 0 6px;
   }
   .footer {
     margin-top: auto;
@@ -125,16 +166,17 @@
     justify-content: space-between;
     align-items: flex-end;
     border-top: 1px solid var(--gridline);
-    padding-top: 14px;
+    padding-top: 12px;
   }
   .footnote {
-    font-size: 13px;
+    font-size: 12.5px;
     color: var(--text-muted);
-    max-width: 700px;
+    max-width: 880px;
     line-height: 1.45;
   }
+  .footnote em { font-style: italic; color: var(--text-secondary); }
   .repo {
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text-primary);
     white-space: nowrap;
@@ -147,84 +189,73 @@
     <div class="card viz-root">
       <div>
         <p class="eyebrow">model-eval &middot; open benchmark harness</p>
-        <h1>Nine tasks, and the cheaper model keeps changing</h1>
-        <p class="subtitle">Median output tokens per solved run, Claude Fable relative to Codex Sol, one row per task. All passing runs of each model, effort tiers pooled.</p>
+        <h1>Four ways to ask which model is cheaper, four different answers</h1>
+        <p class="subtitle">Median output tokens per solved run, Claude Fable relative to Codex Sol, one row per task. One exact sign-flip permutation test, run in four different cells: tiers pooled, then tier for tier, then each model at its own cheapest passing tier. All four panels share one bar scale.</p>
       </div>
 
-      <div class="axis-head">
-        <div class="spacer"></div>
-        <div class="half left">&#8592; Fable used fewer</div>
-        <div class="half right">Fable used more &#8594;</div>
+      <div class="legend">
+        <div class="key"><span class="sw a"></span>Fable used fewer tokens</div>
+        <div class="key"><span class="sw b"></span>Fable used more tokens</div>
+        <div class="scale">shared scale &middot; bar length &prop; |log ratio| &middot; longest bar = +127%</div>
       </div>
 
-      <div class="chart">
-        <div class="row">
-          <div class="label-col">t1-py-a</div>
-          <div class="track">
-            <div class="bar pos" style="width: 17.4%;"></div>
-            <div class="val" style="left: 67.4%; margin-left: 10px;">+14%</div>
-          </div>
-        </div>
-        <div class="row">
-          <div class="label-col">t1-py-b</div>
-          <div class="track">
-            <div class="bar neg" style="width: 9.8%;"></div>
-            <div class="val" style="right: 59.8%; margin-right: 10px;">&#8722;8%</div>
-          </div>
-        </div>
-        <div class="row">
-          <div class="label-col">t1-ts-a</div>
-          <div class="track">
-            <div class="bar neg" style="width: 18.0%;"></div>
-            <div class="val" style="right: 68.0%; margin-right: 10px;">&#8722;14%</div>
-          </div>
-        </div>
-        <div class="row">
-          <div class="label-col">t1-ts-b</div>
-          <div class="track">
-            <div class="bar pos" style="width: 0.3%;"></div>
-            <div class="val" style="left: 50.3%; margin-left: 10px;">0%</div>
-          </div>
-        </div>
-        <div class="row">
-          <div class="label-col">t2-py-a</div>
-          <div class="track">
-            <div class="bar pos" style="width: 44.0%;"></div>
-            <div class="val" style="left: 94.0%; margin-left: 10px;">+35%</div>
-          </div>
-        </div>
-        <div class="row">
-          <div class="label-col">t2-py-b</div>
-          <div class="track">
-            <div class="bar pos" style="width: 12.6%;"></div>
-            <div class="val" style="left: 62.6%; margin-left: 10px;">+10%</div>
-          </div>
-        </div>
-        <div class="row">
-          <div class="label-col">t2-ts-a</div>
-          <div class="track">
-            <div class="bar neg" style="width: 3.1%;"></div>
-            <div class="val" style="right: 53.1%; margin-right: 10px;">&#8722;3%</div>
-          </div>
-        </div>
-        <div class="row">
-          <div class="label-col">t2-ts-b</div>
-          <div class="track">
-            <div class="bar pos" style="width: 19.5%;"></div>
-            <div class="val" style="left: 69.5%; margin-left: 10px;">+16%</div>
-          </div>
-        </div>
-        <div class="row">
-          <div class="label-col">t3-a</div>
-          <div class="track">
-            <div class="bar neg" style="width: 22.4%;"></div>
-            <div class="val" style="right: 72.4%; margin-right: 10px;">&#8722;18%</div>
-          </div>
-        </div>
+      <div class="grid">
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">All tiers pooled</span><span class="panel-sec">§5</span></div>
+        <div class="panel-meta">Fable spent more on <strong>4 of 9</strong> tasks &middot; p = <span>0.68</span></div>
+        <div class="row"><div class="label-col">t1-py-a</div><div class="track pos"><div class="bar pos" style="width: 6.34%;"></div><div class="val" style="left: 56.34%; margin-left: 7px;">+14%</div></div></div>
+        <div class="row"><div class="label-col">t1-py-b</div><div class="track neg"><div class="bar neg" style="width: 3.95%;"></div><div class="val" style="right: 53.95%; margin-right: 7px;">−8%</div></div></div>
+        <div class="row"><div class="label-col">t1-ts-a</div><div class="track neg"><div class="bar neg" style="width: 7.61%;"></div><div class="val" style="right: 57.61%; margin-right: 7px;">−14%</div></div></div>
+        <div class="row"><div class="label-col">t1-ts-b</div><div class="track neg"><div class="bar neg" style="width: 0.00%;"></div><div class="val" style="right: 50.00%; margin-right: 7px;">0%</div></div></div>
+        <div class="row"><div class="label-col">t2-py-a</div><div class="track pos"><div class="bar pos" style="width: 14.72%;"></div><div class="val" style="left: 64.72%; margin-left: 7px;">+35%</div></div></div>
+        <div class="row"><div class="label-col">t2-py-b</div><div class="track pos"><div class="bar pos" style="width: 4.71%;"></div><div class="val" style="left: 54.71%; margin-left: 7px;">+10%</div></div></div>
+        <div class="row"><div class="label-col">t2-ts-a</div><div class="track neg"><div class="bar neg" style="width: 1.24%;"></div><div class="val" style="right: 51.24%; margin-right: 7px;">−3%</div></div></div>
+        <div class="row"><div class="label-col">t2-ts-b</div><div class="track pos"><div class="bar pos" style="width: 7.08%;"></div><div class="val" style="left: 57.08%; margin-left: 7px;">+16%</div></div></div>
+        <div class="row"><div class="label-col">t3-a</div><div class="track neg"><div class="bar neg" style="width: 9.62%;"></div><div class="val" style="right: 59.62%; margin-right: 7px;">−18%</div></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Matched tier: effort medium</span><span class="panel-sec">§6b</span></div>
+        <div class="panel-meta">Fable spent more on <strong>5 of 8</strong> tasks &middot; p = <span>0.43</span></div>
+        <div class="row"><div class="label-col">t1-py-a</div><div class="track pos"><div class="bar pos" style="width: 5.67%;"></div><div class="val" style="left: 55.67%; margin-left: 7px;">+12%</div></div></div>
+        <div class="row"><div class="label-col">t1-py-b</div><div class="track neg"><div class="bar neg" style="width: 5.55%;"></div><div class="val" style="right: 55.55%; margin-right: 7px;">−11%</div></div></div>
+        <div class="row"><div class="label-col">t1-ts-a</div><div class="track neg"><div class="bar neg" style="width: 7.97%;"></div><div class="val" style="right: 57.97%; margin-right: 7px;">−15%</div></div></div>
+        <div class="row"><div class="label-col">t1-ts-b</div><div class="track pos"><div class="bar pos" style="width: 0.93%;"></div><div class="val" style="left: 50.93%; margin-left: 7px;">+2%</div></div></div>
+        <div class="row"><div class="label-col">t2-py-a</div><div class="track pos"><div class="bar pos" style="width: 25.80%;"></div><div class="val" style="left: 75.80%; margin-left: 7px;">+70%</div></div></div>
+        <div class="row"><div class="label-col">t2-py-b</div><div class="track neg"><div class="bar neg" style="width: 3.49%;"></div><div class="val" style="right: 53.49%; margin-right: 7px;">−7%</div></div></div>
+        <div class="row"><div class="label-col">t2-ts-a</div><div class="track pos"><div class="bar pos" style="width: 0.51%;"></div><div class="val" style="left: 50.51%; margin-left: 7px;">+1%</div></div></div>
+        <div class="row"><div class="label-col">t2-ts-b</div><div class="track pos"><div class="bar pos" style="width: 12.62%;"></div><div class="val" style="left: 62.62%; margin-left: 7px;">+29%</div></div></div>
+        <div class="row absent"><div class="label-col">t3-a</div><div class="track"><div class="none">no paired runs</div></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Matched tier: effort high</span><span class="panel-sec">§6b</span></div>
+        <div class="panel-meta">Fable spent more on <strong>2 of 8</strong> tasks &middot; p = <span>0.086</span></div>
+        <div class="row"><div class="label-col">t1-py-a</div><div class="track neg"><div class="bar neg" style="width: 5.72%;"></div><div class="val" style="right: 55.72%; margin-right: 7px;">−11%</div></div></div>
+        <div class="row"><div class="label-col">t1-py-b</div><div class="track neg"><div class="bar neg" style="width: 11.88%;"></div><div class="val" style="right: 61.88%; margin-right: 7px;">−22%</div></div></div>
+        <div class="row"><div class="label-col">t1-ts-a</div><div class="track neg"><div class="bar neg" style="width: 25.19%;"></div><div class="val" style="right: 75.19%; margin-right: 7px;">−40%</div></div></div>
+        <div class="row"><div class="label-col">t1-ts-b</div><div class="track pos"><div class="bar pos" style="width: 4.58%;"></div><div class="val" style="left: 54.58%; margin-left: 7px;">+10%</div></div></div>
+        <div class="row"><div class="label-col">t2-py-a</div><div class="track pos"><div class="bar pos" style="width: 4.40%;"></div><div class="val" style="left: 54.40%; margin-left: 7px;">+9%</div></div></div>
+        <div class="row"><div class="label-col">t2-py-b</div><div class="track neg"><div class="bar neg" style="width: 2.28%;"></div><div class="val" style="right: 52.28%; margin-right: 7px;">−5%</div></div></div>
+        <div class="row"><div class="label-col">t2-ts-a</div><div class="track neg"><div class="bar neg" style="width: 7.12%;"></div><div class="val" style="right: 57.12%; margin-right: 7px;">−14%</div></div></div>
+        <div class="row"><div class="label-col">t2-ts-b</div><div class="track neg"><div class="bar neg" style="width: 7.05%;"></div><div class="val" style="right: 57.05%; margin-right: 7px;">−13%</div></div></div>
+        <div class="row absent"><div class="label-col">t3-a</div><div class="track"><div class="none">no paired runs</div></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="panel-title">Winning effort: Fable/medium vs Sol/low</span><span class="panel-sec">§6a</span></div>
+        <div class="panel-meta">Fable spent more on <strong>8 of 9</strong> tasks &middot; p = <span class="sig">0.0078</span></div>
+        <div class="row"><div class="label-col">t1-py-a</div><div class="track pos"><div class="bar pos" style="width: 21.27%;"></div><div class="val" style="left: 71.27%; margin-left: 7px;">+55%</div></div></div>
+        <div class="row"><div class="label-col">t1-py-b</div><div class="track pos"><div class="bar pos" style="width: 23.82%;"></div><div class="val" style="left: 73.82%; margin-left: 7px;">+63%</div></div></div>
+        <div class="row"><div class="label-col">t1-ts-a</div><div class="track pos"><div class="bar pos" style="width: 10.69%;"></div><div class="val" style="left: 60.69%; margin-left: 7px;">+24%</div></div></div>
+        <div class="row"><div class="label-col">t1-ts-b</div><div class="track pos"><div class="bar pos" style="width: 35.23%;"></div><div class="val" style="left: 85.23%; margin-left: 7px;">+106%</div></div></div>
+        <div class="row"><div class="label-col">t2-py-a</div><div class="track pos"><div class="bar pos" style="width: 37.29%;"></div><div class="val" style="left: 87.29%; margin-left: 7px;">+115%</div></div></div>
+        <div class="row"><div class="label-col">t2-py-b</div><div class="track pos"><div class="bar pos" style="width: 19.15%;"></div><div class="val" style="left: 69.15%; margin-left: 7px;">+48%</div></div></div>
+        <div class="row"><div class="label-col">t2-ts-a</div><div class="track pos"><div class="bar pos" style="width: 40.00%;"></div><div class="val" style="left: 90.00%; margin-left: 7px;">+127%</div></div></div>
+        <div class="row"><div class="label-col">t2-ts-b</div><div class="track pos"><div class="bar pos" style="width: 31.22%;"></div><div class="val" style="left: 81.22%; margin-left: 7px;">+89%</div></div></div>
+        <div class="row"><div class="label-col">t3-a</div><div class="track neg"><div class="bar neg" style="width: 7.92%;"></div><div class="val" style="right: 57.92%; margin-right: 7px;">−15%</div></div></div>
+      </div>
       </div>
 
       <div class="footer">
-        <div class="footnote">Five tasks one way, four the other. Exact sign-flip permutation test on the per-task log differences: 348 of 512 sign patterns are as-or-more extreme, two-sided p = 0.68. No detectable difference at this sample size, in either direction. Output tokens only: Fable&rsquo;s input-token counts are quarantined as unreliable.</div>
+        <div class="footnote">Exact sign-flip permutation test over all 2<sup>k</sup> sign patterns of the per-task log differences; passing runs only; output tokens only, because Fable&rsquo;s input-token counts are quarantined as unreliable. The three matched panels use bare runs (no harness). The one panel under p = 0.05 is <em>Winning effort: Fable/medium vs Sol/low</em>, and it is not tier-matched: Fable&rsquo;s cheapest tier here is the floor of the run matrix, not a tested minimum, so part of that gap is the tier and not the model. Every median, percentage and p-value on this card is computed by <code>runner/stats.py</code> from <code>results.jsonl</code>.</div>
         <div class="repo">github.com/drakegriffith/model-eval</div>
       </div>
     </div>
