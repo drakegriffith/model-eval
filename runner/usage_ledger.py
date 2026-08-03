@@ -175,6 +175,40 @@ UNAFFECTED_PARSE_BRANCHES = ("codex",)
 
 TOKENS_IN_STATUSES = ("measured", "recovered_in_ledger", "quarantined")
 
+# --------------------------------------------------------------------------- #
+# Invocation mode (ticket 32) -- HOW the CLI was driven, per family.
+#
+# The contract this restates lives at run.py's build_cli_cmd (L447): codex runs
+# `codex exec` (one shot, `turns` structurally 1), claude/kimi run `claude -p`
+# (an agentic multi-turn session). Ticket 13's table declared it; this puts it
+# on every row so a cross-family token table can say which instrument produced
+# each cell. Keyed on family, like billing_mode in build_usage_row below --
+# both are family properties the ledger states once and everyone reads.
+# --------------------------------------------------------------------------- #
+FAMILY_INVOCATION_MODE = {
+    "claude": "multi_turn",
+    "kimi": "multi_turn",
+    "codex": "single_shot",
+}
+
+# Every value a row's `invocation_mode` may carry. "inapplicable" is the
+# reader's name for present-with-None (a mock row: no model invoked, the
+# question is vacuous -- same shape as `sealed`).
+INVOCATION_MODES = ("single_shot", "multi_turn", "unknown", "inapplicable")
+
+
+def invocation_mode(family):
+    """Mode for one family. THE rule -- stated once here, read by run.py's
+    write path and by stamp_invocation_mode; never restated at a reader.
+
+    Fail-closed explicit "unknown" for a family nobody declared (mirrors
+    quarantined-by-default in tokens_in_status): the mode is what the CLI
+    invocation IS, so it can only come from the dispatch table, never be
+    guessed from `turns` -- which is an artifact of the parse branch and
+    structurally 1 on every codex row.
+    """
+    return FAMILY_INVOCATION_MODE.get(family, "unknown")
+
 
 def tokens_in_status(family, parser_version, ledger_status=None):
     """Disposition of one row's `tokens_in`. THE rule -- stated once here, read
@@ -264,6 +298,65 @@ def format_provenance_report(report):
     for arm, counts in sorted(report.get("by_arm", {}).items()):
         lines.append(f"  {arm:32s} "
                      + " ".join(f"{s}={counts[s]}" for s in TOKENS_IN_STATUSES))
+    if report["inspected"] == 0:
+        lines.append("  NO ROWS INSPECTED -- not a clean corpus, no corpus at all")
+    return "\n".join(lines)
+
+
+def stamp_invocation_mode(results_path, apply=False):
+    """Backfill `invocation_mode` onto results rows (ticket 32).
+
+    Labelling, never recomputation, same contract as stamp_provenance: no
+    recorded value is rewritten. A row already carrying the field keeps it
+    exactly as recorded and is counted -- present-with-None (a mock row) counts
+    as "inapplicable". Everything else is labelled through the one rule above;
+    "unknown" is WRITTEN on the row (AC#4), so an unstamped row and a row
+    nobody could classify are never the same bytes.
+
+    Returns the count report; writes only when `apply` is true.
+    """
+    rows = _read_jsonl(results_path)
+    report = {"inspected": len(rows), "path": results_path, "applied": bool(apply)}
+    report.update({m: 0 for m in INVOCATION_MODES})
+    report["by_arm"] = {}
+
+    for row in rows:
+        if "invocation_mode" in row:
+            mode = row["invocation_mode"]
+            counted = "inapplicable" if mode is None else mode
+        else:
+            try:
+                family = registry.model_family(row.get("model"))
+            except ValueError:
+                family = None
+            counted = invocation_mode(family)
+            row["invocation_mode"] = counted
+        report[counted] = report.get(counted, 0) + 1
+        arm = report["by_arm"].setdefault(row.get("model"),
+                                          {m: 0 for m in INVOCATION_MODES})
+        arm[counted] = arm.get(counted, 0) + 1
+
+    if apply:
+        tmp = results_path + ".stamped"
+        with open(tmp, "w") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+        os.replace(tmp, results_path)
+    return report
+
+
+def format_invocation_mode_report(report):
+    """Count the subjects out loud (AC#6). Every mode is printed even when it
+    is zero: a fully classified corpus and one that is all unknowns must not
+    render identically.
+    """
+    head = (f"invocation_mode: inspected={report['inspected']} "
+            + " ".join(f"{m}={report[m]}" for m in INVOCATION_MODES)
+            + ("" if report.get("applied") else "  (dry run -- nothing written)"))
+    lines = [head]
+    for arm, counts in sorted(report.get("by_arm", {}).items()):
+        lines.append(f"  {arm:32s} "
+                     + " ".join(f"{m}={counts.get(m, 0)}" for m in INVOCATION_MODES))
     if report["inspected"] == 0:
         lines.append("  NO ROWS INSPECTED -- not a clean corpus, no corpus at all")
     return "\n".join(lines)
@@ -527,7 +620,8 @@ def resolve_repo_root(repo_root=None, environ=None, cwd=None):
 
 def main():
     ap = argparse.ArgumentParser(description="model-gauntlet usage ledger")
-    ap.add_argument("action", choices=["retrofit", "stamp-provenance"])
+    ap.add_argument("action", choices=["retrofit", "stamp-provenance",
+                                       "stamp-invocation-mode"])
     # The root is a caller input, never derived from this file's location -- see
     # paths_for_repo. Running from a repo checkout needs no flag at all, which is
     # what keeps `python3 runner/usage_ledger.py retrofit` working unchanged.
@@ -566,6 +660,11 @@ def main():
     if args.action == "stamp-provenance":
         print(format_provenance_report(
             stamp_provenance(results, usage, apply=args.apply)))
+        return
+
+    if args.action == "stamp-invocation-mode":
+        print(format_invocation_mode_report(
+            stamp_invocation_mode(results, apply=args.apply)))
         return
 
     summary = retrofit(results, transcripts, usage)

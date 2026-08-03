@@ -86,6 +86,25 @@ def tokens_in_recoverable(row):
     return row.get("tokens_in_status") == TOKENS_IN_RECOVERABLE_STATUS
 
 
+def invocation_mode_of(row):
+    """The row's recorded invocation mode (ticket 32), with the two absences
+    kept apart:
+
+      key missing  -> "unstamped"     nobody dispositioned this row
+      value None   -> "inapplicable"  a mock row; no model was invoked
+      otherwise    -> the recorded value ("single_shot"/"multi_turn"/"unknown")
+
+    Never consults `turns`: turn counts are an artifact of the parse branch
+    (structurally 1 on every codex row) and are barred from citation. The rule
+    that assigns modes lives in usage_ledger.invocation_mode; this reads only
+    what the writer or the backfill recorded.
+    """
+    if "invocation_mode" not in row:
+        return "unstamped"
+    mode = row["invocation_mode"]
+    return "inapplicable" if mode is None else mode
+
+
 # --------------------------------------------------------------------------- #
 # Partitioning, with the count kept attached to the result.
 # --------------------------------------------------------------------------- #
