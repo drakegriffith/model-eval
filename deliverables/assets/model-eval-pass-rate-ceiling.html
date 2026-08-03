@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>model-eval &mdash; pass rate with 95% Wilson intervals</title>
+<style>
+
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --zero:           #b3b1aa;
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--page);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .canvas {
+    background: var(--page);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .card {
+    background: var(--surface-1);
+    border-radius: 20px;
+    padding: 30px 44px 22px 44px;
+    display: flex;
+    flex-direction: column;
+  }
+  .eyebrow {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 9px 0;
+  }
+  h1 {
+    font-size: 31px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 7px 0;
+    line-height: 1.15;
+  }
+  .subtitle {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin: 0;
+    max-width: 1000px;
+    line-height: 1.45;
+  }
+  .legend {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    margin: 14px 0 4px 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--gridline);
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .legend .key { display: flex; align-items: center; gap: 7px; }
+  .legend .sw { width: 13px; height: 13px; border-radius: 3px; }
+  .legend .sw.a { background: var(--series-1); }
+  .legend .sw.b { background: var(--series-2); }
+  .legend .sw.dot { border-radius: 50%; background: var(--text-primary); }
+  .legend .sw.whisk {
+    width: 15px; height: 3px; border-radius: 2px;
+    background: var(--series-1);
+  }
+  .legend .scale { margin-left: auto; color: var(--text-muted); }
+  .callout {
+    margin: 12px 0 0 0;
+    padding: 10px 14px;
+    border-left: 3px solid var(--series-2);
+    background: #f4f2ee;
+    border-radius: 0 6px 6px 0;
+    font-size: 13.5px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+  }
+  .callout strong { color: var(--text-primary); }
+  .footer {
+    margin-top: auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-top: 1px solid var(--gridline);
+    padding-top: 12px;
+  }
+  .footnote {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    max-width: 880px;
+    line-height: 1.45;
+  }
+  .footnote em { font-style: italic; color: var(--text-secondary); }
+  .repo {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    padding-left: 24px;
+  }
+
+  .canvas { width: 1200px; height: 1000px; }
+  .card { width: 1136px; height: 936px; }
+
+  .plot { position: relative; margin-top: 14px; }
+  .axis {
+    position: relative;
+    height: 18px;
+    margin-left: 356px;
+    margin-bottom: 4px;
+  }
+  .axis .tick {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    font-size: 11.5px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .rows { position: relative; }
+  .grid-lines { position: absolute; left: 356px; right: 0; top: 0; bottom: 0; }
+  .grid-lines .gl {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 1px;
+    background: var(--gridline);
+  }
+  .grid-lines .gl.edge { background: var(--zero); }
+  .crow { display: flex; align-items: center; height: 24px; position: relative; }
+  .cmodel {
+    width: 176px;
+    flex-shrink: 0;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 8px;
+  }
+  .ccell {
+    width: 118px;
+    flex-shrink: 0;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .cn {
+    width: 62px;
+    flex-shrink: 0;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .ctrack { flex-grow: 1; position: relative; height: 24px; }
+  .whisk {
+    position: absolute;
+    top: 11px;
+    height: 2px;
+    background: var(--series-1);
+  }
+  .cap {
+    position: absolute;
+    top: 6px;
+    width: 2px;
+    height: 12px;
+    background: var(--series-1);
+  }
+  .dot {
+    position: absolute;
+    top: 7px;
+    width: 10px;
+    height: 10px;
+    margin-left: -5px;
+    border-radius: 50%;
+    background: var(--text-primary);
+  }
+  .lo {
+    position: absolute;
+    top: 5px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <div class="card viz-root">
+      <div>
+        <p class="eyebrow">model-eval &middot; open benchmark harness</p>
+        <h1>Every cell passed everything. The intervals are the honest part.</h1>
+        <p class="subtitle">All 25 model &times; effort &times; harness cells in the corpus, 267 of 267 runs passing. The dot is the observed pass rate; the whisker runs back to the 95% Wilson score lower bound, which is what the sample size will actually support. Ordered by lower bound, so the fan is the sample size and nothing else.</p>
+      </div>
+      <div class="legend">
+        <div class="key"><span class="sw dot"></span>observed pass rate</div>
+        <div class="key"><span class="sw whisk"></span>95% Wilson lower bound</div>
+        <div class="scale">Wilson score interval &middot; exact small-n coverage &middot; upper bound is 1.0000 in every cell</div>
+      </div>
+      <div class="plot">
+        <div class="axis">
+          <div class="tick" style="left: 0.000%;">30%</div>
+          <div class="tick" style="left: 14.286%;">40%</div>
+          <div class="tick" style="left: 28.571%;">50%</div>
+          <div class="tick" style="left: 42.857%;">60%</div>
+          <div class="tick" style="left: 57.143%;">70%</div>
+          <div class="tick" style="left: 71.429%;">80%</div>
+          <div class="tick" style="left: 85.714%;">90%</div>
+          <div class="tick" style="left: 100.000%;">100%</div>
+        </div>
+        <div class="rows">
+          <div class="grid-lines">
+          <div class="gl" style="left: 0.000%;"></div>
+          <div class="gl" style="left: 14.286%;"></div>
+          <div class="gl" style="left: 28.571%;"></div>
+          <div class="gl" style="left: 42.857%;"></div>
+          <div class="gl" style="left: 57.143%;"></div>
+          <div class="gl" style="left: 71.429%;"></div>
+          <div class="gl" style="left: 85.714%;"></div>
+          <div class="gl edge" style="left: 100.000%;"></div>
+          </div>
+        <div class="crow"><div class="cmodel">Hybrid</div><div class="ccell">medium &middot; harness</div><div class="cn">2/2</div><div class="ctrack"><div class="whisk" style="left: 6.054%; width: 93.946%;"></div><div class="cap" style="left: 6.054%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 6.054%; margin-left: -46px;">34%</div></div></div>
+        <div class="crow"><div class="cmodel">Claude Haiku 4.5</div><div class="ccell">high &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">Claude Haiku 4.5</div><div class="ccell">low &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">Claude Haiku 4.5</div><div class="ccell">max &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">Claude Haiku 4.5 (pinned)</div><div class="ccell">high &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">Claude Haiku 4.5 (pinned)</div><div class="ccell">low &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">Claude Haiku 4.5 (pinned)</div><div class="ccell">max &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">GPT-5.3 Codex Spark</div><div class="ccell">high &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">GPT-5.3 Codex Spark</div><div class="ccell">low &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">GPT-5.3 Codex Spark</div><div class="ccell">xhigh &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">GPT-5.6 Luna</div><div class="ccell">high &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">GPT-5.6 Luna</div><div class="ccell">low &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">GPT-5.6 Luna</div><div class="ccell">max &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">Kimi K3</div><div class="ccell">high &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">Kimi K3</div><div class="ccell">low &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">Kimi K3</div><div class="ccell">max &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">Sol</div><div class="ccell">ultra &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">Sol</div><div class="ccell">xhigh &middot; bare</div><div class="cn">6/6</div><div class="ctrack"><div class="whisk" style="left: 44.238%; width: 55.762%;"></div><div class="cap" style="left: 44.238%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 44.238%; margin-left: -46px;">61%</div></div></div>
+        <div class="crow"><div class="cmodel">Fable</div><div class="ccell">medium &middot; harness</div><div class="cn">14/14</div><div class="ctrack"><div class="whisk" style="left: 69.241%; width: 30.759%;"></div><div class="cap" style="left: 69.241%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 69.241%; margin-left: -46px;">78%</div></div></div>
+        <div class="crow"><div class="cmodel">Sol</div><div class="ccell">low &middot; harness</div><div class="cn">14/14</div><div class="ctrack"><div class="whisk" style="left: 69.241%; width: 30.759%;"></div><div class="cap" style="left: 69.241%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 69.241%; margin-left: -46px;">78%</div></div></div>
+        <div class="crow"><div class="cmodel">Fable</div><div class="ccell">high &middot; bare</div><div class="cn">24/24</div><div class="ctrack"><div class="whisk" style="left: 80.289%; width: 19.711%;"></div><div class="cap" style="left: 80.289%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 80.289%; margin-left: -46px;">86%</div></div></div>
+        <div class="crow"><div class="cmodel">Sol</div><div class="ccell">medium &middot; bare</div><div class="cn">24/24</div><div class="ctrack"><div class="whisk" style="left: 80.289%; width: 19.711%;"></div><div class="cap" style="left: 80.289%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 80.289%; margin-left: -46px;">86%</div></div></div>
+        <div class="crow"><div class="cmodel">Fable</div><div class="ccell">medium &middot; bare</div><div class="cn">25/25</div><div class="ctrack"><div class="whisk" style="left: 80.973%; width: 19.027%;"></div><div class="cap" style="left: 80.973%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 80.973%; margin-left: -46px;">87%</div></div></div>
+        <div class="crow"><div class="cmodel">Sol</div><div class="ccell">high &middot; bare</div><div class="cn">30/30</div><div class="ctrack"><div class="whisk" style="left: 83.784%; width: 16.216%;"></div><div class="cap" style="left: 83.784%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 83.784%; margin-left: -46px;">89%</div></div></div>
+        <div class="crow"><div class="cmodel">Sol</div><div class="ccell">low &middot; bare</div><div class="cn">32/32</div><div class="ctrack"><div class="whisk" style="left: 84.689%; width: 15.311%;"></div><div class="cap" style="left: 84.689%;"></div><div class="dot" style="left: 100.000%;"></div><div class="lo" style="left: 84.689%; margin-left: -46px;">89%</div></div></div>
+        </div>
+      </div>
+      <div class="callout">Identical dots, wildly different whiskers. <strong>Hybrid / medium / harness</strong> is 2/2 and can only support a claim of <strong>34%</strong> or better; <strong>Sol / low / bare</strong> is 32/32 and supports <strong>89%</strong>. Same headline number, different amount of evidence behind it.</div>
+      <div class="footer">
+        <div class="footnote">One Bernoulli cell per row; the interval is the 95% Wilson score interval, which keeps its coverage at small n where the normal approximation does not. A perfect score never yields a point estimate you can trust on its own, and the width of that distrust is set by n. Every interval on this card is computed by <code>runner/stats.wilson_ci</code> from <code>results.jsonl</code>, on the same corpus gate as appendix &sect;1.</div>
+        <div class="repo">github.com/drakegriffith/model-eval</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
