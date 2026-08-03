@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    # sandbox-exec (macOS) backs the sandbox-seal tests; free on public repos.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install test dependencies
+        run: python3 -m pip install pytest
+
+      - name: Offline test suite (excludes test_live_*)
+        run: |
+          set -uo pipefail
+          OUTPUT=$(python3 -m pytest -q runner --ignore=runner/fixtures \
+            --ignore=runner/tests/test_live_mcp_seal.py \
+            --ignore=runner/tests/test_live_vault_seal.py \
+            --ignore=runner/tests/test_live_codex_seal.py)
+          STATUS=$?
+          echo "$OUTPUT"
+          COUNT=$(echo "$OUTPUT" | grep -oE '[0-9]+ passed' | tail -1 | grep -oE '[0-9]+')
+          echo "passed count: ${COUNT:-0}"
+          if [ "$STATUS" -ne 0 ]; then
+            echo "FAIL: pytest exited $STATUS"
+            exit 1
+          fi
+          # Silence-is-not-evidence: assert a floor on subjects run, not just a
+          # green exit -- a collection regression that finds 0 tests still
+          # exits 0 with "no tests ran" under some pytest configs.
+          if [ -z "$COUNT" ] || [ "$COUNT" -lt 500 ]; then
+            echo "FAIL: expected >= 500 tests passed, got ${COUNT:-0}"
+            exit 1
+          fi
+
+      - name: Every task's selftest.sh (assert exactly 15 found)
+        run: |
+          set -u
+          COUNT=0
+          FAILED=0
+          for t in tasks/*/; do
+            if [ -f "${t}selftest.sh" ]; then
+              COUNT=$((COUNT + 1))
+              echo "== selftest: $t =="
+              if ! bash "${t}selftest.sh"; then
+                echo "FAILED: ${t}selftest.sh"
+                FAILED=1
+              fi
+            fi
+          done
+          echo "task selftest.sh found: $COUNT"
+          if [ "$COUNT" -ne 15 ]; then
+            echo "FAIL: expected exactly 15 task selftests, found $COUNT"
+            exit 1
+          fi
+          if [ "$FAILED" -ne 0 ]; then
+            echo "FAIL: one or more task selftests failed"
+            exit 1
+          fi
+
+      - name: Import gate (core/product dependency ratchet)
+        run: python3 runner/import_gate.py
+
+      - name: Stats self-test (McNemar/Wilson/sign-flip/Pearson)
+        run: python3 runner/stats.py --selftest
+
+  freeze-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fail PRs that touch frozen comparability surfaces
+        run: |
+          set -uo pipefail
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          CHANGED=$(git diff --name-status "$BASE_SHA" "$HEAD_SHA")
+          echo "$CHANGED"
+
+          # Duplicated here on purpose, not read from CONTRIBUTING.md: a gate
+          # must not take its rule from a worker-writable file. These three
+          # files define what "pass" and "score" mean for every row already
+          # in the corpus (241 transcripts, 193 judgments); editing an
+          # EXISTING task's grading surface changes that meaning
+          # retroactively, which is why new task files (status A) are exempt
+          # but modifying/deleting an existing one is not.
+          FROZEN_FILES="runner/corpus_gates.py runner/effort_verdict.py runner/judge.py"
+
+          VIOLATIONS=""
+          while IFS=$'\t' read -r status path rest; do
+            [ -z "$path" ] && continue
+            for f in $FROZEN_FILES; do
+              if [ "$path" = "$f" ] || [ "$rest" = "$f" ]; then
+                VIOLATIONS="${VIOLATIONS}${path} (${status}) -- frozen comparability surface"$'\n'
+              fi
+            done
+            for p in "$path" "$rest"; do
+              case "$p" in
+                tasks/*/verify.sh|tasks/*/base/tests/*)
+                  if [ "$status" != "A" ]; then
+                    VIOLATIONS="${VIOLATIONS}${p} (${status}) -- existing task's grading surface"$'\n'
+                  fi
+                  ;;
+              esac
+            done
+          done <<< "$CHANGED"
+
+          if [ -n "$VIOLATIONS" ]; then
+            echo "FROZEN COMPARABILITY SURFACE TOUCHED:"
+            echo "$VIOLATIONS"
+            echo "These files/paths define what a pass and a score mean for every row"
+            echo "already in the corpus. If this change is genuinely necessary, say so"
+            echo "explicitly in the PR description -- an admin can merge over this"
+            echo "check. It is a speed bump for accidental drift, not a hard wall."
+            exit 1
+          fi
+          echo "No frozen comparability surfaces touched."

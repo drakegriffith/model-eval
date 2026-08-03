@@ -20,3 +20,4 @@ product/submissions.jsonl
 # where it lives instead; product/pyproject.toml declares it, and this directory
 # is the built artefact of that declaration, not a second source of truth.
 .venv/
+.DS_Store
