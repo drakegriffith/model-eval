@@ -1,4 +1,4 @@
-# LinkedIn draft — model-eval public release (2026-08-03)
+# LinkedIn draft: model-eval public release (2026-08-03)
 
 Status: DRAFT, not posted. Drake posts manually. No LinkedIn posting tool used.
 
@@ -16,7 +16,8 @@ verbatim output of `python3 runner/stats.py` over the live corpus:
   pairs, zero discordant). Token ladder: median output tokens per solved run,
   bare invocation.
 
-**Before posting:** replace `[BLOG POST URL]` with the published post URL.
+Blog post published 2026-08-03; the live URL is filled in below. Ready to
+paste. Drake posts it manually.
 
 ---
 
@@ -43,4 +44,4 @@ is going to be harder.
 The write-up also covers the headline finding I had to retract the same day I
 drafted it, and how the repo's own tooling caught a mistake I made by hand.
 
-Full detail: [BLOG POST URL]
+Full detail: https://drakegriffith.github.io/drakes-website/blog/2026-08-03-model-eval-what-happens-when-every-model-passes.html

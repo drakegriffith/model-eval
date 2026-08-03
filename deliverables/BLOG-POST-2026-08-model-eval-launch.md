@@ -1,8 +1,11 @@
 # model-eval: what happens when every model passes
 
-Status: DRAFT, not published. Findings 2 and 3 were rewritten on 2026-08-03
-after an earlier draft of this post got them wrong; see "A correction I made
-to my own draft" at the end for what happened and why.
+Status: PUBLISHED 2026-08-03 at
+https://drakegriffith.github.io/drakes-website/blog/2026-08-03-model-eval-what-happens-when-every-model-passes.html
+(source of truth for the live copy is `~/code/drakes-website`; this file is
+the markdown original). Findings 2 and 3 were rewritten on 2026-08-03 after
+an earlier draft of this post got them wrong; see "A correction I made to my
+own draft" at the end for what happened and why.
 
 Every number below traces to `deliverables/STATS-CURRENT-2026-08-03.md`, which
 is the verbatim output of the repo's own stats script (`python3
@@ -39,7 +42,7 @@ missing feature, a `verify.sh` that fails against the unpatched state and
 passes against a reference fix, and a prompt handed to the model verbatim.
 The model gets the repo and the prompt, runs headlessly to completion, and
 `verify.sh` either passes or it doesn't. That's the only pass/fail signal
-in the corpus — no judge ever overrides a failing test suite.
+in the corpus. No judge ever overrides a failing test suite.
 
 Two things back that up:
 
@@ -47,7 +50,7 @@ Two things back that up:
   `verify.sh` fails on the unpatched base and passes once the reference patch
   is applied. A task that doesn't wire up cleanly fails CI, not silently
   skipped.
-- **Negative controls.** A subset of runs is an "empty" arm — the harness
+- **Negative controls.** A subset of runs is an "empty" arm: the harness
   goes through the full prepare/verify/grade path with no fix applied at all,
   to confirm the grader reports a fail when nothing changed. Every negative
   control in the corpus reports `passed: false`. The grader isn't rubber-
@@ -57,14 +60,14 @@ Runs are unattended, which means `--dangerously-skip-permissions` /
 `--dangerously-bypass-approvals-and-sandbox` on the CLI side. That's a real
 reduction in the CLI's own safety net, so an OS-level `sandbox-exec` profile
 and a process-level containment layer sit underneath every invocation
-instead — deny-by-default on credential reads, writes contained to the run's
+instead: deny-by-default on credential reads, writes contained to the run's
 own scratch tree, API keys popped from the child's environment so every run
 is subscription-authenticated, never key-authenticated. Full detail in the
 README's security section.
 
 Once a run finishes, two separate LLM judges (one Claude, one Codex) score
-the diff independently on four dimensions — correctness, simplicity,
-idiomatic style, spec adherence — without seeing each other's verdict.
+the diff independently on four dimensions (correctness, simplicity,
+idiomatic style, spec adherence) without seeing each other's verdict.
 
 ## Finding 1: pass/fail stopped being the interesting number
 
@@ -208,7 +211,7 @@ making the task set harder before running anything else.
 ## Judged quality: two judges, checked against each other
 
 Pass/fail is binary and, on this corpus, saturated. The judges are where the
-finer-grained signal lives — correctness, simplicity, idiomatic style, and
+finer-grained signal lives: correctness, simplicity, idiomatic style, and
 spec adherence, each scored 0-10 by two separately-prompted judges (Claude
 and Codex) that never see each other's output.
 
@@ -218,7 +221,7 @@ those, the two judges land within a point of each other on 95.7% of the 139
 runs both judges scored. Looking at the four dimensions individually instead
 of the per-run average, agreement is tighter but still solid at 93.2% (518 of
 556 judge-pairs within 1 point). Exact score matches are rarer (about 15% at
-the per-run level) — the judges converge on the same rough quality tier far
+the per-run level). The judges converge on the same rough quality tier far
 more often than they converge on the exact same integer, which is what I'd
 expect from two independently-prompted graders and not a sign that one of
 them is noise.
@@ -238,8 +241,8 @@ axis on which the two models separate at all here: identical pass rates, no
 detectable cost difference at matched tiers, and a small judged-quality edge
 to Sol. Half a point is also inside the judges' own mean disagreement with
 each other (0.53 points, §7), so I'd treat it as a hint about where to look
-next rather than a
-result. It's a smaller and duller claim than "model X is better," and it's
+next rather than a result. It's a smaller and duller claim than "model X is
+better," and it's
 the one this data actually carries.
 
 ## One data-quality note, in the open
