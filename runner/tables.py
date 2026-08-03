@@ -171,19 +171,35 @@ def table1_effort_ladder(rows, qual):
 
 
 def table2_efficiency_frontier(rows):
+    # ticket 32: this is the one table that pools token counts ACROSS families,
+    # i.e. across instruments -- `codex exec` one-shots vs `claude -p` agentic
+    # sessions. Each cell says which instrument produced it (the recorded field
+    # via corpus_gates, never `turns`), and mixing modes in one table is said
+    # out loud below rather than left for a reader to reconstruct from t13.
     g = group(rows, lambda r: (r["model"], r["effort"]))
     data = []
+    table_modes = set()
     for (model, effort), rs in sorted(
             g.items(), key=lambda kv: (kv[0][0], EFFORT_ORDER.get(kv[0][1], 9))):
         n = len(rs)
         passes = sum(1 for r in rs if r.get("pass"))
         tot = [out_tokens(r) for r in rs]
         tpp = (sum(tot) / passes) if passes else None
-        data.append([model, effort, pct(passes, n), fnum(mean(tot)),
+        cell_modes = sorted({corpus_gates.invocation_mode_of(r) for r in rs})
+        table_modes.update(cell_modes)
+        data.append([model, effort, "/".join(cell_modes), pct(passes, n),
+                     fnum(mean(tot)),
                      fnum(tpp) if tpp is not None else "inf (0 pass)"])
-    return md_table(
-        ["model", "effort", "pass_rate", "mean_tokens_out/run",
+    out = md_table(
+        ["model", "effort", "mode", "pass_rate", "mean_tokens_out/run",
          "tokens_out_per_pass"], data)
+    if len(table_modes) > 1:
+        out += ("\n> **mixed invocation modes** (ticket 32): this table pools "
+                + " and ".join(f"`{m}`" for m in sorted(table_modes))
+                + " rows — different instruments, not one measurement. Whether "
+                "the pooled comparison is publishable is tickets 03/20's "
+                "ruling; this note only makes the mixing visible.\n")
+    return out
 
 
 def table3_harness_delta(rows):

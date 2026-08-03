@@ -1160,6 +1160,11 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     # Recorded per row so "was this result open-book?" is answerable from the
     # corpus instead of reconstructed from commit dates.
     sealed = None
+    # ticket 32: HOW the CLI was driven -- single_shot (codex exec) vs
+    # multi_turn (claude -p agentic session). None for mock runs, where no
+    # model was invoked and the question is vacuous, same as `sealed`.
+    # Derived through usage_ledger's one family rule, never from `turns`.
+    invocation_mode = None
     # ticket 26: whether the model ran with WRITES contained -- i.e. unable to
     # append to or truncate results.jsonl, poison the canonical tasks/ tree, or
     # write into a sibling run's scratch. Separate from `sealed` because it is a
@@ -1209,6 +1214,7 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
             prompt = compose_prompt(task_dir, run["harness"], run["mode"],
                                     k=k_cap)
             cmd = build_cli_cmd(run["model"], run["effort"], prompt)
+            invocation_mode = usage_ledger.invocation_mode(model_family(run["model"]))
             sealed = seal_enabled()
             # AND'd against the seal module's own capability flag rather than
             # hardcoded True: if write containment is ever removed from
@@ -1306,6 +1312,8 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
             model_family(run["model"]), usage_ledger.USAGE_PARSER_VERSION),
         "turns": turns, "loc_changed": loc, "exit_reason": exit_reason,
         "sealed": sealed, "write_contained": write_contained,
+        # ticket 32: which instrument produced this row's session shape.
+        "invocation_mode": invocation_mode,
         # ticket 17. acceptance_requests is the design parameter K governs, and
         # it is counted by the broker rather than inferred from CLI telemetry --
         # which is what makes it comparable across families, unlike `turns`
