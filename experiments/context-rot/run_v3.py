@@ -331,6 +331,23 @@ LATENT_ANCHORS: dict[str, str] = {
     "drain_grace_s": "a hard kill lands four minutes after the stop signal",
 }
 
+# The same base quantities as numbers. Kept beside the prose deliberately: the
+# scorer needs them to tell "hop 1 landed, hop 2 did not" apart from a decoy
+# grab, and a miss that returns the bare anchor is the diagnostic failure for
+# --hops 2. assert_anchor_table() below checks these against the variant values
+# so the two tables cannot drift apart silently.
+LATENT_ANCHOR_VALUES: dict[str, int] = {
+    "retry_budget": 12,
+    "shard_count": 24,
+    "timeout_ms": 1000,
+    "batch_size": 256,
+    "queue_depth": 1024,
+    "worker_slots": 72,
+    "flush_interval_ms": 1000,
+    "max_payload_kb": 2048,
+    "drain_grace_s": 240,
+}
+
 # Four relations per key, same shape as LATENT_VARIANTS, so the decoy knob keeps
 # its meaning: variant[0] is live, the next `difficulty` are superseded rules
 # pointing at the same anchor. A decoy that shares the anchor competes properly,
@@ -391,6 +408,34 @@ LATENT_HOP2_VARIANTS: dict[str, list[tuple[str, int]]] = {
         ("this process is given three quarters of the time before the hard kill", 180),
     ],
 }
+
+
+def assert_anchor_table() -> None:
+    """Every hop-2 variant must be a clean fraction of its key's anchor.
+
+    The anchor prose and the anchor numbers live in two tables, so an edit to
+    one can silently desync the other. A desynced anchor does not crash: it
+    makes anchor_unmultiplied stop matching, and the diagnostic miss for the
+    whole two-hop arm quietly reverts to "other". Checked at import so the
+    failure is loud and immediate rather than a category that never fires.
+    """
+    missing = set(LATENT_HOP2_VARIANTS) - set(LATENT_ANCHOR_VALUES)
+    if missing:
+        sys.exit(f"latent: hop-2 keys with no anchor value: {sorted(missing)}")
+    # Every relation is a proper fraction of the ceiling, so each value must sit
+    # strictly under its anchor. Deliberately not integer division: "two thirds
+    # of twelve" is 8, a legitimate variant that base % value would reject.
+    for key, variants in LATENT_HOP2_VARIANTS.items():
+        base = LATENT_ANCHOR_VALUES[key]
+        for clause, value in variants:
+            if not 0 < value < base:
+                sys.exit(f"latent: variant value {value} ({clause!r}) is not a "
+                         f"proper fraction of anchor {base} for {key}. "
+                         f"LATENT_ANCHOR_VALUES and LATENT_HOP2_VARIANTS "
+                         f"have drifted apart.")
+
+
+assert_anchor_table()
 
 LATENT_ANCHOR_BLOCK = """\
 
@@ -519,7 +564,8 @@ def instance_latent(seed: int, difficulty: int, hops: int = 1) -> dict:
                 "probe": dclause,
             })
         items.append({"key": key, "answer": value, "block_id": f"true:{key}",
-                      "decoys": decoys})
+                      "decoys": decoys,
+                      "anchor_value": LATENT_ANCHOR_VALUES[key] if hops == 2 else None})
 
     rng.shuffle(items)  # question order != depth order
     return {
@@ -757,7 +803,17 @@ def score(reply: str, inst: dict) -> dict:
             miss_kind[key] = "missing" if raw is None else "unparseable"
         elif got != truth:
             if inst["answer_type"] == "int":
-                miss_kind[key] = "decoy" if got in it["decoys"] else "other"
+                if got in it["decoys"]:
+                    miss_kind[key] = "decoy"
+                elif it.get("anchor_value") is not None and got == it["anchor_value"]:
+                    # The shallow base quantity, with the deep fraction never
+                    # applied: hop 1 landed and hop 2 did not. Distinct from a
+                    # decoy grab, which is the wrong *relation* correctly
+                    # applied, and the failure --hops 2 exists to detect. Left
+                    # in "other" it is invisible in the summary.
+                    miss_kind[key] = "anchor_unmultiplied"
+                else:
+                    miss_kind[key] = "other"
             elif got == meta.get("global_max"):
                 # named the highest timeout_ms overall: the filter was ignored.
                 miss_kind[key] = "global_max"
