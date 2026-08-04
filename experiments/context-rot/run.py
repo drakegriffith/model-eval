@@ -150,16 +150,20 @@ region: us-east-1
 """
 
 
-def corpus() -> str:
+def corpus(keys: list[str] | None = None) -> str:
     """Deterministic padding: the Python stdlib's sources, sorted, concatenated.
 
     Deliberately inert. The first cut of this experiment padded with this repo's
     own files, and one reply came back answering a question nobody asked: the
     padding was full of task prompts written at a model, and the model obeyed
     one. Padding has to be text that does not instruct.
+
+    `keys` are the strings that must not appear anywhere in the padding, so the
+    planted material stays unique in the prompt. Defaults to v2's fact names;
+    v3 passes its own arm-specific set. The default keeps v2 byte-reproducible.
     """
     root = Path(sysconfig.get_paths()["stdlib"])
-    keys = [k for k, _, _, _ in FACTS]
+    keys = keys if keys is not None else [k for k, _, _, _ in FACTS]
     parts = []
     for p in sorted(root.rglob("*.py")):
         rel = p.relative_to(root).as_posix()
