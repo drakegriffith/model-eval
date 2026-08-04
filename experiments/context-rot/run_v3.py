@@ -833,7 +833,9 @@ def summarize(rows: list[dict]) -> None:
             by.setdefault(r["target_tokens"], []).append(r)
 
         diffs = sorted({r.get("difficulty") for r in arows})
-        print(f"\n=== arm={arm}  difficulty={','.join(str(d) for d in diffs)} ===")
+        hops = sorted({r.get("hops") for r in arows}, key=lambda h: (h is None, h))
+        print(f"\n=== arm={arm}  difficulty={','.join(str(d) for d in diffs)}"
+              f"  hops={','.join(str(h) for h in hops)} ===")
         print(f"{'target':>8} {'measured_in':>12} {'inst':>5} {'items':>6} {'item_acc':>9} "
               f"{'wilson95':>15} {'all_ok':>7} {'format':>7} {'med_s':>7}")
 
