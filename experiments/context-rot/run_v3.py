@@ -96,7 +96,19 @@ def assemble(pad: str, head: str, tail: str, blocks: list[dict],
     of the finished prompt.
     """
     overhead = len(head) + len(tail) + sum(len(b["text"]) for b in blocks)
-    want = max(500, int(target_tokens * CHARS_PER_TOKEN) - overhead)
+    budget = int(target_tokens * CHARS_PER_TOKEN)
+    # The max(500, ...) floor below silently ships a prompt LONGER than the
+    # target when the planted material alone overflows it, which turns the 5k
+    # control into a 5.2k control while every row still says 5000. Degradation
+    # is defined as the 5k-to-long gap on an identical task, so a control that
+    # is not the length it claims corrupts the only comparison this experiment
+    # makes. Fail instead, and say by how much.
+    if overhead + 500 > budget:
+        sys.exit(f"assemble: planted material is {overhead:,} chars but a "
+                 f"{target_tokens:,}-token prompt budgets {budget:,}. This prompt "
+                 f"would be longer than the length it reports. Lower difficulty, "
+                 f"lower hops, or raise the shortest length.")
+    want = max(500, budget - overhead)
     body = pad[:want] if want <= len(pad) else pad * (want // len(pad) + 1)
     body = body[:want]
 
@@ -167,9 +179,12 @@ Follow the output contract stated at the top of this message.
 """
 
 
-def instance_exact(seed: int, difficulty: int) -> dict:
+def instance_exact(seed: int, difficulty: int, hops: int = 1) -> dict:
     """v2's plantings and decoys. `difficulty` is deliberately ignored: this is
     the control, so its task must not move while the other arms are tuned."""
+    if hops != 1:
+        sys.exit("exact: hops is not implemented for the control arm; "
+                 "run it at --hops 1 or drop it from --arm")
     rng = random.Random(seed)
     vals, blocks = {}, []
 
@@ -293,6 +308,99 @@ TRAILS = [
     "This is the value the runbook checks against during an incident.",
 ]
 
+# --hops 2. The value is never stated, in any unit, anywhere in the window. A
+# platform block states a base quantity; a service block, planted in the other
+# half of the window, states this service's fraction of it. Neither block alone
+# yields an answer, so the model has to carry one fact to the other and only
+# then convert units. That is the same cross-window join synth measures, on the
+# arm where lexical overlap with the question is already zero.
+#
+# Fractions stay trivial (halves, quarters, thirds) on purpose: the thing under
+# test is holding two separated facts together, not arithmetic. If a miss ever
+# looks like bad division rather than a bad join, this data is the wrong
+# instrument and the fractions are the first thing to simplify.
+LATENT_ANCHORS: dict[str, str] = {
+    "retry_budget": "no single call may be sent again more than twelve times before an operator is paged",
+    "shard_count": "the cluster owns twenty four slices of the key range in total",
+    "timeout_ms": "a call chain is given one full second from first byte to last",
+    "batch_size": "the widest write the loader will ever issue is two hundred and fifty six records",
+    "queue_depth": "the ring is built with room for one thousand and twenty four entries",
+    "worker_slots": "the tier is provisioned with seventy two concurrent handlers in total",
+    "flush_interval_ms": "the longest gap between writes the platform tolerates is one full second",
+    "max_payload_kb": "the edge refuses any body above two megabytes, whatever a service asks for",
+    "drain_grace_s": "a hard kill lands four minutes after the stop signal",
+}
+
+# Four relations per key, same shape as LATENT_VARIANTS, so the decoy knob keeps
+# its meaning: variant[0] is live, the next `difficulty` are superseded rules
+# pointing at the same anchor. A decoy that shares the anchor competes properly,
+# because discarding it needs the recency rule, not a second lookup.
+LATENT_HOP2_VARIANTS: dict[str, list[tuple[str, int]]] = {
+    "retry_budget": [
+        ("this service gives up at a third of the platform ceiling", 4),
+        ("this service is held to half the platform ceiling", 6),
+        ("this service stops at a quarter of what the platform permits", 3),
+        ("this service is allowed two thirds of the platform ceiling", 8),
+    ],
+    "shard_count": [
+        ("this table takes half of the cluster total", 12),
+        ("this table is spread over a third of the cluster total", 8),
+        ("this table claims a quarter of the cluster total", 6),
+        ("this table sits on a sixth of the cluster total", 4),
+    ],
+    "timeout_ms": [
+        ("the edge abandons its own leg at a quarter of the chain allowance", 250),
+        ("the edge gives its own leg half the chain allowance", 500),
+        ("the edge allows itself three quarters of the chain allowance", 750),
+        ("the edge cuts its own leg at a tenth of the chain allowance", 100),
+    ],
+    "batch_size": [
+        ("this job writes in groups of half the widest write", 128),
+        ("this job uses a quarter of the widest write", 64),
+        ("this job writes an eighth of the widest write at a time", 32),
+        ("this job hands over a sixteenth of the widest write per call", 16),
+    ],
+    "queue_depth": [
+        ("back-pressure begins once a quarter of the ring is occupied", 256),
+        ("back-pressure begins at half the ring", 512),
+        ("back-pressure begins once an eighth of the ring is taken", 128),
+        ("back-pressure begins at a sixteenth of the ring", 64),
+    ],
+    "worker_slots": [
+        ("this pool is sized at a third of the tier", 24),
+        ("this pool takes half the tier", 36),
+        ("this pool is a quarter of the tier", 18),
+        ("this pool is a sixth of the tier", 12),
+    ],
+    "flush_interval_ms": [
+        ("this writer drains at half the tolerated gap", 500),
+        ("this writer drains at a quarter of the tolerated gap", 250),
+        ("this writer drains at a fifth of the tolerated gap", 200),
+        ("this writer drains at a tenth of the tolerated gap", 100),
+    ],
+    "max_payload_kb": [
+        ("this endpoint accepts a quarter of the edge maximum", 512),
+        ("this endpoint accepts half the edge maximum", 1024),
+        ("this endpoint accepts an eighth of the edge maximum", 256),
+        ("this endpoint accepts three quarters of the edge maximum", 1536),
+    ],
+    "drain_grace_s": [
+        ("this process is given a quarter of the time before the hard kill", 60),
+        ("this process is given half the time before the hard kill", 120),
+        ("this process is given an eighth of the time before the hard kill", 30),
+        ("this process is given three quarters of the time before the hard kill", 180),
+    ],
+}
+
+LATENT_ANCHOR_BLOCK = """\
+
+=== FILE: docs/platform/{fname} ===
+# {title}
+
+{lead} Across the whole platform, {anchor}. {trail}
+
+"""
+
 LATENT_BLOCK = """\
 
 === FILE: docs/runbooks/{fname} ===
@@ -348,20 +456,53 @@ Follow the output contract stated at the top of this message.
 """
 
 
-def instance_latent(seed: int, difficulty: int) -> dict:
-    """`difficulty` = semantic decoys per key (0-3). One knob, so the hop stays
-    identical while calibration moves only how much competition each fact has."""
+def instance_latent(seed: int, difficulty: int, hops: int = 1) -> dict:
+    """`difficulty` = semantic decoys per key (0-3), `hops` = inference steps.
+
+    The two knobs are orthogonal on purpose. Decoys change how much competition
+    a fact has; hops change how far apart the pieces of one answer sit. Pilots 1
+    to 3 moved decoys to their ceiling and never left 100%, which is why hops
+    exists at all: it is a different axis, not a bigger number on the same one.
+    """
     rng = random.Random(seed)
-    keys = list(LATENT_VARIANTS)
-    ndec = max(0, min(difficulty, len(LATENT_VARIANTS[keys[0]]) - 1))
+    table = LATENT_VARIANTS if hops == 1 else LATENT_HOP2_VARIANTS
+    keys = list(table)
+    # Same reason as synth's guard: silently clamping difficulty 4 back to 3
+    # would write difficulty=4 into rows that actually ran at 3. The decoy knob
+    # genuinely ends at len(variants)-1; raising latent past that needs new
+    # variant prose, not a bigger number.
+    if hops not in (1, 2):
+        sys.exit(f"latent: hops={hops} is not implemented (1 or 2)")
+    ceiling = min(len(v) for v in table.values()) - 1
+    if difficulty > ceiling:
+        sys.exit(f"latent: difficulty={difficulty} exceeds the decoy ceiling "
+                 f"({ceiling}) at hops={hops}; add variant prose to go higher")
+    ndec = max(0, difficulty)
+
+    # At two hops the anchor sits in the shallow half and the relation that
+    # depends on it in the deep half, so no answer can be assembled from one
+    # region of the window. At one hop the fact is whole and spans the range,
+    # which is pilots 1 to 3 unchanged.
+    depths = spread(len(keys), 0.55, 0.95) if hops == 2 else spread(len(keys))
+    anchor_depths = spread(len(keys), 0.05, 0.45)
 
     items, blocks = [], []
-    for key, depth in zip(keys, spread(len(keys))):
-        variants = list(LATENT_VARIANTS[key])
+    for idx, (key, depth) in enumerate(zip(keys, depths)):
+        variants = list(table[key])
         rng.shuffle(variants)
         clause, value = variants[0]
         fname = FACT_FILE[key].replace(".yaml", ".md")
         title = fname.replace(".md", "").replace("_", " ").title()
+        if hops == 2:
+            afname = FACT_FILE[key].replace(".yaml", "_policy.md")
+            blocks.append({
+                "id": f"anchor:{key}", "depth": anchor_depths[idx],
+                "text": LATENT_ANCHOR_BLOCK.format(
+                    fname=afname, title=afname.replace(".md", "").replace("_", " ").title(),
+                    anchor=LATENT_ANCHORS[key],
+                    lead=rng.choice(LEADS), trail=rng.choice(TRAILS)),
+                "probe": LATENT_ANCHORS[key],
+            })
         blocks.append({
             "id": f"true:{key}", "depth": depth,
             "text": LATENT_BLOCK.format(fname=fname, title=title, clause=clause,
@@ -398,6 +539,11 @@ SERVICE_NAMES = [
     "ironwood", "saltmarsh", "quillfeather", "dunlin", "marlstone", "glasswort",
     "kestrel", "thornbury", "wickfield", "ambergate", "redpoll", "halloway",
     "pinemoor", "greyling",
+    # Added for difficulty 4-5. Same register as the first fourteen (one word,
+    # no shared prefix, none a substring of another) so that pool size stays
+    # the only thing that changes when difficulty moves.
+    "bramblecote", "fennroyd", "coldharbour", "sedgewick", "millbank",
+    "starnwood", "harrowgate", "brackwater",
 ]
 SYNTH_QUESTIONS = 4
 SYNTH_MIN_CANDIDATES = 3
@@ -406,7 +552,7 @@ SYNTH_MIN_CANDIDATES = 3
 # ten. Filter selectivity is NOT the knob: a wider surviving set forces the
 # thresholds low, and then the top timeout_ms stops changing as the filter
 # moves, which collapses four questions into one asked four ways.
-SYNTH_SERVICES = {0: 6, 1: 10, 2: 12, 3: 14}
+SYNTH_SERVICES = {0: 6, 1: 10, 2: 12, 3: 14, 4: 18, 5: 22}
 
 SYNTH_RETRY_BLOCK = """\
 
@@ -508,9 +654,22 @@ def _synth_draw(rng: random.Random, nsvc: int, minc: int, min_distinct: int):
     return services, retries, timeout, global_max, chosen
 
 
-def instance_synth(seed: int, difficulty: int) -> dict:
+def instance_synth(seed: int, difficulty: int, hops: int = 1) -> dict:
+    # synth is already a two-hop join by construction (filter on one fact,
+    # compare another). It has no separate hops knob, so asking for one is an
+    # error rather than a silently ignored flag.
+    if hops != 1:
+        sys.exit("synth: hops is not a knob on this arm (its join is structural); "
+                 "run it at --hops 1 or drop it from --arm")
     rng = random.Random(seed)
-    nsvc = SYNTH_SERVICES.get(difficulty, 10)
+    # Hard error, not .get(default): an unmapped difficulty used to fall back to
+    # ten services, so --difficulty 4 ran EASIER than 3 while every result row
+    # still recorded difficulty=4. A calibration run that silently mislabels its
+    # own difficulty is worse than one that does not start.
+    if difficulty not in SYNTH_SERVICES:
+        sys.exit(f"synth: no service count mapped for difficulty={difficulty} "
+                 f"(mapped: {sorted(SYNTH_SERVICES)})")
+    nsvc = SYNTH_SERVICES[difficulty]
     # Both constraints scale with the pool: a six-service draw cannot support
     # three distinct answers and a three-service floor at the same time.
     minc, min_distinct = (3, 3) if nsvc >= 8 else (2, 2)
@@ -561,9 +720,9 @@ def instance_synth(seed: int, difficulty: int) -> dict:
 ARMS = {"exact": instance_exact, "latent": instance_latent, "synth": instance_synth}
 
 
-def instance(arm: str, seed: int, difficulty: int) -> dict:
-    inst = ARMS[arm](seed, difficulty)
-    inst.update({"seed": seed, "arm": arm, "difficulty": difficulty})
+def instance(arm: str, seed: int, difficulty: int, hops: int = 1) -> dict:
+    inst = ARMS[arm](seed, difficulty, hops)
+    inst.update({"seed": seed, "arm": arm, "difficulty": difficulty, "hops": hops})
     return inst
 
 
@@ -631,6 +790,7 @@ def one_run(pad, inst, tokens, model, timeout, retries=1) -> dict:
         if attempt < retries:
             time.sleep(5)
     row = {"seed": inst["seed"], "arm": inst["arm"], "difficulty": inst["difficulty"],
+           "hops": inst.get("hops", 1),
            "target_tokens": tokens, "model": model, "attempts": attempt + 1,
            "prompt_chars": len(prompt),
            "answers": {i["key"]: i["answer"] for i in inst["items"]},
@@ -768,6 +928,12 @@ def main() -> None:
                     help="latent: semantic decoys per key (0-3). "
                          "synth: minimum services surviving the filter. "
                          "exact: ignored, the control must not move.")
+    ap.add_argument("--hops", type=int, default=1,
+                    help="latent: inference steps per answer. 1 = value stated in "
+                         "prose (pilots 1-3). 2 = base quantity and this service's "
+                         "fraction of it planted in opposite halves of the window. "
+                         "Not implemented on exact or synth, which error rather "
+                         "than ignore it.")
     ap.add_argument("--instances", type=int, default=10)
     ap.add_argument("--model", default="sonnet")
     ap.add_argument("--lengths", type=int, nargs="+", default=DEFAULT_LENGTHS)
@@ -786,7 +952,8 @@ def main() -> None:
 
     jobs, pads = [], {}
     for arm in args.arm:
-        insts = [instance(arm, 1000 + i, args.difficulty) for i in range(args.instances)]
+        insts = [instance(arm, 1000 + i, args.difficulty, args.hops)
+                 for i in range(args.instances)]
         # Padding excludes this arm's key and service names, so planted material
         # stays unique in the prompt. Each arm needs its own exclusion set.
         excl = sorted({e for i in insts for e in i["exclude"]})
@@ -798,7 +965,8 @@ def main() -> None:
         jobs += [(arm, i, t) for t in args.lengths for i in insts]
 
     print(f"{len(jobs)} runs: {len(args.arm)} arm(s) x {args.instances} instances x "
-          f"{len(args.lengths)} length(s), difficulty={args.difficulty}, model={args.model}")
+          f"{len(args.lengths)} length(s), difficulty={args.difficulty}, "
+          f"hops={args.hops}, model={args.model}")
 
     rows, done = [], 0
     with out.open("w") as fh, ThreadPoolExecutor(max_workers=args.workers) as pool:
