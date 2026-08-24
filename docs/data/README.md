@@ -9,9 +9,11 @@ problems through local models.
 
 - `external-benchmarks-2026-08.json` — vendor and independent SWE-bench
   Verified claims for the local-model candidates Drake is weighing (GLM-4.7,
-  GLM-4.6, DeepSeek V4-Flash, Qwen3-Coder-Next, Kimi K2.5, Devstral 2,
-  gpt-oss-120b), gathered 2026-08-21 through 2026-08-24. Values are recorded
-  as-handed-off, including the gaps (missing source URLs, unassessed
+  GLM-4.6, DeepSeek V4-Pro, DeepSeek V4-Flash, Qwen3-Coder-Next,
+  Kimi K2.5, Devstral 2, gpt-oss-120b), gathered 2026-08-21 and re-sourced
+  2026-08-24 after PR #2 review (one misattributed record, two unsourced
+  provenance claims corrected — see `_meta.known_gaps`). Values are recorded
+  as-verified, including the gaps (unverified independent figures, unassessed
   contamination/fit fields) — see `_meta.known_gaps` in the file itself.
 - `results-schema-audit.md` — what fields `runner/results/*.jsonl` actually
   writes today (read from the writer code and live rows, not from docs), and
@@ -25,9 +27,10 @@ problems through local models.
 public suite of real GitHub issues, graded by whatever scaffold each vendor
 or evaluator chose to run.
 
-`runner/results/*.jsonl` reports model-eval's own gauntlet — a small
-in-repo task set (`tasks/t1`..`t5`), graded by this repo's own
-`verify.sh`/broker pipeline, run through this repo's own CLI harness.
+`runner/results/*.jsonl` reports model-eval's own gauntlet — 15 tasks
+across five families (`t1`–`t5`; e.g. `tasks/t1-py-a`, `tasks/t5-ts-a`),
+graded by this repo's own `verify.sh`/broker pipeline, run through this
+repo's own CLI harness.
 
 Different tasks, different scaffolds, different grading code. A model
 scoring higher on SWE-bench Verified than another model is not guaranteed to

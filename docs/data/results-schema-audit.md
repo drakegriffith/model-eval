@@ -54,7 +54,17 @@ row appended per model invocation via `append_row`.
 
 Written by `runner/usage_ledger.py:build_usage_row`, one row per run, prospective-only (ticket 08 — never retrofit onto prior rows).
 
-`run_id, ts, model, model_id, family, tokens_in, tokens_out, cache_read_tokens, cache_creation_tokens, scaffold_overhead_tokens, scaffold_overhead_source, billing_mode, usd_estimate, usd_estimate_kind, pricing_date, retrofit_status`
+`run_id, ts, model, model_id, family, tokens_in, tokens_out, cache_read_tokens, cache_creation_tokens, scaffold_overhead_tokens, scaffold_overhead_source, billing_mode, usd_estimate, usd_estimate_kind, pricing_date, retrofit_status, kind, judged_run_id`
+
+18 fields total. A prior draft of this table listed 16 and omitted `kind`
+and `judged_run_id` — both written by the same `build_usage_row` `return {}`
+block, ~line 513 (found by the PR #2 review, not re-derived independently
+here). `kind` distinguishes `"worker"` rows from `"judge"` rows;
+`judged_run_id` links a judge row back to the run it graded. **Anyone
+summing `usd_estimate` across `usage.jsonl` for a cost comparison without
+filtering on `kind` will silently double-count judge-row cost against the
+worker run it graded** — treat `kind == "worker"` as the default filter for
+any cost rollup built from this file.
 
 ### `context_series.jsonl` — per-request context occupancy (Claude/Codex only, snapshot-driven)
 
