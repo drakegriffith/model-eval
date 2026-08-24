@@ -1,0 +1,99 @@
+{
+  "_meta": {
+    "purpose": "External SWE-bench Verified baseline claims for models Drake is weighing for local (256GB-class hardware) runs, gathered so his own model-eval gauntlet results have something to sit next to. See README.md in this directory for the full caveat on why these numbers are directional-only against model-eval's own task results.",
+    "collected_by": "research seats (per Drake handoff, seat: implementer, studio/baseline-data)",
+    "collection_window": ["2026-08-21", "2026-08-24"],
+    "independent_source_enum": ["Scale AI", "NIST CAISI", "Fireworks", "vals.ai", null],
+    "known_gaps": [
+      "source_urls is empty on every record: the handoff that produced this file listed numbers and named evaluators but no URLs. Needs a follow-up pass from the research seats that gathered the numbers before this file can be cited externally.",
+      "fits_256gb and quant_planned are null except where Drake's handoff stated one explicitly (Kimi K2.5). The rest are unassessed, not confirmed-fitting -- absence of a flag here is not evidence the model fits.",
+      "contamination_flag is null except where an explicit audit was cited (DeepSeek V4-Flash). Null means unassessed, not clean."
+    ]
+  },
+  "models": [
+    {
+      "model": "GLM-4.7",
+      "swe_bench_verified_vendor": 73.8,
+      "swe_bench_verified_independent": null,
+      "independent_source": null,
+      "contamination_flag": null,
+      "fits_256gb": null,
+      "quant_planned": null,
+      "source_urls": [],
+      "as_of": "2026-08-21",
+      "notes": "No independent SWE-bench Verified reproduction found as of the handoff date. Vendor-only figure -- treat as an upper bound."
+    },
+    {
+      "model": "GLM-4.6",
+      "swe_bench_verified_vendor": 68.0,
+      "swe_bench_verified_independent": 68.2,
+      "independent_source": "Scale AI",
+      "contamination_flag": false,
+      "fits_256gb": null,
+      "quant_planned": null,
+      "source_urls": [],
+      "as_of": "2026-08-21",
+      "notes": "Independent (Scale AI) and vendor figures match within 0.2pp -- the cleanest corroboration in this set."
+    },
+    {
+      "model": "DeepSeek V4-Flash",
+      "swe_bench_verified_vendor": 80.6,
+      "swe_bench_verified_independent": 74.0,
+      "independent_source": "NIST CAISI",
+      "contamination_flag": true,
+      "fits_256gb": null,
+      "quant_planned": null,
+      "source_urls": [],
+      "as_of": "2026-08-21",
+      "notes": "Naming ambiguity in the handoff: the benchmark values were recorded against 'DeepSeek V4' while the model list names 'DeepSeek V4-Flash'. Recorded here under the list name -- verify these are the same model before citing. Vendor claim (80.6) sits 6.6pp above the NIST CAISI figure (74.0) before contamination is even accounted for. A held-out audit flagged an additional 8% pass@1 leakage rate on top of that gap -- this is the least trustworthy vendor number in the set."
+    },
+    {
+      "model": "Qwen3-Coder-Next",
+      "swe_bench_verified_vendor": 71.3,
+      "swe_bench_verified_independent": null,
+      "independent_source": null,
+      "contamination_flag": null,
+      "fits_256gb": null,
+      "quant_planned": null,
+      "source_urls": [],
+      "as_of": "2026-08-21",
+      "notes": "Vendor figure is 'best of 3 scaffolds', not a single fixed harness -- already an optimistic-selection number before any independent check exists. Treat as an upper bound, not a like-for-like comparison point."
+    },
+    {
+      "model": "Kimi K2.5",
+      "swe_bench_verified_vendor": 76.8,
+      "swe_bench_verified_independent": 76.8,
+      "independent_source": "Fireworks",
+      "contamination_flag": null,
+      "fits_256gb": false,
+      "quant_planned": null,
+      "source_urls": [],
+      "as_of": "2026-08-21",
+      "notes": "Vendor and independent (Fireworks) figures are identical. Explicitly flagged by Drake as NOT fitting a 256GB host -- out of scope for the local-model runs this baseline is meant to support unless that changes."
+    },
+    {
+      "model": "Devstral 2",
+      "swe_bench_verified_vendor": 72.2,
+      "swe_bench_verified_independent": 50.4,
+      "independent_source": "vals.ai",
+      "contamination_flag": null,
+      "fits_256gb": null,
+      "quant_planned": null,
+      "source_urls": [],
+      "as_of": "2026-08-21",
+      "notes": "Largest vendor/independent gap in this set: 21.8pp (72.2 vendor vs 50.4 vals.ai). No contamination audit cited either way -- the gap alone is reason to weight the vals.ai figure over the vendor figure until more is known."
+    },
+    {
+      "model": "gpt-oss-120b",
+      "swe_bench_verified_vendor": null,
+      "swe_bench_verified_independent": 62,
+      "independent_source": "community (unofficial)",
+      "contamination_flag": null,
+      "fits_256gb": null,
+      "quant_planned": null,
+      "source_urls": [],
+      "as_of": "2026-08-21",
+      "notes": "No vendor SWE-bench Verified claim was in the handoff for this model -- only a community reproduction of approximately 62 (stated as '~62', not a precise score). independent_source does not match one of the four named evaluators (Scale AI / NIST CAISI / Fireworks / vals.ai) -- lowest-confidence entry in this file, treat as a rough anchor only."
+    }
+  ]
+}
