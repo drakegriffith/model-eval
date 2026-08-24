@@ -135,13 +135,15 @@ def test_model_family_on_each_family_via_id_and_alias():
     assert model_family("kimi-k3") == "kimi"
     assert model_family("sol") == "codex"
     assert model_family("kimi") == "kimi"
+    assert model_family("glm-4.7-local") == "local"
+    assert model_family("qwen3-coder-next-local") == "local"
 
 
 def test_every_model_declares_a_family_and_a_nonempty_tier_list():
     """Downstream dispatches on family; an absent one would KeyError mid-sweep."""
     inspected = 0
     for mid, spec in MODELS.items():
-        assert spec.get("family") in ("claude", "codex", "kimi"), mid
+        assert spec.get("family") in ("claude", "codex", "kimi", "local"), mid
         assert spec.get("efforts"), f"{mid} declares no effort tiers"
         assert all(isinstance(t, str) and t for t in spec["efforts"]), mid
         inspected += 1

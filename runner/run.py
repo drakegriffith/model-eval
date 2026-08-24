@@ -70,6 +70,19 @@ MOONSHOT_ANTHROPIC_URL = "https://api.moonshot.ai/anthropic"
 KIMI_PRICE_IN = 3.0
 KIMI_PRICE_OUT = 15.0
 
+# studio/local-family: same claude binary, pointed at an LM Studio server serving
+# an Anthropic-compatible endpoint on loopback instead of Moonshot's. Overridable
+# because LM Studio's default port (1234) is a local dev convention, not a fact
+# about the instrument -- a different port or a remote box shouldn't need a code
+# change. No key file and no price constants here: unlike Kimi this family is
+# unmetered, so there is nothing to load and nothing to charge.
+LOCAL_BASE_URL = os.environ.get("MODEL_EVAL_LOCAL_BASE_URL", "http://localhost:1234")
+# LM Studio does not check this value -- there is no account behind it -- but the
+# claude binary refuses to start against a custom ANTHROPIC_BASE_URL with an empty
+# ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN, so a non-empty placeholder is required to
+# get past the CLI's own auth precondition, not LM Studio's.
+LOCAL_PLACEHOLDER_TOKEN = "sk-local-lmstudio-unused"
+
 
 def load_kimi_key():
     """Return MOONSHOT_API_KEY from the gitignored secrets file, or None.
@@ -459,12 +472,22 @@ def build_cli_cmd(model, effort, prompt):
     version passed no --effort for Kimi while labelling every Kimi run "max",
     which is CLI-FACTS correction #3 -- the label was fiction and no Kimi ladder
     was measurable.
+
+    local (studio/local-family) rides the same `claude` binary the same way kimi
+    does (base_url + placeholder token injected by run_cli), so it takes the
+    identical invocation shape including --effort. --effort is passed through
+    rather than suppressed: the flag is harmless to include even if LM Studio's
+    server ignores it server-side (registry.py's `efforts_verified: False` is
+    where that open question is recorded), and suppressing it here would make
+    the argv depend on a fact -- whether the knob works -- that isn't known yet.
+    Whether it moves spend at all is exactly what probe_endpoints.py's ladder
+    phase is for, same as every other family.
     """
     mid, spec = resolve_model(model)
     check_effort(mid, effort)
     family = spec["family"]
 
-    if family in ("claude", "kimi"):
+    if family in ("claude", "kimi", "local"):
         cmd = ["claude", "-p", prompt, "--output-format", "json",
                "--model", mid, "--dangerously-skip-permissions"] + MCP_SEAL_FLAGS
         if effort:
@@ -641,6 +664,16 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
         env["ANTHROPIC_BASE_URL"] = MOONSHOT_ANTHROPIC_URL
         env["ANTHROPIC_API_KEY"] = key
         env["ANTHROPIC_AUTH_TOKEN"] = key   # some Claude Code versions read this
+    elif model is not None and model_family(model) == "local":
+        # studio/local-family: same lever as the kimi arm above, pointed at an
+        # LM Studio server on loopback instead of Moonshot. No key file and no
+        # "key missing" failure mode -- unlike kimi there is no account behind
+        # this, so nothing to load and nothing that can be absent. The
+        # placeholder token exists only to satisfy the claude binary's own
+        # precondition (see LOCAL_PLACEHOLDER_TOKEN); LM Studio never checks it.
+        env["ANTHROPIC_BASE_URL"] = LOCAL_BASE_URL
+        env["ANTHROPIC_API_KEY"] = LOCAL_PLACEHOLDER_TOKEN
+        env["ANTHROPIC_AUTH_TOKEN"] = LOCAL_PLACEHOLDER_TOKEN
 
     with contextlib.ExitStack() as stack:
         # verify.sh is copied into scratch; tasks whose test assets live beside

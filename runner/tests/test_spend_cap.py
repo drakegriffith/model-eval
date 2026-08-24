@@ -206,14 +206,22 @@ def test_metering_report_over_the_real_registry_meters_one_family_and_refuses_so
     assert report["refused_ids"] != [], (
         "refused 0 over this registry would mean the probe stopped probing")
     assert len(report["refused_ids"]) == len(registry.MODELS) - 1
-    assert set(report["refused_families"]) == {"claude", "codex"}
+    # studio/local-family added an unmetered "local" family alongside the two
+    # pre-existing unmetered ones; re-derived from the registry rather than
+    # re-hardcoded, so this stays true the next time a family is added too.
+    assert set(report["refused_families"]) == (
+        {spec["family"] for spec in registry.MODELS.values()} - {"kimi"})
 
 
 def test_the_formatted_report_states_both_counts():
     """AC#5 asks for the counts to be reported, not merely computed."""
     text = spend_cap.format_metering_report(spend_cap.metering_report())
+    refused_n = len(registry.MODELS) - 1  # every model but the one metered id
+    refused_families = sorted({spec["family"] for spec in registry.MODELS.values()}
+                              - {"kimi"})
     assert "meterable: 1 ids across 1 families (kimi)" in text
-    assert "refused:   15 ids across 2 families (claude, codex)" in text
+    assert (f"refused:   {refused_n} ids across {len(refused_families)} families "
+           f"({', '.join(refused_families)})") in text
     assert "never by the family name" in text
     assert "REFUSED 0" not in text
 
