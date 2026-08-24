@@ -47,8 +47,8 @@ fails the build, not silently gets skipped.
 A model is a row in the registry plus a proven invocation:
 
 1. Add one entry to `MODELS` in `runner/registry.py` — model id, `family`
-   (`claude`, `codex`, or `kimi`; family determines which CLI drives it and
-   how its output is parsed), and which effort tiers it exposes.
+   (`claude`, `codex`, `kimi`, or `local`; family determines which CLI drives
+   it and how its output is parsed), and which effort tiers it exposes.
 2. Add a corresponding entry to `runner/CLI-FACTS.md` with the exact
    non-interactive command you verified actually works — resolved model id,
    auth path, and any scaffold-token floor you observed. Don't guess this;

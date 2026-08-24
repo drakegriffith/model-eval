@@ -252,7 +252,9 @@ def test_the_executor_cli_shows_the_paths_and_the_caps_coverage():
     assert proc.returncode == 0, proc.stderr
     assert "1 invocation path(s), all API-key auth" in proc.stdout
     assert "meterable: 1 ids across 1 families (kimi)" in proc.stdout
-    assert "refused:   15 ids" in proc.stdout
+    # Every model but the one metered id; re-derived rather than re-hardcoded
+    # so studio/local-family's two new (unmetered) rows don't stale this out.
+    assert f"refused:   {len(registry.MODELS) - 1} ids" in proc.stdout
 
 
 def test_the_child_environment_is_built_from_an_allowlist_and_carries_the_key():

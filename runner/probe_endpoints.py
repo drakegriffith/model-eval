@@ -81,6 +81,17 @@ CLAUDE_CANDIDATES = [
 # the source of Kimi's ~30k-token overhead tax and of the observed 200k context cap.
 KIMI_CANDIDATES = ["kimi-k3", "kimi-k2.7"]
 
+# studio/local-family: same Claude Code scaffold, pointed at an LM Studio server on
+# loopback (MODEL_EVAL_LOCAL_BASE_URL, default http://localhost:1234) instead of a
+# hosted endpoint. Unmetered -- there is no --max-usd concern for this family, unlike
+# Kimi -- but reachability and the effort ladder are exactly as unverified, which is
+# what this script exists to answer. Requires an LM Studio server actually running and
+# these two models actually loaded; with neither, every cell here comes back
+# unreachable rather than silently skipped, which is the correct floor-phase signal.
+LOCAL_BASE_URL = os.environ.get("MODEL_EVAL_LOCAL_BASE_URL", "http://localhost:1234")
+LOCAL_PLACEHOLDER_TOKEN = "sk-local-lmstudio-unused"
+LOCAL_CANDIDATES = ["glm-4.7-local", "qwen3-coder-next-local"]
+
 
 def load_kimi_key():
     """Return MOONSHOT_API_KEY from the gitignored secrets file, or None.
@@ -136,7 +147,7 @@ def build_cmd(family, model_id, effort, prompt, tool_free):
     Whatever this returns is recorded verbatim in the JSONL, so the roster ships the
     command that was actually proven rather than a reconstruction of it.
     """
-    if family in ("claude", "kimi"):
+    if family in ("claude", "kimi", "local"):
         cmd = ["claude", "-p", prompt, "--output-format", "json",
                "--model", model_id, "--dangerously-skip-permissions"]
         if effort:
@@ -236,6 +247,13 @@ def probe(family, model_id, effort, phase, timeout_s, scratch):
         env["ANTHROPIC_BASE_URL"] = MOONSHOT_ANTHROPIC_URL
         env["ANTHROPIC_API_KEY"] = key
         env["ANTHROPIC_AUTH_TOKEN"] = key
+    elif family == "local":
+        # Unmetered, so unlike kimi there is no key file and no missing-key
+        # failure mode -- the placeholder only satisfies the claude binary's own
+        # auth precondition; LM Studio never checks it.
+        env["ANTHROPIC_BASE_URL"] = LOCAL_BASE_URL
+        env["ANTHROPIC_API_KEY"] = LOCAL_PLACEHOLDER_TOKEN
+        env["ANTHROPIC_AUTH_TOKEN"] = LOCAL_PLACEHOLDER_TOKEN
 
     t0 = time.time()
     try:
@@ -261,6 +279,7 @@ def probe(family, model_id, effort, phase, timeout_s, scratch):
         "wall_s": wall_s,
         "exit_code": exit_code,
         "auth": ("moonshot_api_key:~/.secrets/kimi.env" if family == "kimi"
+                 else "local_placeholder_token:no_account" if family == "local"
                  else "subscription_oauth"),
     }
 
@@ -325,7 +344,11 @@ def main():
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--max-usd", type=float, default=5.0,
                     help="hard cap on METERED (Kimi) spend; subscription calls are free")
-    ap.add_argument("--families", default="claude,codex,kimi")
+    # local is in the default set (unlike a metered family, an unreachable LM
+    # Studio server just fails its cells closed with model_id_not_available /
+    # a connection error -- there is no spend cap to protect, so nothing is
+    # gained by making it opt-in the way Kimi's --max-usd gate would argue for).
+    ap.add_argument("--families", default="claude,codex,kimi,local")
     ap.add_argument("--models", default=None, help="comma-separated id filter")
     ap.add_argument("--efforts", default=None, help="comma-separated effort filter")
     args = ap.parse_args()
@@ -357,6 +380,14 @@ def main():
             efforts = CLAUDE_EFFORTS if args.phase == "ladder" else ["low"]
             for e in efforts:
                 cells.append(("kimi", mid, e))
+    if "local" in families:
+        for mid in LOCAL_CANDIDATES:
+            # Same open question as Kimi's tiers, minus the metering: whether
+            # --effort moves anything through LM Studio's Anthropic-compatible
+            # endpoint is unverified (registry.py: efforts_verified=False).
+            efforts = CLAUDE_EFFORTS if args.phase == "ladder" else ["low"]
+            for e in efforts:
+                cells.append(("local", mid, e))
 
     if model_filter:
         cells = [c for c in cells if c[1] in model_filter]

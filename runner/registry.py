@@ -20,7 +20,7 @@ In  model: str -- an alias ("fable") or a canonical CLI id ("claude-fable-5").
             and is always legal (a caller that declares no tier cannot mistype
             one).
 
-Out canonical id (str) · family (str: "claude" | "codex" | "kimi") ·
+Out canonical id (str) · family (str: "claude" | "codex" | "kimi" | "local") ·
     metered (bool) · the declared legal tier list (list[str]).
     Nothing here returns a price, and nothing here returns a date -- see
     Limitations.
@@ -108,6 +108,18 @@ MODELS = {
     # precisely because those last two facts differ.
     "kimi-k3":                   {"family": "kimi", "efforts": CLAUDE_TIERS,
                                   "metered": True},
+    # local family -- same Claude Code binary pointed at an LM Studio server on
+    # loopback (studio/local-family), no key, no spend. `efforts` here is
+    # CLAUDE_TIERS by inheritance of the same --effort flag the claude binary
+    # takes for every family riding it, NOT because anyone has confirmed LM
+    # Studio's Anthropic-compatible endpoint does anything with the tier --
+    # `efforts_verified: False` says so explicitly so a reader doesn't mistake
+    # "declared" for "measured" (see registry.py's own Limitations section).
+    # That verification is probe_endpoints.py's job, same as every other family.
+    "glm-4.7-local":             {"family": "local", "efforts": CLAUDE_TIERS,
+                                  "efforts_verified": False},
+    "qwen3-coder-next-local":    {"family": "local", "efforts": CLAUDE_TIERS,
+                                  "efforts_verified": False},
 }
 
 # Short names used by the existing runs.yaml files and already written into
