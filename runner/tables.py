@@ -139,6 +139,38 @@ def group(rows, keyfn):
     return g
 
 
+# --------------------------------------------------------------------------- #
+# The driver is part of the treatment, never a detail of delivery
+# --------------------------------------------------------------------------- #
+# findings.md reports pi as a SEPARATELY-REPORTED vehicle contrast: pi has no
+# hooks and no subagents, so two rows differing only in driver are two
+# populations, not two samples of one. Pooled, a corpus of 3/3 claude-code and
+# 0/3 pi renders as a single model row at 50% -- a number describing nothing that
+# exists, and exactly the merge findings.md forbids.
+#
+# The label is applied ONLY where a model actually ran under more than one
+# driver. All 268 archived rows predate the field entirely, so a corpus with
+# nothing to disambiguate renders exactly as before and no published number is
+# restated.
+def driver_of(row):
+    return row.get("driver")
+
+
+def multi_driver_models(rows):
+    """Models that ran under more than one driver in this corpus."""
+    seen = {}
+    for r in rows:
+        seen.setdefault(r["model"], set()).add(driver_of(r))
+    return {m: sorted(d for d in ds if d) for m, ds in seen.items() if len(ds) > 1}
+
+
+def model_key(row, mixed):
+    """The grouping name for a model, split by driver only where it must be."""
+    if row["model"] in mixed and driver_of(row):
+        return f"{row['model']} [{driver_of(row)}]"
+    return row["model"]
+
+
 def md_table(headers, data_rows):
     if not data_rows:
         return "_(no data)_\n"
@@ -153,7 +185,8 @@ def md_table(headers, data_rows):
 # Tables
 # --------------------------------------------------------------------------- #
 def table1_effort_ladder(rows, qual):
-    g = group(rows, lambda r: (r["model"], r["effort"]))
+    mixed = multi_driver_models(rows)
+    g = group(rows, lambda r: (model_key(r, mixed), r["effort"]))
     data = []
     for (model, effort), rs in sorted(
             g.items(), key=lambda kv: (kv[0][0], EFFORT_ORDER.get(kv[0][1], 9))):
@@ -192,7 +225,8 @@ def table2_efficiency_frontier(rows):
     # sessions. Each cell says which instrument produced it (the recorded field
     # via corpus_gates, never `turns`), and mixing modes in one table is said
     # out loud below rather than left for a reader to reconstruct from t13.
-    g = group(rows, lambda r: (r["model"], r["effort"]))
+    mixed = multi_driver_models(rows)
+    g = group(rows, lambda r: (model_key(r, mixed), r["effort"]))
     data = []
     table_modes = set()
     for (model, effort), rs in sorted(
@@ -231,6 +265,8 @@ def table2_efficiency_frontier(rows):
 
 
 def table3_harness_delta(rows):
+    mixed = multi_driver_models(rows)
+    rows = [dict(r, model=model_key(r, mixed)) for r in rows]
     models = sorted({r["model"] for r in rows})
     data = []
     for model in models:
@@ -276,7 +312,8 @@ def table4_hybrid_vs_solo(rows):
 
 
 def table5_variance(rows):
-    g = group(rows, lambda r: (r["model"], r["effort"],
+    mixed = multi_driver_models(rows)
+    g = group(rows, lambda r: (model_key(r, mixed), r["effort"],
                                "harness" if r.get("harness") else "bare", r["task"]))
     data = []
     for (model, effort, htag, task), rs in sorted(g.items()):
@@ -301,6 +338,8 @@ def table5_variance(rows):
 
 def table6_decision_matrix(rows, qual, ledger=None):
     ledger = {} if ledger is None else ledger
+    mixed = multi_driver_models(rows)
+    rows = [dict(r, model=model_key(r, mixed)) for r in rows]
     models = sorted({r["model"] for r in rows})
     data = []
     dropped_note = []
@@ -412,6 +451,14 @@ def build_report(results, judgments, ledger=None):
            else "no measured runs (every row left the denominator)")
         + f", {len(judgments)} judged.",
         "",
+        (("> **vehicle contrast** — this corpus contains more than one DRIVER "
+          "for the same model, so those rows are reported as separate lines "
+          "(`model [driver]`) and never pooled: "
+          + "; ".join(f"`{m}`: {', '.join(ds)}"
+                      for m, ds in sorted(multi_driver_models(results).items()))
+          + ". pi has no hooks and no subagents, so the driver is part of the "
+            "treatment, not a detail of how it was delivered.\n")
+         if multi_driver_models(results) else ""),
         "> **estimand** (issue #12 d) — a pass rate counts only runs that "
         "produced a measurement of the model. Timeouts, infra faults and "
         "structurally-impossible cells are distinct statuses, excluded from "

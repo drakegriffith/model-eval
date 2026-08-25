@@ -1806,6 +1806,21 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "run_id": run["run_id"], "ts": now_iso(), "sweep": run["sweep"],
         "model": run["model"], "model_id": resolve_model(run["model"])[0],
         "effort": run["effort"], "harness": run["harness"],
+        # WHICH CLI DROVE THE MODEL, and which rung of the dose ladder this cell
+        # is. build_runs carried both and the gate required the driver, but this
+        # row dict wrote neither -- only record_structurally_impossible did, so
+        # every actually-EXECUTED row carried no driver at all.
+        #
+        # findings.md reports pi as a separately-reported vehicle contrast: pi
+        # has no hooks and no subagents, so the driver is part of the TREATMENT.
+        # Without this field a corpus of 3/3 claude-code and 0/3 pi renders as
+        # one model row at 50%, and the stage-1 config's own "group by driver"
+        # instruction names a column that does not exist.
+        #
+        # harness_level is None, never 0, when no rung is declared: `harness`
+        # above is the pre-ladder boolean and False is not level 0.
+        "driver": run.get("driver"),
+        "harness_level": run.get("harness_level"),
         "task": run["task"], "rep": run["rep"], "pass": passed,
         "tokens_in": tokens_in, "tokens_out": tokens_out, "wall_s": wall_s,
         # ticket 31: which parse formula produced tokens_in, recorded by the
