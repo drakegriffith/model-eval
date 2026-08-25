@@ -46,6 +46,7 @@ RUNNER_DIR = os.path.join(ROOT, "runner")
 sys.path.insert(0, RUNNER_DIR)
 
 import corpus_gates  # noqa: E402
+import run_status  # noqa: E402
 import usage_ledger  # noqa: E402
 
 EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
@@ -138,6 +139,57 @@ def group(rows, keyfn):
     return g
 
 
+# --------------------------------------------------------------------------- #
+# The driver is part of the treatment, never a detail of delivery
+# --------------------------------------------------------------------------- #
+# findings.md reports pi as a SEPARATELY-REPORTED vehicle contrast: pi has no
+# hooks and no subagents, so two rows differing only in driver are two
+# populations, not two samples of one. Pooled, a corpus of 3/3 claude-code and
+# 0/3 pi renders as a single model row at 50% -- a number describing nothing that
+# exists, and exactly the merge findings.md forbids.
+#
+# The label is applied ONLY where a model actually ran under more than one
+# driver. All 268 archived rows predate the field entirely, so a corpus with
+# nothing to disambiguate renders exactly as before and no published number is
+# restated.
+# THE TOKEN AXIS. Separate from the pass axis on purpose, and this is the one
+# place that says which rows a spend number may average.
+#
+# `run_status.in_denominator` counts cap_exhausted as SCORED -- correctly: a
+# model that spent its K revisions and did not converge DID get a fair attempt,
+# so it belongs in the pass denominator as a failure. But its tokens_out records
+# where the BROKER cut generation off, not what the tier chose to spend, so it
+# must not enter a spend mean.
+#
+# `ladder_from_results.tiers_for` and `stats.section_cost_matched` already draw
+# the line here. Until this commit tables 2-6 drew it at in_denominator instead,
+# so one corpus published two different spend means -- 1000 via the ladder and
+# 752 via table2 -- while table2's own comment cited the ladder as its authority.
+def token_rows(rs):
+    """(rows a spend number may average, count excluded as truncated)."""
+    kept = [r for r in rs if corpus_gates.summarizable(r)]
+    return kept, len(rs) - len(kept)
+
+
+def driver_of(row):
+    return row.get("driver")
+
+
+def multi_driver_models(rows):
+    """Models that ran under more than one driver in this corpus."""
+    seen = {}
+    for r in rows:
+        seen.setdefault(r["model"], set()).add(driver_of(r))
+    return {m: sorted(d for d in ds if d) for m, ds in seen.items() if len(ds) > 1}
+
+
+def model_key(row, mixed):
+    """The grouping name for a model, split by driver only where it must be."""
+    if row["model"] in mixed and driver_of(row):
+        return f"{row['model']} [{driver_of(row)}]"
+    return row["model"]
+
+
 def md_table(headers, data_rows):
     if not data_rows:
         return "_(no data)_\n"
@@ -152,22 +204,38 @@ def md_table(headers, data_rows):
 # Tables
 # --------------------------------------------------------------------------- #
 def table1_effort_ladder(rows, qual):
-    g = group(rows, lambda r: (r["model"], r["effort"]))
+    mixed = multi_driver_models(rows)
+    g = group(rows, lambda r: (model_key(r, mixed), r["effort"]))
     data = []
     for (model, effort), rs in sorted(
             g.items(), key=lambda kv: (kv[0][0], EFFORT_ORDER.get(kv[0][1], 9))):
-        n = len(rs)
-        passes = sum(1 for r in rs if r.get("pass"))
+        # issue #12 (d). The denominator is the runs that produced a MEASUREMENT
+        # of the model, not every row in the cell. A wall-clock timeout or an
+        # infra fault is a distinct status, reported beside the rate and never
+        # counted as a model failure -- the pre-registered bundle's rule, which
+        # this table used to contradict by taking n = len(rs).
+        #
+        # Not cosmetic on the local stack: under PARALLEL=4 a neighbour's prefill
+        # starved a decode to 0.05 tok/s, a 380x wall-clock swing on identical
+        # work. Counting that as task difficulty lets the SCHEDULER grade the
+        # model, and the high-harness arms carry the largest prompts, so the bias
+        # runs one way along the dose ladder.
+        scored, excluded = run_status.partition_for_rate(rs)
+        n = len(scored)
+        passes = sum(1 for r in scored if r.get("pass"))
         # Quality gates on BOTH `pass` and a clean exit (ticket 34): a truncated
-        # run's judged score describes a truncated run. The pass COUNT one line
-        # up stays ungated -- a named residual in TOKENS-IN-RESIDUAL.md, not an
-        # oversight.
-        q = mean([qual.get(r["run_id"]) for r in rs
+        # run's judged score describes a truncated run.
+        q = mean([qual.get(r["run_id"]) for r in scored
                   if r.get("pass") and corpus_gates.summarizable(r)])
-        data.append([model, effort, n, passes, pct(passes, n),
+        # An empty denominator has not measured a 0% pass rate; it has measured
+        # nothing, and 0% is the most misleading thing it could print.
+        rate = pct(passes, n) if n else "no measured runs"
+        data.append([model, effort, n, passes, rate,
+                     run_status.format_excluded(excluded) or "-",
                      fnum(q, 2) if q is not None else "-"])
     return md_table(
-        ["model", "effort", "n", "pass", "pass_rate", "avg_quality(/10)"], data)
+        ["model", "effort", "n", "pass", "pass_rate", "excluded",
+         "avg_quality(/10)"], data)
 
 
 def table2_efficiency_frontier(rows):
@@ -176,15 +244,29 @@ def table2_efficiency_frontier(rows):
     # sessions. Each cell says which instrument produced it (the recorded field
     # via corpus_gates, never `turns`), and mixing modes in one table is said
     # out loud below rather than left for a reader to reconstruct from t13.
-    g = group(rows, lambda r: (r["model"], r["effort"]))
+    mixed = multi_driver_models(rows)
+    g = group(rows, lambda r: (model_key(r, mixed), r["effort"]))
     data = []
     table_modes = set()
     for (model, effort), rs in sorted(
             g.items(), key=lambda kv: (kv[0][0], EFFORT_ORDER.get(kv[0][1], 9))):
-        n = len(rs)
-        passes = sum(1 for r in rs if r.get("pass"))
-        tot = [out_tokens(r) for r in rs]
+        # Same denominator as table1, from the same predicate. Before this, five
+        # tables took n = len(rs) while table1 took the scored set, so one corpus
+        # published two different pass rates for the same runs.
+        scored, _excl = run_status.partition_for_rate(rs)
+        n = len(scored)
+        passes = sum(1 for r in scored if r.get("pass"))
+        # The token axis moves with it: tokens_out from a truncated run measures
+        # where the run was cut off, not what the tier chose to spend --
+        # ladder_from_results.py makes that argument for the same reason.
+        spend, _dropped = token_rows(rs)
+        tot = [out_tokens(r) for r in spend]
         tpp = (sum(tot) / passes) if passes else None
+        # The MODE column is not a pass-rate question -- it reports which
+        # instrument produced this cell's rows, and that is true of a row
+        # whatever its exit status. Gating it on `scored` would blank the column
+        # for a cell whose runs all timed out, which is precisely when a reader
+        # most needs to know what produced them.
         cell_modes = sorted({corpus_gates.invocation_mode_of(r) for r in rs})
         table_modes.update(cell_modes)
         data.append([model, effort, "/".join(cell_modes), pct(passes, n),
@@ -203,15 +285,18 @@ def table2_efficiency_frontier(rows):
 
 
 def table3_harness_delta(rows):
+    mixed = multi_driver_models(rows)
+    rows = [dict(r, model=model_key(r, mixed)) for r in rows]
     models = sorted({r["model"] for r in rows})
     data = []
     for model in models:
         cell = {}
         for tag, hv in (("bare", False), ("harness", True)):
             rs = [r for r in rows if r["model"] == model and bool(r.get("harness")) == hv]
-            n = len(rs)
-            passes = sum(1 for r in rs if r.get("pass"))
-            toks = mean([out_tokens(r) for r in rs])
+            scored, _excl = run_status.partition_for_rate(rs)
+            n = len(scored)
+            passes = sum(1 for r in scored if r.get("pass"))
+            toks = mean([out_tokens(r) for r in token_rows(rs)[0]])
             cell[tag] = (n, passes, (100.0 * passes / n if n else None), toks)
         b, h = cell["bare"], cell["harness"]
         if b[0] == 0 and h[0] == 0:
@@ -237,24 +322,31 @@ def table4_hybrid_vs_solo(rows):
     g = group(t3, lambda r: r["model"])
     data = []
     for model, rs in sorted(g.items()):
-        n = len(rs)
-        passes = sum(1 for r in rs if r.get("pass"))
-        toks = mean([out_tokens(r) for r in rs])
+        scored, _excl = run_status.partition_for_rate(rs)
+        n = len(scored)
+        passes = sum(1 for r in scored if r.get("pass"))
+        toks = mean([out_tokens(r) for r in token_rows(rs)[0]])
         kind = "hybrid" if model == "hybrid" else "solo"
         data.append([model, kind, n, pct(passes, n), fnum(toks)])
     return md_table(["model", "kind", "n", "pass_rate", "mean_tokens_out"], data)
 
 
 def table5_variance(rows):
-    g = group(rows, lambda r: (r["model"], r["effort"],
+    mixed = multi_driver_models(rows)
+    g = group(rows, lambda r: (model_key(r, mixed), r["effort"],
                                "harness" if r.get("harness") else "bare", r["task"]))
     data = []
     for (model, effort, htag, task), rs in sorted(g.items()):
+        # Variance is measured over the runs that produced a measurement. A
+        # timeout's loc_changed and tokens_out describe where it was cut off, so
+        # including them measures the scheduler's spread, not the model's.
+        rs, _excl = run_status.partition_for_rate(rs)
         if len(rs) < 2:
             continue  # variance needs repeated cells
         passes = sum(1 for r in rs if r.get("pass"))
-        locs = [r.get("loc_changed", 0) for r in rs]
-        toks = [out_tokens(r) for r in rs]
+        spend, _dropped = token_rows(rs)
+        locs = [r.get("loc_changed", 0) for r in spend]
+        toks = [out_tokens(r) for r in spend]
         data.append([
             f"{model}/{effort}/{htag}", task, len(rs), f"{passes}/{len(rs)}",
             f"{min(locs)}/{round(statistics.median(locs))}/{max(locs)}",
@@ -267,6 +359,8 @@ def table5_variance(rows):
 
 def table6_decision_matrix(rows, qual, ledger=None):
     ledger = {} if ledger is None else ledger
+    mixed = multi_driver_models(rows)
+    rows = [dict(r, model=model_key(r, mixed)) for r in rows]
     models = sorted({r["model"] for r in rows})
     data = []
     dropped_note = []
@@ -276,10 +370,15 @@ def table6_decision_matrix(rows, qual, ledger=None):
                   lambda r: (r["effort"], "harness" if r.get("harness") else "bare"))
         best, best_key = None, None
         for key, rs in g.items():
+            # "Best config" is chosen BY pass rate, so an ungated denominator
+            # here does not just misreport a number -- it picks a different
+            # winner. A config whose runs timed out most often would have looked
+            # worst on exactly the axis that is not the model's.
+            rs, _excl = run_status.partition_for_rate(rs)
             n = len(rs)
             passes = sum(1 for r in rs if r.get("pass"))
             rate = passes / n if n else 0
-            toks = mean([out_tokens(r) for r in rs]) or 0
+            toks = mean([out_tokens(r) for r in token_rows(rs)[0]]) or 0
             score = (rate, -toks)
             if best is None or score > best:
                 best, best_key = score, (key, rate, toks, rs)
@@ -315,14 +414,22 @@ def table6_decision_matrix(rows, qual, ledger=None):
         q = mean([qual.get(r["run_id"]) for r in rs
                   if r.get("pass") and corpus_gates.summarizable(r)])
         rate_pct = 100.0 * rate
-        if rate_pct >= 90:
-            use = "reliable — default choice for this class"
-        elif rate_pct >= 50:
-            use = "usable with harness / review gate"
+        # An empty denominator is not a 0% pass rate. This table turns the number
+        # into ADVICE ("not yet reliable here"), so rendering 0% for a cell whose
+        # every run timed out would recommend against a model on the strength of
+        # a measurement nobody took. Same rule as table1's "no measured runs".
+        if not rs:
+            rate_cell, use = "no measured runs", "unmeasured — no basis to advise"
         else:
-            use = "not yet reliable here"
+            rate_cell = f"{rate_pct:.0f}%"
+            if rate_pct >= 90:
+                use = "reliable — default choice for this class"
+            elif rate_pct >= 50:
+                use = "usable with harness / review gate"
+            else:
+                use = "not yet reliable here"
         data.append([
-            model, f"{effort}/{htag}", f"{rate_pct:.0f}%",
+            model, f"{effort}/{htag}", rate_cell,
             fnum(q, 2) if q is not None else "-",
             tin_cell, use,
         ])
@@ -344,7 +451,11 @@ def table6_decision_matrix(rows, qual, ledger=None):
 
 def build_report(results, judgments, ledger=None):
     qual = quality_by_run(judgments)
-    n_pass = sum(1 for r in results if r.get("pass"))
+    # The headline count is the ESTIMAND's, not every row's. It used to read
+    # "N run row(s), P passing" with P taken over the whole corpus, so the
+    # sentence a reader meets first disagreed with every table beneath it.
+    scored, excl_status = run_status.partition_for_rate(results)
+    n_pass = sum(1 for r in scored if r.get("pass"))
 
     # AC#4: count the subjects out loud, in the header, before any table. A
     # filtered corpus and an unfiltered one must not render identically, and a
@@ -356,8 +467,25 @@ def build_report(results, judgments, ledger=None):
     parts = [
         "# model-gauntlet results",
         "",
-        f"Source: {len(results)} run row(s), {n_pass} passing, "
-        f"{len(judgments)} judged.",
+        f"Source: {len(results)} run row(s), "
+        + (f"{n_pass} passing of {len(scored)} scored" if scored
+           else "no measured runs (every row left the denominator)")
+        + f", {len(judgments)} judged.",
+        "",
+        (("> **vehicle contrast** — this corpus contains more than one DRIVER "
+          "for the same model, so those rows are reported as separate lines "
+          "(`model [driver]`) and never pooled: "
+          + "; ".join(f"`{m}`: {', '.join(ds)}"
+                      for m, ds in sorted(multi_driver_models(results).items()))
+          + ". pi has no hooks and no subagents, so the driver is part of the "
+            "treatment, not a detail of how it was delivered.\n")
+         if multi_driver_models(results) else ""),
+        "> **estimand** (issue #12 d) — a pass rate counts only runs that "
+        "produced a measurement of the model. Timeouts, infra faults and "
+        "structurally-impossible cells are distinct statuses, excluded from "
+        "every denominator above and reported here, never as model failures: "
+        + (run_status.format_excluded(excl_status) or "nothing excluded")
+        + f" (scored={len(scored)} of {len(results)}).",
         "",
         "> **dispositions** (ticket 31 AC#4 / ticket 34) — "
         + corpus_gates.format_exclusions(

@@ -44,6 +44,8 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import corpus_gates  # noqa: E402
+import run_status  # noqa: E402
 from effort_verdict import (  # noqa: E402  (thresholds + vocabulary: single source)
     TIER_ORDER, classify, pre_split_verdict, transition_tally,
 )
@@ -68,7 +70,13 @@ def load_rows(path, sweep, model, passing_only):
             # match either the alias as written or the canonical id behind it
             if model and model not in (r.get("model"), r.get("model_id")):
                 continue
-            if r.get("exit_reason") != "ok":
+            # Kept when EITHER axis can use the row: cleanly-exited rows feed the
+            # token ladder, and run_status-scored rows feed the pass rate. The
+            # two sets differ by cap_exhausted, which is a scored model failure
+            # whose tokens_out is truncated -- so it belongs in one axis and not
+            # the other, and dropping it here would have removed real failures
+            # from the pass rate. tiers_for() re-applies the token gate.
+            if not (corpus_gates.summarizable(r) or run_status.in_denominator(r)):
                 excluded[r.get("exit_reason") or "unknown"] += 1
                 continue
             if passing_only and not r.get("pass"):
@@ -79,9 +87,17 @@ def load_rows(path, sweep, model, passing_only):
 
 
 def tiers_for(rows):
-    """Group output tokens by effort, ordered canonically. -> [(effort, [samples])]"""
+    """Group output tokens by effort, ordered canonically. -> [(effort, [samples])]
+
+    The TOKEN gate lives here, so it applies wherever the ladder is measured and
+    not only where rows were loaded. A truncated run's tokens_out records where
+    generation was cut off, not what the tier chose to spend, so cap_exhausted
+    is excluded here even though the pass axis counts it.
+    """
     by_tier = defaultdict(list)
     for r in rows:
+        if not corpus_gates.summarizable(r):
+            continue
         by_tier[r["effort"]].append(r.get("tokens_out", 0))
     return [(t, by_tier[t]) for t in TIER_ORDER if t in by_tier]
 
@@ -89,14 +105,30 @@ def tiers_for(rows):
 def report_block(label, rows):
     tiers = tiers_for(rows)
     res = classify(tiers)
+    # TWO AXES, TWO DENOMINATORS (issue #12 d).
+    #
+    # The TOKEN ladder is measured over `rows` as the caller supplied them --
+    # load_rows() has already dropped anything that did not exit cleanly, and
+    # that gate is correct for tokens: a truncated run's tokens_out measures
+    # where it was cut off, not what the tier chose to spend.
+    #
+    # It is the WRONG gate for a pass rate, because it also drops cap_exhausted:
+    # a run the model got a full attempt at and did not converge on, which
+    # pre-registration section 7 scores as a failure. Excluding it removes real
+    # failures and inflates the rate. So the pass axis goes through the one
+    # shared predicate, and both denominators are reported rather than one being
+    # silently reused for the other.
+    scored, excluded = run_status.partition_for_rate(rows)
     return {
         "block": label,
         "n_runs": len(rows),
         "tiers": [t for t, _ in tiers],
         "n_per_tier": [len(v) for _, v in tiers],
         "out_tokens_by_tier": {t: round(statistics.mean(v)) for t, v in tiers if v},
-        "pass_rate": (round(sum(1 for r in rows if r.get("pass")) / len(rows), 2)
-                      if rows else None),
+        "n_scored": len(scored),
+        "pass_excluded": excluded,
+        "pass_rate": (round(sum(1 for r in scored if r.get("pass")) / len(scored), 2)
+                      if scored else None),
         **res,
     }
 

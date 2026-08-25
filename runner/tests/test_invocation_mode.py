@@ -212,7 +212,14 @@ def test_the_reader_disposition_has_three_answers():
         {"invocation_mode": "single_shot"}) == "single_shot"
 
 
-T2_ROW = {"effort": "high", "pass": True, "tokens_out": 1000}
+# `exit_reason` is present because these rows must reach table2's DENOMINATOR to
+# render a mode column at all (issue #12 d): a row carrying no exit_reason has no
+# estimand disposition, and an undispositioned row is excluded rather than assumed
+# clean -- the same fail-closed rule corpus_gates already applies to an unstamped
+# `tokens_in`. Deliberately NOT `invocation_mode`: these tests are about the mode
+# column, and the row stays unstamped on that axis so the "unstamped" case below
+# still has a subject.
+T2_ROW = {"effort": "high", "pass": True, "tokens_out": 1000, "exit_reason": "ok"}
 
 
 def test_table2_mode_column_follows_the_field_never_turns():

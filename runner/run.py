@@ -19,6 +19,7 @@ MOCK mode (no tokens spent):
 import argparse
 import contextlib
 import fnmatch
+import ipaddress
 import json
 import os
 import random
@@ -29,11 +30,14 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 from datetime import datetime, timezone
 
 import broker
 import registry
+import run_status
 import sandbox_seal
+import serving_registry
 import usage_ledger
 
 # Import direction is one-way and now acyclic (ticket 30): run -> usage_ledger ->
@@ -82,7 +86,6 @@ LOCAL_BASE_URL = os.environ.get("MODEL_EVAL_LOCAL_BASE_URL", "http://localhost:1
 # ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN, so a non-empty placeholder is required to
 # get past the CLI's own auth precondition, not LM Studio's.
 LOCAL_PLACEHOLDER_TOKEN = "sk-local-lmstudio-unused"
-
 
 def load_kimi_key():
     """Return MOONSHOT_API_KEY from the gitignored secrets file, or None.
@@ -336,6 +339,35 @@ def resolve_effort(effort, model, winning):
     return effort
 
 
+def serving_config_from(cfg):
+    """The serving config the runs config DECLARES every run will use.
+
+    The source is the `serving:` block, and it is deliberately a DECLARATION
+    rather than a probe of the live server. Two reasons. Gating has to be
+    deterministic and reviewable -- the thing a result is labelled with belongs
+    in version control next to the matrix that produced it, not in whatever
+    state a GUI happened to be in at dispatch time. And the pre-registration's
+    "if LM Studio is not already in this config, stop and ask Drake" is a
+    PRE-FLIGHT instruction to a human, which is a different mechanism with a
+    different failure mode; it lives in `preflight` below.
+
+    Returned as numbers, straight from the config. Not copied out of the registry
+    row: a request built from the row it is about to be compared against agrees
+    with it by construction, which is a gate that cannot fail.
+
+    An absent block is `{}` here rather than an error, because whether that is
+    an error depends on the run -- check_dispatch refuses it with
+    UninspectedConfig for a model that has a row, and a model with no row was
+    never making a claim about serving in the first place.
+    """
+    serving = cfg.get("serving") or {}
+    if not isinstance(serving, dict):
+        raise ValueError(
+            f"the config's `serving:` block must be a map of field: number, "
+            f"got {type(serving).__name__}")
+    return dict(serving)
+
+
 def build_runs(cfg):
     winning = cfg.get("winning_effort", {}) or {}
     seed = (cfg.get("defaults", {}) or {}).get("seed", 1337)
@@ -379,6 +411,20 @@ def build_runs(cfg):
                             "model": model,
                             "effort": effort,
                             "harness": bool(harness),
+                            # issue #12. WHICH CLI drives the model, per the
+                            # serving registry's (model, driver) key. Read with
+                            # no default and left as None when undeclared: the
+                            # gate decides whether a missing driver is an error,
+                            # and it is an error exactly when the model has a row
+                            # (serving_registry.require_driver says why).
+                            "driver": conf.get("driver", sweep.get("driver")),
+                            # The RUNG of the L1-L5 dose ladder, when a config
+                            # declares one. Distinct from `harness` above, which
+                            # is the pre-ladder boolean and is not a level: the
+                            # capability check needs a number to compare against
+                            # a driver's ceiling, and False is not 0.
+                            "harness_level": conf.get("harness_level",
+                                                      sweep.get("harness_level")),
                             "task": task,
                             "rep": rep,
                             "mode": mode,
@@ -766,6 +812,271 @@ def broker_enabled():
     return os.environ.get("GAUNTLET_NO_BROKER") != "1"
 
 
+# --------------------------------------------------------------------------- #
+# The model's environment (issue #15, finding F1)
+# --------------------------------------------------------------------------- #
+# Built by ALLOWLIST, never by copying os.environ and popping what looked
+# dangerous. This is the shape product/gauntlet_playground/executor.py:82
+# already uses, and it is here for the reason stated there: a subtractive env is
+# a claim about EVERYTHING THAT EXISTS, an additive one is a claim about ten
+# names, and only the second can be asserted positively -- which is what
+# runner/tests/test_child_env_allowlist.py does.
+#
+# Until 2026-08-25 this was `dict(os.environ)` minus ANTHROPIC_API_KEY and
+# OPENAI_API_KEY. Everything else rode in, and the list of what "everything
+# else" contained on this machine is not hypothetical:
+#
+#   ANTHROPIC_BASE_URL      re-points any arm at another endpoint, so a row
+#                           labelled claude-sonnet-5 could have been answered by
+#                           LM Studio
+#   ANTHROPIC_AUTH_TOKEN    the second name the binary reads a credential from;
+#                           popping only ANTHROPIC_API_KEY left it behind
+#   ANTHROPIC_MODEL         overrides which model actually answers, under the
+#   ANTHROPIC_SMALL_FAST_MODEL   row's own label
+#   CLAUDE_CODE_MAX_OUTPUT_TOKENS, MAX_THINKING_TOKENS
+#                           change the SERVING CONFIG the row is reported under.
+#                           serving_registry's gate cannot see this: the gate
+#                           compares the DECLARED config against the row, and
+#                           these change the actual one after it has passed.
+#   XDG_CONFIG_HOME, XDG_DATA_HOME
+#                           re-point config/state discovery even after blocker
+#                           2 scoped HOME and CLAUDE_CONFIG_DIR
+#   CLAUDECODE, CLAUDE_EFFORT, CLAUDE_CODE_*
+#                           live whenever a sweep is launched from inside a
+#                           Claude Code session, which is how every sweep on
+#                           this machine has been launched
+#
+# CLAUDE_EFFORT is the one that ruins an experiment rather than merely
+# threatening it. `CLAUDE_EFFORT=high` in the parent is `CLAUDE_EFFORT=high` in
+# every arm, so an effort ladder measures one effort five times while its rows
+# carry five different `effort` labels -- and the dose ladder stage 2 exists to
+# fit would be fitted over a constant.
+#
+# Nothing on this list can carry a credential, an endpoint, a model choice or a
+# harness. Adding a name is therefore a decision about that class, not a
+# convenience: if a binary turns out to need something else, the missing name
+# shows up as a clean startup failure, which is a better outcome than a row
+# that ran under conditions nobody declared.
+CHILD_ENV_ALLOWLIST = ("PATH", "HOME", "SHELL", "USER", "LOGNAME",
+                       "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR")
+
+
+def is_loopback_endpoint(url):
+    """True when `url`'s host is this machine.
+
+    Fail-closed: a URL this cannot parse is not one it may vouch for. Matched on
+    HOST only, never the port -- which port LM Studio listens on is a local
+    convention, and which MACHINE answers is the thing a registry row can be
+    wrong about.
+    """
+    try:
+        host = urllib.parse.urlsplit(url).hostname
+    except ValueError:
+        return False
+    if not host:
+        return False
+    # `localhost` is the one NAME allowed through, because the platform pins it.
+    # Everything else must be a literal address that ipaddress agrees is
+    # loopback -- which covers all of 127/8 and ::1 without enumerating them.
+    if host == "localhost":
+        return True
+    # ipaddress is STRICT and it stays strict: the abbreviated forms (`127.1`,
+    # `0177.0.0.1`, `2130706433`) are refused even though a resolver would accept
+    # them as loopback. That direction is deliberate. A false REFUSAL of an
+    # unusual spelling costs an operator one edit; a false ACCEPT is the bug this
+    # check exists to stop, and inet_aton's lax parsing is a wider accept surface
+    # bought for no safety.
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # Not a literal address at all, so it is a DNS name whose resolution is
+        # not knowable here. Refused -- and this is the whole finding: the
+        # original test was `host.startswith("127.")`, a STRING match on
+        # something that is not a string quantity, so `127.0.0.1.evil.com` -- an
+        # ordinary DNS name its owner points wherever they like -- walked
+        # straight through a check named after the thing it was meant to stop.
+        return False
+
+
+def check_local_endpoint(model, endpoint):
+    """Refuse a local-family run served from off this machine (finding 2, issue #7).
+
+    The serving gate cannot catch this. It compares the DECLARED serving config
+    against the row, and the declared config still matches -- the endpoint was
+    never one of the pinned fields.
+
+    But the row's numbers are measurements OF ONE MACHINE: parallel=1,
+    context_length=131072 and the 57-71 tok/s prefill band were probed on the Mac
+    Studio's LM Studio over loopback. Pointed at another host, every one of them
+    becomes a claim about a box nobody probed, while the row goes on asserting
+    them and the results are labelled with it.
+
+    The override itself is NOT refused -- changing the port is how this family is
+    meant to be used, and the pre-registration makes the serving stack a human's
+    to set. What is refused is leaving the machine the row describes.
+
+    THE REASON DEPENDS ON WHETHER A ROW EXISTS, and that is not decoration. Only
+    glm-4.7 has a serving row. Told the same sentence, qwen3-coder-next-local --
+    local family, no row -- was refused with "Its registry row pins parallel,
+    context_length and a measured 57-71 tok/s prefill band", quoting another
+    model's measurement at a model nobody has probed. Asserting a measurement
+    that was never taken is the exact failure this branch exists to prevent, and
+    a refusal that commits it while preventing it teaches the reader to distrust
+    the message.
+
+    Both are still refused. The row argument is the stronger one and applies only
+    to gated models, but the weaker one applies to every local run: "local" names
+    a family whose defining property is that the server is on this box, and an
+    off-box endpoint ships the task tree and the model's prompts to a host the
+    operator did not name in the config. Issue #7 is about the variable accepting
+    a non-loopback URL at all, not about one model's row.
+    """
+    if model is None or model_family(model) != "local":
+        return
+    if is_loopback_endpoint(endpoint):
+        return
+
+    head = (f"run of {model!r} would be served from {endpoint!r}, which is not "
+            f"this machine (set via MODEL_EVAL_LOCAL_BASE_URL). ")
+    gated = (serving_registry.serving_model_name(resolve_model(model)[0])
+             in serving_registry.models_with_rows(serving_registry.load_rows()))
+    if gated:
+        why = ("Its registry row pins parallel, context_length and a measured "
+               "57-71 tok/s prefill band, all probed on the LOCAL LM Studio over "
+               "loopback. None of them were measured on another host, and the "
+               "results would be reported under them anyway.")
+    else:
+        # No row, so there is no measurement to be mislabelled -- say that, and
+        # give the reason that does apply, rather than borrowing glm-4.7's.
+        why = ("This model has no serving registry row, so nothing here records "
+               "what it was served under and no measurement can be checked "
+               "against the host answering. A local-family run is defined by "
+               "serving from this box; an off-box endpoint sends the task tree "
+               "and the model's prompts somewhere the config never names.")
+    raise ValueError(
+        head + why + " Point it back at loopback, or record a row for the "
+        "machine you actually intend to serve from.")
+
+
+def invocation_provenance(model):
+    """What actually served this run: endpoint, key SOURCE, and binary.
+
+    Verifier findings 2 and 4. Neither is a hole in the F1 allowlist -- both are
+    facts the runner CHOOSES and then failed to write down.
+
+    MODEL_EVAL_LOCAL_BASE_URL is read by this module and set on the child
+    deliberately, so no allowlist stops it and none should: the local family
+    exists because the endpoint is not fixed, and the pre-registration makes the
+    serving stack a human's to set. What was wrong is that it was INVISIBLE. A
+    row said `glm-4.7-local` and carried nothing about which server answered, so
+    two rows served by two endpoints were indistinguishable in the corpus
+    forever after.
+
+    Same one level down for the binary: build_cli_cmd emits the bare name
+    `claude`, and which file that names is decided by the parent shell's PATH.
+    Two rows produced by two Claude Code versions, or by a shim earlier on PATH,
+    looked identical.
+
+    `key_source` is a PATH or a word, NEVER a value. A provenance field that
+    fixed a visibility problem by writing a live credential into an append-only
+    corpus would be a far worse bug than the one it closed.
+    """
+    family = model_family(model) if model is not None else None
+    binary = "codex" if family == "codex" else "claude"
+
+    if family == "local":
+        endpoint = LOCAL_BASE_URL
+        # Named from where the string CAME FROM, not by comparing it to the
+        # default: a deliberate override that happens to equal the default is a
+        # different fact from no override at all.
+        source = ("MODEL_EVAL_LOCAL_BASE_URL"
+                  if os.environ.get("MODEL_EVAL_LOCAL_BASE_URL") else "default")
+        key_source = "placeholder"
+    elif family == "kimi":
+        endpoint, source = MOONSHOT_ANTHROPIC_URL, "moonshot"
+        key_source = KIMI_KEY_FILE
+    else:
+        # The runner sets no base URL for claude/codex, and after F1 no ambient
+        # one can reach them either. None is the honest value; a synthesised URL
+        # would assert a fact this code does not have.
+        endpoint, source, key_source = None, "vendor_default", "subscription"
+
+    return {
+        "serving_endpoint": endpoint,
+        "endpoint_source": source,
+        "key_source": key_source,
+        "cli_binary": binary,
+        # None, never the bare name: recording `claude` as a path would look
+        # resolved and be a guess.
+        "cli_binary_path": shutil.which(binary),
+    }
+
+
+# The GRADER's environment (issue #14 F1, downstream half). Separate list from
+# CHILD_ENV_ALLOWLIST because the two processes are different: the model needs a
+# shell it can work in, the grader needs only enough to run bash, python and a
+# venv. Kept separate rather than shared so that widening one cannot silently
+# widen the other -- the grader's list is the one where a mistake changes a
+# recorded verdict.
+#
+# Every shipped task's verify.sh was read before this list was written. The only
+# environment names any of them reference are PYTHON_BIN (read with a
+# `${PYTHON_BIN:-python3}` default), VENV_DIR / STAGE / SCRIPT_DIR /
+# ACCEPT_STATUS / BASH_SOURCE (all assigned in-script before use), and
+# GAUNTLET_TASK_DIR (which graded_run sets itself). So nothing a task reads
+# arrives from the parent except by graded_run's own assignment.
+#
+# PYTHON_BIN is deliberately absent: inherited, it swaps the interpreter the
+# whole acceptance suite runs under, and the in-script default resolves through
+# PATH, which is honest.
+GRADER_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR",
+                        "TZ")
+
+
+# A task that genuinely needs one more name declares it, in its own directory,
+# in version control. One NAME per line -- never a value, so the declaration says
+# "this grade depends on the operator's FOO" without becoming a second place to
+# configure FOO. The point is that the dependency is reviewable: a task asking
+# for GIT_CONFIG_GLOBAL is a question somebody gets to ask in a diff, whereas
+# ambient inheritance asked nobody.
+GRADER_ENV_MANIFEST = "env_allowlist"
+
+
+def task_env_additions(task_dir):
+    """Extra environment names this task's grade declares it needs."""
+    path = os.path.join(task_dir, GRADER_ENV_MANIFEST)
+    if not os.path.isfile(path):
+        return ()
+    names = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                names.append(line)
+    return tuple(names)
+
+
+def grader_env(source=None, task_dir=None):
+    """The environment `bash verify.sh` is graded in: the allowlist, and nothing.
+
+    `task_dir` adds the names that task declares in its own `env_allowlist`.
+    """
+    src = os.environ if source is None else source
+    allowed = GRADER_ENV_ALLOWLIST + (task_env_additions(task_dir) if task_dir else ())
+    return {name: src[name] for name in allowed if name in src}
+
+
+def child_env(source=None):
+    """The base environment for the model under test: the allowlist, and nothing.
+
+    Copies the names that are PRESENT and does not invent the ones that are
+    not -- handing a child a locale the parent never had is its own small lie
+    about the conditions the row was produced under.
+    """
+    src = os.environ if source is None else source
+    return {name: src[name] for name in CHILD_ENV_ALLOWLIST if name in src}
+
+
 def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=None):
     """Run headlessly, killing the process group on timeout. Returns (out, reason, wall).
 
@@ -800,9 +1111,7 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=Non
     `broker_failed` (the counter faulted, so the run is uncounted and unusable
     under the pre-registration).
     """
-    env = dict(os.environ)
-    env.pop("ANTHROPIC_API_KEY", None)   # subscription auth only
-    env.pop("OPENAI_API_KEY", None)
+    env = child_env()
     if model is not None and model_family(model) == "kimi":
         key = load_kimi_key()
         if not key:
@@ -1190,7 +1499,20 @@ def graded_run(scratch, task_dir):
     broker.parse_counts).
     """
     with grading_tree(scratch, task_dir) as tree:
-        env = dict(os.environ)
+        # Built by allowlist, same as the model's environment and for a stronger
+        # reason (issue #14 F1, one hop downstream). This function produces the
+        # VERDICT every row is scored on, so a name inherited here does not bias
+        # what the model did -- it changes what the grade says the model did.
+        # PYTHONPATH shadows the package under test, GIT_CONFIG_GLOBAL changes
+        # what `git apply` does, NODE_OPTIONS preloads a module into every node
+        # the suite spawns, PIP_INDEX_URL changes what requirements.txt fetches.
+        # None of those are the model's doing and all of them land in `pass`.
+        #
+        # GAUNTLET_BROKER_SOCK no longer needs its explicit pop -- the allowlist
+        # excludes it by construction -- but the pop stays because the rule it
+        # enforces (this grade is never brokered) is worth stating where a reader
+        # of this function will see it.
+        env = grader_env(task_dir=task_dir)
         env["GAUNTLET_TASK_DIR"] = os.path.abspath(task_dir)
         env.pop("GAUNTLET_BROKER_SOCK", None)
         r = subprocess.run(["bash", "verify.sh"], cwd=tree, env=env,
@@ -1328,11 +1650,23 @@ def resolve_timeout_s(task, defaults):
     Fail-closed for the same reason check_effort() is (ticket 22 defect 2). The
     old expression keyed on the literal "t3" and sent everything else to the
     t1/t2 branch, so t4 and t5 tasks silently drew a cap sized for a 20-minute
-    task. Cap-terminated runs score as FAILURES under the pre-registration's
-    estimand: a mis-sized cap does not show up as a timeout in the analysis, it
-    shows up as task difficulty. Adding a tier must therefore cost a config edit
-    it cannot forget to make, not inherit the short cap by falling off the end
-    of a boolean.
+    task. Adding a tier must therefore cost a config edit it cannot forget to
+    make, not inherit the short cap by falling off the end of a boolean.
+
+    A mis-sized cap is still a real cost, but not the cost this docstring used to
+    claim (issue #12 d). It read: "Cap-terminated runs score as FAILURES under
+    the pre-registration's estimand: a mis-sized cap does not show up as a
+    timeout in the analysis, it shows up as task difficulty." That is the
+    discarded reading. The pre-registered bundle says the opposite -- "Timeouts
+    and infra errors are distinct statuses, excluded from the denominator and
+    reported separately, never counted as model failures" -- and findings.md
+    rule 7 and issue #8 agree. A wall-clock kill now carries exit_reason
+    "timeout", which run_status classes out of the pass-rate denominator.
+
+    So the cost of a mis-sized cap is LOST RUNS, not fake failures: the cell's
+    denominator shrinks and the excluded count says so out loud. That is a
+    better failure -- visible, and it does not put the scheduler's behaviour in
+    the accuracy column.
     """
     defaults = defaults or {}
     tried = []
@@ -1523,6 +1857,21 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "run_id": run["run_id"], "ts": now_iso(), "sweep": run["sweep"],
         "model": run["model"], "model_id": resolve_model(run["model"])[0],
         "effort": run["effort"], "harness": run["harness"],
+        # WHICH CLI DROVE THE MODEL, and which rung of the dose ladder this cell
+        # is. build_runs carried both and the gate required the driver, but this
+        # row dict wrote neither -- only record_structurally_impossible did, so
+        # every actually-EXECUTED row carried no driver at all.
+        #
+        # findings.md reports pi as a separately-reported vehicle contrast: pi
+        # has no hooks and no subagents, so the driver is part of the TREATMENT.
+        # Without this field a corpus of 3/3 claude-code and 0/3 pi renders as
+        # one model row at 50%, and the stage-1 config's own "group by driver"
+        # instruction names a column that does not exist.
+        #
+        # harness_level is None, never 0, when no rung is declared: `harness`
+        # above is the pre-ladder boolean and False is not level 0.
+        "driver": run.get("driver"),
+        "harness_level": run.get("harness_level"),
         "task": run["task"], "rep": run["rep"], "pass": passed,
         "tokens_in": tokens_in, "tokens_out": tokens_out, "wall_s": wall_s,
         # ticket 31: which parse formula produced tokens_in, recorded by the
@@ -1546,6 +1895,17 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "brokered": brokered, "k_cap": k_cap,
         "acceptance_requests": acceptance_requests,
         "cap_exhausted": exit_reason == "cap_exhausted",
+        # issue #12 (d): the estimand disposition of this row, stamped by the
+        # code that ran it rather than re-derived by each reader from a reason
+        # string it may not recognise. Derived through run_status's one table,
+        # never restated as a literal here.
+        "status_class": run_status.status_class(exit_reason),
+        # Verifier findings 2 and 4: WHAT SERVED THIS ROW. The endpoint, where
+        # that endpoint came from, which key source was consulted (a path or a
+        # word, never a value) and the resolved binary. Without these a row
+        # names a model and says nothing about the server or the build that
+        # answered for it.
+        **invocation_provenance(run["model"]),
         # ticket 34: the grader's own verdict, on every row, so `pass` being a
         # gated field costs no information. Not pi -- see the gate above.
         "pass_raw": pass_raw,
@@ -1560,6 +1920,79 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
                                         model_id=row["model_id"])
     usage_ledger.append_usage_row(USAGE_PATH, urow)
 
+    return row
+
+
+def recorded_impossible_ids(results_path):
+    """run_ids already written as structurally-impossible.
+
+    Ported from PR #16. The runner is resume-friendly by design -- main() is
+    re-invoked to pick up pending work and re-walks the whole matrix each time --
+    and the impossible cells are still impossible on every pass, so without this
+    each invocation appended the same run_id again.
+
+    existing_ids() does not cover it: that set is built from rows whose
+    exit_reason is "ok" or "cap_exhausted", and a structurally_impossible row is
+    deliberately neither, since it must never look like a completed run.
+
+    Left unguarded, one re-invocation per day adds one duplicate status row per
+    day, so `structurally_impossible=N` in any report counts INVOCATIONS rather
+    than cells -- a number that grows while nothing runs.
+
+    A corrupt line is skipped rather than ending the scan: a half-written row
+    from a killed run must not make the guard forget every id after it, which
+    would silently restore the duplication.
+    """
+    ids = set()
+    if not os.path.exists(results_path):
+        return ids
+    with open(results_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("exit_reason") == "structurally_impossible":
+                ids.add(row.get("run_id"))
+    return ids
+
+
+def record_structurally_impossible(run, reason, results_path):
+    """Write the row for a cell the driver cannot express (issue #12 c).
+
+    A cell that cannot exist must leave a trace. Dropping it silently turns
+    "this driver has no hooks, so this rung does not exist for it" into "nobody
+    ran it", and those are different facts -- only the first one is reportable,
+    and only if something wrote it down.
+
+    `pass` is None, never False. False is a measurement: it says the model
+    attempted the task and did not complete it, which puts a cell that never
+    existed into the denominator and drags the vehicle contrast toward the
+    pooled mean. exit_reason is its own status for the same reason -- it is not
+    "ok", so every existing reader gate (existing_ids, corpus_gates.summarizable,
+    ladder_from_results) already excludes it without being taught anything new.
+    """
+    row = {
+        "run_id": run["run_id"], "ts": now_iso(), "sweep": run["sweep"],
+        "model": run["model"], "model_id": resolve_model(run["model"])[0],
+        "effort": run["effort"], "harness": run["harness"],
+        "harness_level": run.get("harness_level"), "driver": run.get("driver"),
+        "task": run["task"], "rep": run["rep"],
+        "pass": None, "pass_raw": None, "pass_at_cap": None,
+        "exit_reason": "structurally_impossible",
+        "status_class": run_status.status_class("structurally_impossible"),
+        **invocation_provenance(run["model"]),
+        "structurally_impossible_reason": reason,
+        "tokens_in": None, "tokens_out": None, "turns": None, "wall_s": None,
+        "loc_changed": None, "sealed": None, "write_contained": None,
+        "home_isolated": None, "invocation_mode": None,
+        "brokered": None, "k_cap": None, "acceptance_requests": None,
+        "cap_exhausted": False, "tampered": False, "tamper_files": [],
+    }
+    append_row(results_path, row)
     return row
 
 
@@ -1599,14 +2032,59 @@ def main():
     # an undeclared effort tier is a config bug, and finding it 40 runs into a
     # sweep means those 40 runs were spent on a matrix that was never going to
     # finish. Fail closed, up front, at zero cost.
+    #
+    # issue #12: the serving gate runs HERE, in this same loop, because this is
+    # the last point at which a refusal costs nothing. serving_registry answers
+    # "is the config this run declares the one its registry row was produced
+    # under, and can this driver express this cell at all".
+    #
+    # Gated = the model has a row. The registry holds glm-4.7 today; fable, sol
+    # and everything predating it have no row and are not gated, because
+    # inventing rows for them would manufacture a serving config nobody measured.
+    # Both counts are printed below: the defect this closes was a gate with zero
+    # invokers, and the only durable defence against its return is that the
+    # runner says out loud how many runs it actually inspected.
+    rows = serving_registry.load_rows()
+    gated_models = serving_registry.models_with_rows(rows)
+    requested_serving = serving_config_from(cfg)
+
     bad = []
+    impossible = []
+    gated = ungated = 0
     for r in runs:
         try:
-            resolve_model(r["model"])
+            model_id = resolve_model(r["model"])[0]
             check_effort(r["model"], r["effort"])
             # Same posture for the wall-clock cap: an undeclared tier is a config
             # bug, and the run it would spoil is the one that already cost money.
             resolve_timeout_s(r["task"], cfg.get("defaults", {}) or {})
+            # Finding 2 / issue #7: the row's numbers were measured on THIS
+            # machine, so a run served from another host is reported under
+            # measurements nobody took there. The serving gate cannot see this --
+            # the declared config still matches the row, because the endpoint is
+            # not a pinned field.
+            check_local_endpoint(r["model"], LOCAL_BASE_URL)
+
+            row_model = serving_registry.serving_model_name(model_id)
+            if row_model in gated_models:
+                serving_registry.check_dispatch(
+                    rows, row_model,
+                    serving_registry.require_driver(r.get("driver"), row_model),
+                    requested_serving,
+                    harness_level=r.get("harness_level"))
+                gated += 1
+            else:
+                ungated += 1
+        except serving_registry.StructurallyImpossible as e:
+            # CAUGHT BEFORE ValueError, and the order is the whole point.
+            # StructurallyImpossible subclasses RegistryError subclasses
+            # ValueError, so appending it to `bad` would make ONE inexpressible
+            # cell exit 2 for the entire sweep. A matrix containing pi x L5 is
+            # not an invalid config; it is a valid matrix containing cells that
+            # do not exist. They are dropped from the dispatch list and recorded
+            # with their own status -- never scored 0, which would assert that
+            # the model attempted the task and failed it.
+            impossible.append((r, str(e)))
         except ValueError as e:
             bad.append(f"  {r['run_id']}: {e}")
     if bad:
@@ -1614,6 +2092,18 @@ def main():
         for b in dict.fromkeys(bad):
             print(b)
         sys.exit(2)
+
+    print(f"serving gate: gated={gated} ungated={ungated} "
+          f"structurally_impossible={len(impossible)} "
+          f"declared={sorted(requested_serving) or 'none'}")
+    if impossible:
+        dropped = {r["run_id"] for r, _ in impossible}
+        already = recorded_impossible_ids(args.results)
+        for r, why in impossible:
+            print(f"  [structurally-impossible] {r['run_id']}: {why}")
+            if r["run_id"] not in already:
+                record_structurally_impossible(r, why, args.results)
+        runs = [r for r in runs if r["run_id"] not in dropped]
 
     # Same posture, same reason: a K outside the pre-registered range makes every
     # row of the sweep unreportable, and finding that at analysis time is finding

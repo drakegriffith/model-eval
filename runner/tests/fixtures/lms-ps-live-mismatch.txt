@@ -1,0 +1,4 @@
+
+IDENTIFIER    MODEL      STATUS    SIZE         CONTEXT    PARALLEL    DEVICE    TTL
+glm-4.7       glm-4.7    IDLE      158.74 GB    65536      4           Local        
+

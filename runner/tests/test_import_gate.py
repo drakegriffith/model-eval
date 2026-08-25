@@ -54,8 +54,9 @@ import import_gate  # noqa: E402
 # pass rate becoming one averaged number, and a module that could drift out of
 # the core is a guard the product could stop importing without a red run.
 EXPECTED_CORE_MODULES = ("corpus_gates.py", "effort_verdict.py",
-                         "provenance.py", "registry.py", "spend_cap.py",
-                         "stats.py", "token_units.py", "usage_ledger.py")
+                         "provenance.py", "registry.py", "run_status.py",
+                         "spend_cap.py", "stats.py", "token_units.py",
+                         "usage_ledger.py")
 
 
 def write_core_tree(root, modules, extra=None):

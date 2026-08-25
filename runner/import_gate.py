@@ -90,8 +90,8 @@ PRODUCT_DIR = os.path.join(REPO_ROOT, "product")
 # whichever of the two remembered to ask. Below them, the arithmetic itself
 # refuses.
 CORE_MODULES = ("corpus_gates.py", "effort_verdict.py", "provenance.py",
-                "registry.py", "spend_cap.py", "stats.py", "token_units.py",
-                "usage_ledger.py")
+                "registry.py", "run_status.py", "spend_cap.py", "stats.py",
+                "token_units.py", "usage_ledger.py")
 
 # Statuses. UNENFORCED is deliberately not a kind of PASS: it is the answer for a
 # direction whose subject set is empty, which is a result requiring a decision
