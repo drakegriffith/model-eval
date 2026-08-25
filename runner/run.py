@@ -859,6 +859,60 @@ CHILD_ENV_ALLOWLIST = ("PATH", "HOME", "SHELL", "USER", "LOGNAME",
                        "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR")
 
 
+# The GRADER's environment (issue #14 F1, downstream half). Separate list from
+# CHILD_ENV_ALLOWLIST because the two processes are different: the model needs a
+# shell it can work in, the grader needs only enough to run bash, python and a
+# venv. Kept separate rather than shared so that widening one cannot silently
+# widen the other -- the grader's list is the one where a mistake changes a
+# recorded verdict.
+#
+# Every shipped task's verify.sh was read before this list was written. The only
+# environment names any of them reference are PYTHON_BIN (read with a
+# `${PYTHON_BIN:-python3}` default), VENV_DIR / STAGE / SCRIPT_DIR /
+# ACCEPT_STATUS / BASH_SOURCE (all assigned in-script before use), and
+# GAUNTLET_TASK_DIR (which graded_run sets itself). So nothing a task reads
+# arrives from the parent except by graded_run's own assignment.
+#
+# PYTHON_BIN is deliberately absent: inherited, it swaps the interpreter the
+# whole acceptance suite runs under, and the in-script default resolves through
+# PATH, which is honest.
+GRADER_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR",
+                        "TZ")
+
+
+# A task that genuinely needs one more name declares it, in its own directory,
+# in version control. One NAME per line -- never a value, so the declaration says
+# "this grade depends on the operator's FOO" without becoming a second place to
+# configure FOO. The point is that the dependency is reviewable: a task asking
+# for GIT_CONFIG_GLOBAL is a question somebody gets to ask in a diff, whereas
+# ambient inheritance asked nobody.
+GRADER_ENV_MANIFEST = "env_allowlist"
+
+
+def task_env_additions(task_dir):
+    """Extra environment names this task's grade declares it needs."""
+    path = os.path.join(task_dir, GRADER_ENV_MANIFEST)
+    if not os.path.isfile(path):
+        return ()
+    names = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                names.append(line)
+    return tuple(names)
+
+
+def grader_env(source=None, task_dir=None):
+    """The environment `bash verify.sh` is graded in: the allowlist, and nothing.
+
+    `task_dir` adds the names that task declares in its own `env_allowlist`.
+    """
+    src = os.environ if source is None else source
+    allowed = GRADER_ENV_ALLOWLIST + (task_env_additions(task_dir) if task_dir else ())
+    return {name: src[name] for name in allowed if name in src}
+
+
 def child_env(source=None):
     """The base environment for the model under test: the allowlist, and nothing.
 
@@ -1292,7 +1346,20 @@ def graded_run(scratch, task_dir):
     broker.parse_counts).
     """
     with grading_tree(scratch, task_dir) as tree:
-        env = dict(os.environ)
+        # Built by allowlist, same as the model's environment and for a stronger
+        # reason (issue #14 F1, one hop downstream). This function produces the
+        # VERDICT every row is scored on, so a name inherited here does not bias
+        # what the model did -- it changes what the grade says the model did.
+        # PYTHONPATH shadows the package under test, GIT_CONFIG_GLOBAL changes
+        # what `git apply` does, NODE_OPTIONS preloads a module into every node
+        # the suite spawns, PIP_INDEX_URL changes what requirements.txt fetches.
+        # None of those are the model's doing and all of them land in `pass`.
+        #
+        # GAUNTLET_BROKER_SOCK no longer needs its explicit pop -- the allowlist
+        # excludes it by construction -- but the pop stays because the rule it
+        # enforces (this grade is never brokered) is worth stating where a reader
+        # of this function will see it.
+        env = grader_env(task_dir=task_dir)
         env["GAUNTLET_TASK_DIR"] = os.path.abspath(task_dir)
         env.pop("GAUNTLET_BROKER_SOCK", None)
         r = subprocess.run(["bash", "verify.sh"], cwd=tree, env=env,

@@ -83,6 +83,12 @@ def repo(tmp_path, monkeypatch):
     (task_dir / "base" / "requirements.txt").write_text("pytest\n", encoding="utf-8")
     (task_dir / "PROMPT.md").write_text("make answer() return 42", encoding="utf-8")
     (task_dir / "verify.sh").write_text(VERIFY_SH, encoding="utf-8")
+    # This fixture's verify.sh reads GAUNTLET_TEST_PYTHON so the grade can
+    # run under an interpreter that has pytest. Since the grader's env is
+    # an allowlist (issue #14 F1, downstream half), that need is DECLARED
+    # here rather than inherited from whatever the shell exported.
+    (task_dir / "env_allowlist").write_text(
+        "GAUNTLET_TEST_PYTHON\n", encoding="utf-8")
 
     scratch = root / ".scratch" / "tamper--probe--r1"
     scratch.parent.mkdir(parents=True)
