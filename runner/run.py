@@ -682,6 +682,52 @@ def seal_enabled():
     return os.environ.get("GAUNTLET_NO_SANDBOX") != "1"
 
 
+# --------------------------------------------------------------------------- #
+# Auth availability -- an instrument that cannot log in is not a model that
+# cannot code.
+#
+# `claude -p` exits 1 when it has no usable credential, and every nonzero exit
+# used to be "cli_error", which the pre-registration scores as a failed task.
+# That was survivable while the CLI read the operator's own home; it stopped
+# being survivable the moment run_cli started handing the binary a scoped
+# CLAUDE_CONFIG_DIR, because on macOS the subscription credential lives in the
+# login Keychain under a service name keyed per config dir
+# ("Claude Code-credentials-<hash>"), so a scoped dir maps to an entry that does
+# not exist. An unprovisioned host would then write a whole sweep of pass=false
+# rows for a CLI that never sent one request.
+#
+# The phrase alone is not the test. A model writing about authentication can
+# print those words in a run that worked, so the detector requires the CLI's own
+# `result` envelope with is_error true -- a field the CLI sets, not the model.
+# --------------------------------------------------------------------------- #
+AUTH_FAILURE_MARKERS = ("not logged in", "please run /login",
+                        "invalid api key", "oauth token has expired")
+
+
+def cli_auth_failed(out):
+    """True when the CLI's own result envelope says it had no usable credential.
+
+    Reads the LAST `type == "result"` object, the same event
+    usage_ledger.parse_usage_detailed reads, so both answer from the same bytes.
+    Absent or unparseable output is False: a CLI killed before it printed
+    anything is a timeout or a crash, and naming that an auth failure would be a
+    guess wearing a label.
+    """
+    obj = None
+    for line in reversed([l for l in (out or "").splitlines() if l.strip()]):
+        try:
+            cand = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(cand, dict) and cand.get("type") == "result":
+            obj = cand
+            break
+    if not isinstance(obj, dict) or not obj.get("is_error"):
+        return False
+    text = str(obj.get("result") or "").lower()
+    return any(m in text for m in AUTH_FAILURE_MARKERS)
+
+
 def home_isolation_enabled():
     """False only when a run explicitly opts out via GAUNTLET_INHERIT_HOME=1.
 
@@ -862,6 +908,14 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=Non
         try:
             out, _err = proc.communicate(timeout=timeout_s)
             reason = "ok" if proc.returncode == 0 else "cli_error"
+            # Exactly one failure mode moves out of cli_error, and only from a
+            # nonzero exit: an instrument that never authenticated produced no
+            # measurement of the model at all. It is still not "ok", so the
+            # general gate in execute_run keeps `pass` False and existing_ids
+            # keeps the run pending for a resumed sweep -- what changes is that
+            # the row names the instrument instead of implicating the model.
+            if reason == "cli_error" and cli_auth_failed(out):
+                reason = "auth_unavailable"
         except subprocess.TimeoutExpired:
             kill_group()
             try:
