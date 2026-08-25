@@ -215,6 +215,37 @@ def _scalar(text, lineno):
     return text
 
 
+def _strip_comment(value, lineno):
+    """Remove a trailing comment from a value, or refuse to guess at one.
+
+    The hazard this exists for: `authorization: I approve run #3 and nothing
+    else`. A stripper that cuts at the first " #" leaves a value that still
+    parses, still looks like a complete authorization, and now records something
+    the human did not type. Nothing in the text distinguishes that from a real
+    trailing comment, so an unquoted value containing " #" is an error naming
+    the line, and the message says how to fix it. After a QUOTED value the
+    ambiguity is gone, so a comment there is stripped normally.
+    """
+    if value == "" or value.startswith("#"):
+        return ""  # `key:` on its own, with or without a comment after it
+    if value.startswith('"'):
+        end = value.find('"', 1)
+        if end == -1:
+            raise RegistryError(f"line {lineno}: unterminated quoted string: {value!r}")
+        tail = value[end + 1:].strip()
+        if tail and not tail.startswith("#"):
+            raise RegistryError(
+                f"line {lineno}: unexpected text after the closing quote: {tail!r}")
+        return value[:end + 1]
+    if " #" in value:
+        raise RegistryError(
+            f"line {lineno}: unquoted value contains \" #\", which could be a "
+            f"comment or could be part of the value, and this reader does not "
+            f"guess: {value!r}. Quote the whole value if the '#' belongs to it, "
+            f"or move the comment to its own line.")
+    return value
+
+
 def parse_registry_yaml(text):
     """Parse the registry file. Raise RegistryError, naming the line, on anything
     outside the subset -- never guess."""
@@ -223,14 +254,10 @@ def parse_registry_yaml(text):
         for ch, why in _REFUSED:
             if ch in raw:
                 raise RegistryError(f"line {lineno}: {why} is not allowed: {raw!r}")
-        # Trailing comments are stripped only on lines carrying no quoted
-        # string. A " #" inside the bypassPermissions sentence must not
-        # truncate the record, and a comment-stripper clever enough to know the
-        # difference is a second parser nobody asked for.
-        line = raw.split(" #", 1)[0] if (" #" in raw and '"' not in raw) else raw
-        if line.lstrip().startswith("#"):
-            continue
+        line = raw.rstrip()
         if not line.strip():
+            continue
+        if line.lstrip().startswith("#"):
             continue
         indent = len(line) - len(line.lstrip(" "))
         body = line.strip()
@@ -242,7 +269,8 @@ def parse_registry_yaml(text):
         if not sep:
             raise RegistryError(
                 f"line {lineno}: expected `key: value`, got {raw.strip()!r}")
-        items.append((indent, is_item, key.strip(), value.strip(), lineno))
+        items.append((indent, is_item, key.strip(),
+                      _strip_comment(value.strip(), lineno), lineno))
 
     def build(i, indent):
         """Consume the run of items at `indent`, returning (value, next index)."""
@@ -299,9 +327,15 @@ def _dump_scalar(value):
     if isinstance(value, (int, float)):
         return str(value)
     text = str(value)
-    # Quote anything a reader (or the parser) could mistake for another type.
-    if (text == "" or text != text.strip() or ":" in text or "#" in text
-            or text[0] in "\"'[{|>&*-" or text in ("null", "true", "false")):
+    # Quote anything a reader (or the parser) could mistake for another type,
+    # AND anything containing a space. The space rule is what makes free text --
+    # the authorization sentence, the notes, the timeout basis -- quoted by
+    # construction, so a later hand edit that adds a '#' to a sentence cannot
+    # produce a value the reader has to refuse. Bare tokens (glm-4.7,
+    # claude-code, bypassPermissions, unknown) stay unquoted and readable.
+    if (text == "" or text != text.strip() or " " in text or ":" in text
+            or "#" in text or text[0] in "\"'[{|>&*-"
+            or text in ("null", "true", "false")):
         return '"' + text.replace('"', "'") + '"'
     try:
         float(text)

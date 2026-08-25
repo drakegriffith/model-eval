@@ -83,6 +83,49 @@ def test_a_quoted_string_survives_its_punctuation():
         "a sentence: with, punctuation.")
 
 
+def test_an_unquoted_value_containing_a_hash_is_refused_not_truncated():
+    """The authorization sentence is the worst possible thing to truncate: what
+    survives still parses, still looks like a complete authorization, and now
+    says something the human did not type. The stripper cannot tell a comment
+    from a sentence containing '#', so it refuses instead of guessing."""
+    text = 'models:\n  - authorization: I approve run #3 and nothing else\n'
+    with pytest.raises(sr.RegistryError) as e:
+        sr.parse_registry_yaml(text)
+    msg = str(e.value)
+    assert "line 2" in msg
+    assert "quote" in msg.lower()
+
+
+def test_a_quoted_value_keeps_its_hash():
+    """Quoting is the escape hatch the refusal points at, so it has to work."""
+    text = 'models:\n  - authorization: "I approve run #3 and nothing else"\n'
+    assert sr.parse_registry_yaml(text)["models"][0]["authorization"] == (
+        "I approve run #3 and nothing else")
+
+
+def test_a_comment_after_a_quoted_value_is_still_a_comment():
+    text = 'models:\n  - model: "glm-4.7"  # the row under test\n'
+    assert sr.parse_registry_yaml(text)["models"][0]["model"] == "glm-4.7"
+
+
+def test_a_comment_on_a_key_with_no_value_is_still_a_comment():
+    text = 'models:\n  - serving:  # measured 2026-08-25\n      parallel: 1\n'
+    assert sr.parse_registry_yaml(text)["models"][0]["serving"]["parallel"] == 1
+
+
+def test_the_shipped_authorization_is_quoted_in_the_file():
+    """Belt and braces: the refusal above protects future hand edits, and this
+    protects the record that exists now. An unquoted authorization is one typed
+    '#' away from being silently rewritten."""
+    with open(sr.REGISTRY_PATH, "r", encoding="utf-8") as f:
+        lines = [ln for ln in f if ln.strip().startswith("authorization:")]
+    assert len(lines) == 2, f"expected 2 authorization lines, found {len(lines)}"
+    quoted = [ln for ln in lines
+              if ln.split(":", 1)[1].strip() in ("null",)
+              or ln.split(":", 1)[1].strip().startswith('"')]
+    assert len(quoted) == 2, f"unquoted authorization value in models.yaml: {lines}"
+
+
 @pytest.mark.parametrize("bad,why", [
     ("models:\n\t- model: x\n", "tab indentation"),
     ("models:\n  - model: [a, b]\n", "flow sequence"),
