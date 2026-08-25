@@ -16,7 +16,7 @@
 # 2026-08-25 it is NOT: `lms ps` reports CONTEXT=65536 PARALLEL=4 against the
 # row's 131072 and 1. Per the pre-registration -- "If LM Studio is not already
 # in this config, stop and ask Drake to set it; do not change it yourself" --
-# that is a human action. `python3 runner/run.py preflight` refuses, naming
+# that is a human action. `python3 runner/serving_registry.py preflight` refuses, naming
 # expected versus observed, and is the check to run before dispatching this file.
 #
 # Why PARALLEL=1 rather than 4: under PARALLEL=4 one seat's decode fell to
