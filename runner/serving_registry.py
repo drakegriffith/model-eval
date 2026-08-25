@@ -820,14 +820,38 @@ def cmd_validate(args):
     problems = []
     for row in rows:
         try:
-            registry.resolve_model(row["model"] + "-local")
+            registry.resolve_model(row["model"] + LOCAL_ID_SUFFIX)
         except ValueError as e:
             problems.append(f"{row_key(row)}: {e}")
         if row["deterministic_loops"] and row["noise_probe"] is None:
             problems.append(f"{row_key(row)}: determinism asserted with no probe")
+
+    # Rule 4's on-add half, which nothing enforced (issue #12, cosmetic 2).
+    # record_reasoning_probe exists and is tested, but new_row takes no
+    # reasoning-probe argument, so the rule is only satisfiable in a second,
+    # easily-forgotten call. The consequence is already in the shipped data: the
+    # claude-code row carries the panel's probe and the pi row carries null.
+    # That asymmetry is HONEST -- findings.md never says which driver the probe
+    # ran under, and copying it across would manufacture a measurement -- but
+    # until now nothing marked it as a gap rather than a choice.
+    #
+    # Reported as a GAP, not as a problem, and the distinction is the point. An
+    # unprobed row is not INCONSISTENT: nothing on it contradicts anything. It
+    # is INCOMPLETE. Failing on it would make validate return 1 forever on a
+    # registry that is merely young, which teaches a reader to ignore the exit
+    # code -- and an ignored gate is worse than a printed count.
+    gaps = [row_key(row) for row in rows if row["reasoning_probe"] is None]
+
     print(f"rows inspected: {len(rows)}")
     for p in problems:
         print(f"  {p}")
+    print(f"rows with no reasoning-token probe (rule 4, on-add): {len(gaps)}"
+          + (f" -- {', '.join(str(g) for g in gaps)}" if gaps else ""))
+    if gaps:
+        print("  these are GAPS, not choices: rule 4 asks for the probe when the "
+              "row is added, and record_reasoning_probe is a second call nobody "
+              "is forced to make. Probe them, or the rows are not comparable on "
+              "the one axis the max_tokens floor was derived from.")
     if not rows:
         print("UNENFORCED: the registry is empty, so nothing was checked")
         return 2

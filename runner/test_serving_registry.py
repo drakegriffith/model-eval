@@ -559,3 +559,62 @@ def test_the_pi_row_records_its_structural_ceiling():
     assert row["capabilities"]["subagents"] is False
     assert row["capabilities"]["hooks"] is False
     assert row["max_harness_level"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# Rule 4's on-add half (issue #12, cosmetic 2): an unprobed row is a GAP, and a
+# gap nobody counts is indistinguishable from a decision somebody made.
+# --------------------------------------------------------------------------- #
+def test_validate_counts_the_rows_with_no_reasoning_probe(capsys):
+    class Args:
+        path = sr.REGISTRY_PATH
+
+    rc = sr.cmd_validate(Args())
+    out = capsys.readouterr().out
+
+    assert rc == 0, out
+    # The shipped registry is asymmetric on purpose: the claude-code row carries
+    # the panel's probe, the pi row carries null because findings.md never says
+    # which driver the probe ran under.
+    assert "rows with no reasoning-token probe (rule 4, on-add): 1" in out
+    assert "'pi'" in out
+    assert "GAPS, not choices" in out
+
+
+def test_an_unprobed_row_does_not_fail_validation(tmp_path, capsys):
+    """The distinction the report rests on. An unprobed row is INCOMPLETE, not
+    INCONSISTENT -- nothing on it contradicts anything -- and failing on it
+    would make validate return 1 forever on a registry that is merely young,
+    which teaches a reader to ignore the exit code."""
+    path = tmp_path / "models.yaml"
+    rows = sr.load_rows()
+    for row in rows:
+        row["reasoning_probe"] = None
+    path.write_text(sr.dump_registry_yaml({"models": rows}), encoding="utf-8")
+
+    class Args:
+        pass
+    Args.path = str(path)
+
+    rc = sr.cmd_validate(Args())
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "rule 4, on-add): 2" in out
+
+
+def test_validate_still_fails_on_a_genuine_inconsistency(tmp_path, capsys):
+    """The negative control: turning the gap into a printed count must not have
+    turned the real check into a printed count too."""
+    path = tmp_path / "models.yaml"
+    rows = sr.load_rows()
+    rows[0]["deterministic_loops"] = True
+    rows[0]["noise_probe"] = None
+    path.write_text(sr.dump_registry_yaml({"models": rows}), encoding="utf-8")
+
+    class Args:
+        pass
+    Args.path = str(path)
+
+    assert sr.cmd_validate(Args()) == 1
+    assert "determinism asserted with no probe" in capsys.readouterr().out
