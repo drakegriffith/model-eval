@@ -73,3 +73,31 @@ sweeps:
     tasks: [t1-py-a, t1-py-b, t1-ts-a, t1-ts-b, t2-py-a, t2-py-b, t2-ts-a, t2-ts-b, t3-a, t4-py-a, t4-py-b, t4-ts-a, t5-py-a, t5-py-b, t5-ts-a]
     configs:
       - {model: claude-sonnet-5, effort: high}
+
+  # VEHICLE CONTRAST, mandated by the bundle: "pi arm: same tasks, glm-4.7 x pi,
+  # 1 rep, reported in a separate table labeled as a vehicle contrast. Never
+  # merged with the claude-code numbers: pi has no hooks and no subagents, so the
+  # driver is part of the treatment."
+  #
+  # This arm was missing, which is why the matrix totalled 60 instead of 75. It
+  # is not an optional extra: without it the experiment has no measurement of how
+  # much of GLM's autonomy is the MODEL and how much is the harness the driver
+  # provides, and that is the question stage 3 has to answer before proposing a
+  # swarm seat.
+  #
+  # Gated like the primary arm -- glm-4.7 x pi has its own registry row, with its
+  # own capability manifest (7 tools, no hooks, no subagents, max_harness_level
+  # 2). It carries `driver: pi` rather than inheriting, because a missing driver
+  # key is refused rather than defaulted, precisely so this arm can never be
+  # filed against the claude-code row.
+  #
+  # NOTE for the analyst: these rows share a run_id shape with the primary arm
+  # and differ only by sweep name. Group by `driver` before reporting, never by
+  # model alone.
+  - name: glm-stage1-pi
+    driver: pi
+    harness: false
+    reps: [1]
+    tasks: [t1-py-a, t1-py-b, t1-ts-a, t1-ts-b, t2-py-a, t2-py-b, t2-ts-a, t2-ts-b, t3-a, t4-py-a, t4-py-b, t4-ts-a, t5-py-a, t5-py-b, t5-ts-a]
+    configs:
+      - {model: glm-4.7-local, effort: high}
