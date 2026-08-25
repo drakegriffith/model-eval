@@ -1,0 +1,53 @@
+models:
+  - model: glm-4.7
+    driver: claude-code
+    serving:
+      parallel: 1
+      context_length: 131072
+      max_tokens_floor: 8192
+      temperature: 0
+      seed: 42
+      quant: unknown
+    capabilities:
+      subagents: true
+      hooks: true
+      tools: unknown
+    max_harness_level: 5
+    deterministic_loops: false
+    noise_probe: null
+    reasoning_probe: null
+    permission:
+      mode: bypassPermissions
+      authorization: regarding this tool using Claude mode GLM seats, I want my Claude to have the ability to use models like GLM. If you want to invoke a quick Opus 5 agent in the backend to do that, I allow you to bypass and make it happen on the Mac Studio and this computer.
+      authorized_date: 2026-08-25
+    timeout:
+      prefill_tok_s_min: 57.0
+      prefill_tok_s_max: 71.0
+      basis: turn cap derived from prefill rate x prompt size; wall-clock expiry logs its own status, never a task fail
+    notes: "SEAT-MEASURED 2026-08-25 panel. max_tokens floor 8192: at a 600-token cap 5/6 probes returned empty content because GLM reasoning tokens consume max_tokens. quant: NOT MEASURED by the panel; issue #8 says 'a Q3 local model' in prose, which is not a measurement, so it stays unknown and refuses comparison until probed."
+  - model: glm-4.7
+    driver: pi
+    serving:
+      parallel: 1
+      context_length: 131072
+      max_tokens_floor: 8192
+      temperature: 0
+      seed: 42
+      quant: unknown
+    capabilities:
+      subagents: false
+      hooks: false
+      tools: 7
+    max_harness_level: 2
+    deterministic_loops: false
+    noise_probe: null
+    reasoning_probe: null
+    permission:
+      mode: default
+      authorization: null
+      authorized_date: null
+    timeout:
+      prefill_tok_s_min: 57.0
+      prefill_tok_s_max: 71.0
+      basis: turn cap derived from prefill rate x prompt size; wall-clock expiry logs its own status, never a task fail
+    notes: "SEAT-MEASURED 2026-08-25 panel: 7 tools (grep/find/ls off by default), --skill, --prompt-template, -e extensions, NO hooks, NO subagents. max_harness_level=2 is UNVERIFIED: no-hooks/no-subagents rules out L4-L5 by measurement, but the ceiling sitting at 2 rather than 3 carries no evidence tag in the panel record. Separately-reported vehicle contrast, never merged into the dose table."
