@@ -1482,6 +1482,7 @@ def impossible_row(run, reason):
         "driver": run.get("driver"), "task": run["task"], "rep": run["rep"],
         "pass": None, "pass_raw": None,
         "exit_reason": "structurally_impossible",
+        "status_class": termination_class("structurally_impossible"),
         "reason": reason,
         "tokens_in": 0, "tokens_out": 0, "turns": 0, "wall_s": None,
     }
@@ -1512,6 +1513,102 @@ def recorded_impossible_ids(results_path):
 
 
 # --------------------------------------------------------------------------- #
+# The estimand's termination vocabulary (issue #12 (d))
+# --------------------------------------------------------------------------- #
+# Which terminations put a run in the pass-rate denominator, and which put it in
+# a separately-reported bucket. Two documents disagreed and the runner followed
+# the older one; this is the reconciliation.
+#
+# The pre-registered bundle (~/studio-handoff, PR #9, later-authored and
+# panel-reviewed) is authoritative. prompt-2-run-experiment.md:43-44: "Timeouts
+# and infra errors are distinct statuses, excluded from the denominator and
+# reported separately, never counted as model failures." findings.md auto-assert
+# rule 7: "wall-clock timeouts log a distinct status, never a task fail."
+#
+# THE DISCARDED READING, named so it is not rediscovered as a new idea:
+# resolve_timeout_s used to state that cap-terminated runs score as FAILURES,
+# because "a mis-sized cap does not show up as a timeout in the analysis, it
+# shows up as task difficulty". That is a real hazard and the answer to it is a
+# turn cap derived from the measured prefill rate
+# (serving_registry.derive_turn_cap_s), not a wall-clock verdict.
+#
+# Why it is not cosmetic on this stack: prefill runs 57-71 tok/s, a 61k-token
+# prefill was clocked at 1077 s, and under PARALLEL=4 a neighbour's prefill
+# starved a decode to 0.05 tok/s -- a 380x wall-clock swing on identical work.
+# Under the old reading that swing lands in the accuracy column, so the
+# SCHEDULER grades the model. The high-harness arms carry the largest prompts,
+# so the bias is not random across the dose ladder: it manufactures exactly the
+# "L5 looks worse" result the experiment exists to measure.
+#
+# cap_exhausted stays SCORED and is deliberately not filed with the timeout.
+# Both are called "the cap" in prose and they are different caps: the acceptance
+# cap is a protocol parameter the model spent (pre-registration section 7, "runs
+# terminated by the cap are scored as failures"), while the wall clock is the
+# instrument running out of patience. Re-running the first would be
+# retry-until-pass; re-running the second is just re-running.
+SCORED = "scored"
+EXCLUDED_TIMEOUT = "excluded_timeout"
+EXCLUDED_INFRA = "excluded_infra"
+EXCLUDED_STRUCTURAL = "excluded_structural"
+EXCLUDED_MOCK = "excluded_mock"
+
+# Enumerated in the SCORED direction only. Everything else is excluded BY
+# DEFAULT, never by enlistment: a reason nobody has classified cannot be
+# asserted to be a model failure, and a denylist of known-bad reasons would
+# reintroduce the same silent default one reason further on -- which is the
+# mistake ticket 34 found in the `pass` gate.
+SCORED_EXIT_REASONS = ("ok", "cap_exhausted")
+
+# The exclusions that have a name of their own. A mock run is not an instrument
+# fault and saying so costs one constant; calling it infra would put the
+# runner's own smoke tests in the fault bucket and make that count unreadable.
+TERMINATION_CLASSES = {
+    "timeout": EXCLUDED_TIMEOUT,
+    "structurally_impossible": EXCLUDED_STRUCTURAL,
+    "mock": EXCLUDED_MOCK,
+    "mock_fail": EXCLUDED_MOCK,
+    "mock_patch_failed": EXCLUDED_MOCK,
+}
+
+
+def termination_class(exit_reason):
+    """Which bucket a run's termination puts it in. One rule, one place."""
+    if exit_reason in SCORED_EXIT_REASONS:
+        return SCORED
+    if exit_reason in TERMINATION_CLASSES:
+        return TERMINATION_CLASSES[exit_reason]
+    # A verify_timeout suffix rides on top of whatever ended the run
+    # ("cli_error+verify_timeout"); the grader failing to finish is an
+    # instrument fault either way.
+    return EXCLUDED_INFRA
+
+
+def in_pass_denominator(row):
+    """True when this row may be counted in a pass rate.
+
+    An unstamped row is NOT in the denominator. A row nobody dispositioned is
+    not the same thing as a clean one, and reading a missing exit_reason as
+    "ok" is how a truncated run gets averaged into a published mean.
+    """
+    return termination_class(row.get("exit_reason")) == SCORED
+
+
+def excluded_by_class(rows):
+    """{class: count} for the rows a pass rate must report separately.
+
+    Returned as counts rather than as a filtered list because the obligation is
+    to REPORT them: "excluded and disclosed" is the pre-registration's phrase,
+    and a caller that only wanted them gone would not need this function.
+    """
+    out = {}
+    for row in rows:
+        cls = termination_class(row.get("exit_reason"))
+        if cls != SCORED:
+            out[cls] = out.get(cls, 0) + 1
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # Wall-clock cap
 # --------------------------------------------------------------------------- #
 # Tiers 1 and 2 shared one key and tier 3 had its own, which is the whole cap
@@ -1531,11 +1628,17 @@ def resolve_timeout_s(task, defaults):
     Fail-closed for the same reason check_effort() is (ticket 22 defect 2). The
     old expression keyed on the literal "t3" and sent everything else to the
     t1/t2 branch, so t4 and t5 tasks silently drew a cap sized for a 20-minute
-    task. Cap-terminated runs score as FAILURES under the pre-registration's
-    estimand: a mis-sized cap does not show up as a timeout in the analysis, it
-    shows up as task difficulty. Adding a tier must therefore cost a config edit
-    it cannot forget to make, not inherit the short cap by falling off the end
-    of a boolean.
+    task. Adding a tier must cost a config edit it cannot forget to make, not
+    inherit the short cap by falling off the end of a boolean.
+
+    THE CAP IS A BACKSTOP, NOT THE ESTIMAND (issue #12 (d)). This docstring
+    used to claim the reverse -- that a run the wall clock ended was a model
+    failure, on the argument that a mis-sized cap would otherwise be invisible.
+    The pre-registered bundle says the opposite, is later-authored and
+    panel-reviewed, and wins: such a run carries a distinct status and is
+    EXCLUDED from the pass-rate denominator, reported separately. See
+    TERMINATION_CLASSES for the vocabulary, for the discarded reading stated in
+    full, and for why the swap is not cosmetic on this serving stack.
     """
     defaults = defaults or {}
     tried = []
@@ -1737,6 +1840,12 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "tokens_in_status": usage_ledger.tokens_in_status(
             model_family(run["model"]), usage_ledger.USAGE_PARSER_VERSION),
         "turns": turns, "loc_changed": loc, "exit_reason": exit_reason,
+        # issue #12 (d): which bucket this termination puts the run in. Derived
+        # through the one rule, never restated here -- `pass` stays gated by
+        # ticket 34 (an incomplete run may not claim success) and THIS is the
+        # field that says whether the run is in the pass-rate denominator at
+        # all. A timeout is not a model failure; it is not a model measurement.
+        "status_class": termination_class(exit_reason),
         "sealed": sealed, "write_contained": write_contained,
         # blocker 2: whether the "bare" arm was actually bare.
         "home_isolated": home_isolated,
