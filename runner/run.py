@@ -122,6 +122,12 @@ from registry import (  # noqa: E402
     check_effort, is_metered, model_family, resolve_model,
 )
 
+# The run_id format, owned by one module and shared with its readers (judge.py)
+# rather than restated as an f-string here and a comment there -- blocker 3.
+# Imported under a name so the module object is what call sites use; `run_id` is
+# already the name of the local variable holding one all over this file.
+import run_id as run_id_mod  # noqa: E402
+
 
 DONE_GATE_SENTENCE = (
     "\n\n---\nYour work is judged solely by running `bash verify.sh` from the "
@@ -359,7 +365,14 @@ def build_runs(cfg):
                         model = conf["model"]
                         effort = resolve_effort(conf.get("effort", "high"), model, winning)
                         harness_tag = "harness" if harness else "bare"
-                        run_id = f"{name}--{model}--{effort}--{harness_tag}--{task}--r{rep}"
+                        # Built through run_id.build_run_id, never an f-string:
+                        # it is the only place that knows where a new segment
+                        # (agent, harness_level) goes, and it refuses a field
+                        # holding the delimiter. See run_id.py for why an
+                        # appended segment is silent damage (blocker 3).
+                        run_id = run_id_mod.build_run_id(
+                            sweep=name, model=model, effort=effort,
+                            harness=harness_tag, task=task, rep=rep)
                         sweep_runs.append({
                             "run_id": run_id,
                             "sweep": name,

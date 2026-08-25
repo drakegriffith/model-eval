@@ -25,6 +25,10 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import usage_ledger  # noqa: E402
+# The run_id format, owned by one module (blocker 3). `run_id` is already the
+# name of the local variable holding one throughout this file, so the module is
+# bound under a distinct name.
+import run_id as run_id_mod  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER_DIR = os.path.join(ROOT, "runner")
@@ -65,9 +69,18 @@ def get_diff(scratch):
 
 
 def read_prompt_for_run(run_id, tasks_dir):
-    # run_id = sweep--model--effort--harness--<task>--rEP
-    parts = run_id.split("--")
-    task = parts[-2] if len(parts) >= 2 else ""
+    """The task prompt for one run, resolved through the shared run_id parser.
+
+    This used to be `parts[-2]` under a comment describing the format, which is
+    correct for every id written so far and silently wrong for the first id
+    carrying a new segment appended at the end: the judge would then score every
+    diff in the sweep against "(task prompt unavailable)" and record the result
+    as a judgement. run_id.parse_run_id raises on such an id instead -- see
+    run_id.py, blocker 3. The unavailable-prompt fallback below stays for the
+    case it was written for: a well-formed id whose task directory holds no
+    prompt file.
+    """
+    task = run_id_mod.parse_run_id(run_id)["task"]
     tdir = os.path.join(tasks_dir, task)
     out = []
     for fn in ("PROMPT.md", "TICKET.md", "SPEC.md"):
@@ -187,7 +200,8 @@ def meter_judge_call(judged_run_id, head, family, declared_model, raw, usage_pat
         return None
     model_id = judge_model_id(family, raw, declared_model)
     row = usage_ledger.build_usage_row(
-        {"run_id": f"judge-{head}--{judged_run_id}", "ts": now_iso(),
+        {"run_id": run_id_mod.build_judge_run_id(head, judged_run_id),
+         "ts": now_iso(),
          "model": model_id, "tokens_in": 0, "tokens_out": 0},
         family, usage_detail=detail, model_id=model_id,
         kind="judge", judged_run_id=judged_run_id)
