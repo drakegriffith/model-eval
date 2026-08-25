@@ -1,0 +1,4 @@
+
+IDENTIFIER    MODEL      STATUS    SIZE         CONTEXT    PARALLEL    DEVICE    TTL
+qwen3-cn      qwen3-cn   IDLE      158.74 GB    131072     1           Local        
+
