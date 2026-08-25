@@ -85,6 +85,27 @@ CACHE_READ_WEIGHT = 0.1
 
 Req = collections.namedtuple("Req", "fresh cache_creation cache_read out")
 
+# Which session-log format a family writes. A property of the BINARY, not of the
+# model id: `local` is the same `claude -p` binary pointed at an LM Studio
+# server (registry.py's local family, run.py's local branch), so it writes a
+# Claude Code session log exactly as claude and kimi do.
+#
+# Written as an explicit membership test rather than "claude or kimi, else
+# codex", because the else was the defect (issue #15 F2): a family the author
+# had not thought of fell into the codex branch, was looked up in a rollout
+# index that has no entry for it, and every one of its rows filed as
+# `no_independent_record` -- the check reporting "no transcript" for rows whose
+# transcript is on disk and readable. usage_ledger.py:86-88 records the
+# identical bug and its 2026-08-25 repair; this is that repair reaching the
+# sibling module.
+CLAUDE_LOG_FAMILIES = ("claude", "kimi", "local")
+
+# Every family this module reports on, and the order it walks them. DECLARED,
+# not discovered from the data: a family with zero rows must print a zero,
+# because an absent table row reads identically to a family that was never in
+# the loop -- and telling those apart is the whole point of the check.
+FAMILIES = ("codex", "claude", "kimi", "local")
+
 
 # --------------------------------------------------------------------------- #
 # The three candidate figures
@@ -306,10 +327,13 @@ def series_for_run(run_id, family, claude_idx=None, codex_idx=None):
     """(series, source_path, alternates) from the CLI's own session log.
 
     `alternates` are the other sessions recorded against the same scratch
-    directory. claude/kimi have none: the summary transcript names the exact
-    session id, so there is nothing to disambiguate.
+    directory. The claude-log families have none: the summary transcript names
+    the exact session id, so there is nothing to disambiguate.
+
+    Routed through CLAUDE_LOG_FAMILIES, never through "claude or kimi, else
+    codex" -- see that constant for the family the else silently swallowed.
     """
-    if family in ("claude", "kimi"):
+    if family in CLAUDE_LOG_FAMILIES:
         idx = claude_idx if claude_idx is not None else _claude_session_index()
         sid = _claude_session_id(run_id)
         d = idx.get(run_id)
@@ -435,8 +459,14 @@ def cmd_check(usage_path=USAGE_PATH, series_path=SERIES_PATH):
         if c["agrees"]:
             slot[0] += 1
     print("\n  CLI-reported session figure == sum of that CLI's per-request contexts:")
-    for fam, (ok, n) in sorted(per.items()):
-        print(f"    {fam:<8} {ok}/{n}")
+    # Walked over the DECLARED families, then over any the data carries that
+    # this module has not heard of. A family with no rows prints its zero out
+    # loud: silence is not evidence, and "0/0" is a different claim from a line
+    # that is simply not there.
+    for fam in list(FAMILIES) + sorted(set(per) - set(FAMILIES)):
+        ok, n = per.get(fam, (0, 0))
+        note = "" if n else "   -- no subjects inspected"
+        print(f"    {fam:<8} {ok}/{n}{note}")
     return by["DISCREPANCY"]
 
 
@@ -472,9 +502,14 @@ def cmd_report(usage_path=USAGE_PATH, series_path=SERIES_PATH):
 
     print("\nper family, and the share of the axis that is cache-read "
           "(a reader's fresh-input rate does NOT apply to it):")
-    for fam in ("codex", "claude", "kimi"):
+    # Same rule as cmd_check's per-family block: the DECLARED families, then
+    # anything the data carries that this module has not heard of, and a family
+    # with no rows says so rather than dropping out of the table.
+    seen_families = {fm for fm, _ in per}
+    for fam in list(FAMILIES) + sorted(seen_families - set(FAMILIES)):
         fs = [f for (fm, _), lst in per.items() if fm == fam for f in lst]
         if not fs:
+            print(f"  {fam:<8} n=0    -- no subjects inspected")
             continue
         tot = sum(f["session_total"] for f in fs)
         cr = sum(f["cache_read_total"] for f in fs)
