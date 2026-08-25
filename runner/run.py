@@ -859,6 +859,60 @@ CHILD_ENV_ALLOWLIST = ("PATH", "HOME", "SHELL", "USER", "LOGNAME",
                        "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR")
 
 
+def invocation_provenance(model):
+    """What actually served this run: endpoint, key SOURCE, and binary.
+
+    Verifier findings 2 and 4. Neither is a hole in the F1 allowlist -- both are
+    facts the runner CHOOSES and then failed to write down.
+
+    MODEL_EVAL_LOCAL_BASE_URL is read by this module and set on the child
+    deliberately, so no allowlist stops it and none should: the local family
+    exists because the endpoint is not fixed, and the pre-registration makes the
+    serving stack a human's to set. What was wrong is that it was INVISIBLE. A
+    row said `glm-4.7-local` and carried nothing about which server answered, so
+    two rows served by two endpoints were indistinguishable in the corpus
+    forever after.
+
+    Same one level down for the binary: build_cli_cmd emits the bare name
+    `claude`, and which file that names is decided by the parent shell's PATH.
+    Two rows produced by two Claude Code versions, or by a shim earlier on PATH,
+    looked identical.
+
+    `key_source` is a PATH or a word, NEVER a value. A provenance field that
+    fixed a visibility problem by writing a live credential into an append-only
+    corpus would be a far worse bug than the one it closed.
+    """
+    family = model_family(model) if model is not None else None
+    binary = "codex" if family == "codex" else "claude"
+
+    if family == "local":
+        endpoint = LOCAL_BASE_URL
+        # Named from where the string CAME FROM, not by comparing it to the
+        # default: a deliberate override that happens to equal the default is a
+        # different fact from no override at all.
+        source = ("MODEL_EVAL_LOCAL_BASE_URL"
+                  if os.environ.get("MODEL_EVAL_LOCAL_BASE_URL") else "default")
+        key_source = "placeholder"
+    elif family == "kimi":
+        endpoint, source = MOONSHOT_ANTHROPIC_URL, "moonshot"
+        key_source = KIMI_KEY_FILE
+    else:
+        # The runner sets no base URL for claude/codex, and after F1 no ambient
+        # one can reach them either. None is the honest value; a synthesised URL
+        # would assert a fact this code does not have.
+        endpoint, source, key_source = None, "vendor_default", "subscription"
+
+    return {
+        "serving_endpoint": endpoint,
+        "endpoint_source": source,
+        "key_source": key_source,
+        "cli_binary": binary,
+        # None, never the bare name: recording `claude` as a path would look
+        # resolved and be a guess.
+        "cli_binary_path": shutil.which(binary),
+    }
+
+
 # The GRADER's environment (issue #14 F1, downstream half). Separate list from
 # CHILD_ENV_ALLOWLIST because the two processes are different: the model needs a
 # shell it can work in, the grader needs only enough to run bash, python and a
@@ -1732,6 +1786,12 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         # string it may not recognise. Derived through run_status's one table,
         # never restated as a literal here.
         "status_class": run_status.status_class(exit_reason),
+        # Verifier findings 2 and 4: WHAT SERVED THIS ROW. The endpoint, where
+        # that endpoint came from, which key source was consulted (a path or a
+        # word, never a value) and the resolved binary. Without these a row
+        # names a model and says nothing about the server or the build that
+        # answered for it.
+        **invocation_provenance(run["model"]),
         # ticket 34: the grader's own verdict, on every row, so `pass` being a
         # gated field costs no information. Not pi -- see the gate above.
         "pass_raw": pass_raw,
@@ -1773,6 +1833,7 @@ def record_structurally_impossible(run, reason, results_path):
         "pass": None, "pass_raw": None, "pass_at_cap": None,
         "exit_reason": "structurally_impossible",
         "status_class": run_status.status_class("structurally_impossible"),
+        **invocation_provenance(run["model"]),
         "structurally_impossible_reason": reason,
         "tokens_in": None, "tokens_out": None, "turns": None, "wall_s": None,
         "loc_changed": None, "sealed": None, "write_contained": None,
