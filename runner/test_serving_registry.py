@@ -225,6 +225,49 @@ def test_new_row_requires_a_measured_prefill_rate():
         sr.new_row("glm-4.7", "claude-code", FULL_SERVING)
 
 
+def test_record_reasoning_probe_stores_the_measurement():
+    """Auto-assert 4 needs a recorder, or the field is decoration. Symmetric to
+    record_noise_probe: the measurement and what it justifies arrive together."""
+    row = _row()
+    assert row["reasoning_probe"] is None
+    sr.record_reasoning_probe(row, cap_tokens=600, empty=5, of=6, date="2026-08-25")
+    assert row["reasoning_probe"] == {"cap_tokens": 600, "empty": 5, "of": 6,
+                                      "date": "2026-08-25"}
+
+
+def test_a_probe_that_returns_content_below_the_floor_is_recorded_too():
+    """A clean probe is evidence as much as a dirty one; it is what would let
+    somebody lower the floor later, with a measurement behind it."""
+    row = _row()
+    sr.record_reasoning_probe(row, cap_tokens=4096, empty=0, of=6, date="2026-08-25")
+    assert row["reasoning_probe"]["empty"] == 0
+
+
+def test_a_probe_that_empties_at_or_above_the_floor_refutes_the_row():
+    """The floor claims 8192 is enough. A probe returning empty content AT 8192
+    says it is not, and the row is now making a false claim about its own
+    serving config. Refuse, rather than quietly rewrite a field that every
+    already-recorded result was labelled with."""
+    row = _row()
+    with pytest.raises(sr.RegistryError) as e:
+        sr.record_reasoning_probe(row, cap_tokens=8192, empty=1, of=6,
+                                  date="2026-08-25")
+    msg = str(e.value)
+    assert "8192" in msg and "floor" in msg.lower()
+    assert row["reasoning_probe"] is None, "a refuted probe must not leave a row half-updated"
+
+
+def test_the_shipped_claude_code_row_carries_the_panels_reasoning_probe():
+    """The field is live in the shipped data, not just in the API: the panel
+    measured 5/6 empty at a 600-token cap, and that is what put the floor at
+    8192."""
+    row = sr.find_row(sr.load_rows(), "glm-4.7", "claude-code")
+    probe = row["reasoning_probe"]
+    assert probe["cap_tokens"] == 600
+    assert probe["empty"] == 5 and probe["of"] == 6
+    assert probe["date"] == "2026-08-25"
+
+
 def test_turn_cap_is_derived_from_the_slowest_measured_prefill():
     """Rule 7 stores a basis, not a constant: prompt size varies per arm, so the
     cap is a function of it. 61440 tokens at the slow end of the measured

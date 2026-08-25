@@ -497,6 +497,31 @@ def record_noise_probe(row, flip_rate, date, identical, of):
     return row
 
 
+def record_reasoning_probe(row, cap_tokens, empty, of, date):
+    """Attach auto-assert 4's measurement: how often a small max_tokens cap came
+    back with empty content, because GLM's reasoning tokens are spent from the
+    same budget as its answer.
+
+    Refuses a probe that refutes the row instead of quietly repairing it. If
+    content came back empty at or above the recorded floor, the floor is wrong,
+    and every result already labelled with this row was labelled with a serving
+    claim that does not hold. That is a new row (and a re-run), not a field
+    edit -- the same reason add-model refuses to overwrite an existing pair.
+    """
+    floor = row["serving"]["max_tokens_floor"]
+    if empty and cap_tokens >= floor:
+        raise RegistryError(
+            f"probe refutes {row_key(row)}: {empty}/{of} responses were empty at a "
+            f"cap of {cap_tokens}, which is at or above the row's recorded "
+            f"max_tokens floor of {floor}. The floor is wrong, so every result "
+            f"already labelled with this row carries a serving claim that does not "
+            f"hold. Record a new row with the higher floor rather than editing "
+            f"this one.")
+    row["reasoning_probe"] = {"cap_tokens": cap_tokens, "empty": empty, "of": of,
+                              "date": date}
+    return row
+
+
 def derive_turn_cap_s(row, prompt_tokens, turns=1, safety_factor=1.5):
     """Rule 7's cap, derived rather than stored.
 
