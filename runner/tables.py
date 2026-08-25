@@ -46,6 +46,7 @@ RUNNER_DIR = os.path.join(ROOT, "runner")
 sys.path.insert(0, RUNNER_DIR)
 
 import corpus_gates  # noqa: E402
+import run_status  # noqa: E402
 import usage_ledger  # noqa: E402
 
 EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
@@ -156,18 +157,33 @@ def table1_effort_ladder(rows, qual):
     data = []
     for (model, effort), rs in sorted(
             g.items(), key=lambda kv: (kv[0][0], EFFORT_ORDER.get(kv[0][1], 9))):
-        n = len(rs)
-        passes = sum(1 for r in rs if r.get("pass"))
+        # issue #12 (d). The denominator is the runs that produced a MEASUREMENT
+        # of the model, not every row in the cell. A wall-clock timeout or an
+        # infra fault is a distinct status, reported beside the rate and never
+        # counted as a model failure -- the pre-registered bundle's rule, which
+        # this table used to contradict by taking n = len(rs).
+        #
+        # Not cosmetic on the local stack: under PARALLEL=4 a neighbour's prefill
+        # starved a decode to 0.05 tok/s, a 380x wall-clock swing on identical
+        # work. Counting that as task difficulty lets the SCHEDULER grade the
+        # model, and the high-harness arms carry the largest prompts, so the bias
+        # runs one way along the dose ladder.
+        scored, excluded = run_status.partition_for_rate(rs)
+        n = len(scored)
+        passes = sum(1 for r in scored if r.get("pass"))
         # Quality gates on BOTH `pass` and a clean exit (ticket 34): a truncated
-        # run's judged score describes a truncated run. The pass COUNT one line
-        # up stays ungated -- a named residual in TOKENS-IN-RESIDUAL.md, not an
-        # oversight.
-        q = mean([qual.get(r["run_id"]) for r in rs
+        # run's judged score describes a truncated run.
+        q = mean([qual.get(r["run_id"]) for r in scored
                   if r.get("pass") and corpus_gates.summarizable(r)])
-        data.append([model, effort, n, passes, pct(passes, n),
+        # An empty denominator has not measured a 0% pass rate; it has measured
+        # nothing, and 0% is the most misleading thing it could print.
+        rate = pct(passes, n) if n else "no measured runs"
+        data.append([model, effort, n, passes, rate,
+                     run_status.format_excluded(excluded) or "-",
                      fnum(q, 2) if q is not None else "-"])
     return md_table(
-        ["model", "effort", "n", "pass", "pass_rate", "avg_quality(/10)"], data)
+        ["model", "effort", "n", "pass", "pass_rate", "excluded",
+         "avg_quality(/10)"], data)
 
 
 def table2_efficiency_frontier(rows):

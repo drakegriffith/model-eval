@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 
 import broker
 import registry
+import run_status
 import sandbox_seal
 import serving_registry
 import usage_ledger
@@ -1429,11 +1430,23 @@ def resolve_timeout_s(task, defaults):
     Fail-closed for the same reason check_effort() is (ticket 22 defect 2). The
     old expression keyed on the literal "t3" and sent everything else to the
     t1/t2 branch, so t4 and t5 tasks silently drew a cap sized for a 20-minute
-    task. Cap-terminated runs score as FAILURES under the pre-registration's
-    estimand: a mis-sized cap does not show up as a timeout in the analysis, it
-    shows up as task difficulty. Adding a tier must therefore cost a config edit
-    it cannot forget to make, not inherit the short cap by falling off the end
-    of a boolean.
+    task. Adding a tier must therefore cost a config edit it cannot forget to
+    make, not inherit the short cap by falling off the end of a boolean.
+
+    A mis-sized cap is still a real cost, but not the cost this docstring used to
+    claim (issue #12 d). It read: "Cap-terminated runs score as FAILURES under
+    the pre-registration's estimand: a mis-sized cap does not show up as a
+    timeout in the analysis, it shows up as task difficulty." That is the
+    discarded reading. The pre-registered bundle says the opposite -- "Timeouts
+    and infra errors are distinct statuses, excluded from the denominator and
+    reported separately, never counted as model failures" -- and findings.md
+    rule 7 and issue #8 agree. A wall-clock kill now carries exit_reason
+    "timeout", which run_status classes out of the pass-rate denominator.
+
+    So the cost of a mis-sized cap is LOST RUNS, not fake failures: the cell's
+    denominator shrinks and the excluded count says so out loud. That is a
+    better failure -- visible, and it does not put the scheduler's behaviour in
+    the accuracy column.
     """
     defaults = defaults or {}
     tried = []
@@ -1647,6 +1660,11 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
         "brokered": brokered, "k_cap": k_cap,
         "acceptance_requests": acceptance_requests,
         "cap_exhausted": exit_reason == "cap_exhausted",
+        # issue #12 (d): the estimand disposition of this row, stamped by the
+        # code that ran it rather than re-derived by each reader from a reason
+        # string it may not recognise. Derived through run_status's one table,
+        # never restated as a literal here.
+        "status_class": run_status.status_class(exit_reason),
         # ticket 34: the grader's own verdict, on every row, so `pass` being a
         # gated field costs no information. Not pi -- see the gate above.
         "pass_raw": pass_raw,
@@ -1687,6 +1705,7 @@ def record_structurally_impossible(run, reason, results_path):
         "task": run["task"], "rep": run["rep"],
         "pass": None, "pass_raw": None, "pass_at_cap": None,
         "exit_reason": "structurally_impossible",
+        "status_class": run_status.status_class("structurally_impossible"),
         "structurally_impossible_reason": reason,
         "tokens_in": None, "tokens_out": None, "turns": None, "wall_s": None,
         "loc_changed": None, "sealed": None, "write_contained": None,
