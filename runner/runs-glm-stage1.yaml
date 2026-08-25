@@ -48,7 +48,35 @@ defaults:
   timeout_t4_s: 7200
   timeout_t5_s: 7200
   seed: 1337
-  k_acceptance: 5
+  # ACCEPTANCE CAP -- read this before changing it, because both directions bias
+  # the headline number and the bundle registers neither.
+  #
+  # K is the number of times the model may ask the broker "does it pass yet".
+  # Exhausting it ends the run with exit_reason `cap_exhausted`, which run_status
+  # currently classes SCORED -- i.e. a failure in the autonomy denominator. So K
+  # is a TREATMENT on the number this experiment exists to produce, and the
+  # bundle (prompt-2, findings.md) never registers a value for it.
+  #
+  # The shipped 5 was invented here. At K=5 a model that would have converged on
+  # its sixth check is recorded as an autonomy failure under a rule Drake never
+  # agreed to. Raised to 20, which is the one number in this area that IS
+  # pre-registered: broker.K_CEILING, the ceiling the protocol fixed in advance.
+  # It is the closest thing to "uncapped" the pre-registration permits, so it
+  # minimises the un-registered treatment rather than picking a new arbitrary
+  # value.
+  #
+  # NOT turned off. `GAUNTLET_NO_BROKER=1` removes the cap entirely, but it also
+  # sets stage_acceptance=True, which copies the canonical acceptance suite into
+  # the model's scratch where it is readable as source (run.py staged_task_dir).
+  # That converts stage 1 into an open-book measurement and inflates the pass
+  # rate -- a far larger bias than an over-generous cap, and in the opposite,
+  # flattering direction. Broker on, cap loose.
+  #
+  # The open question -- is a broker termination a GLM autonomy failure at all? --
+  # is filed, because it depends on a `pre-registration section 7` citation in
+  # run.py that predates this bundle. If that resolves to "no", cap_exhausted
+  # becomes an excluded status and K stops being a treatment at all.
+  k_acceptance: 20
 
 sweeps:
   # Stage 1, primary arm. 15 tasks x 3 reps, bare, claude-code driver.
