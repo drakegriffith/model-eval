@@ -1,0 +1,75 @@
+# runs-glm-stage1.yaml -- the GLM 4.7 autonomy experiment (studio-handoff
+# prompt-2 stage 1; model-eval issue #8).
+#
+# THIS FILE DISPATCHES NOTHING BY ITSELF. It is a declaration, and its first job
+# is to be the source the serving gate reads. Until issue #12 the registry in
+# runner/models.yaml had no invoker and no config named a serving config at all,
+# so a sweep could be dispatched under any serving stack and nothing would
+# notice. The `serving:` block below is what runner/run.py hands to
+# serving_registry.check_dispatch before the first CLI call; if it contradicts
+# the glm-4.7 row, the run is refused with exit 2 rather than producing rows
+# labelled with a config they were not produced under.
+#
+# THE SERVING BLOCK IS NOT A SETTING. Nothing here changes LM Studio. These are
+# the numbers the 2026-08-25 panel MEASURED and pinned to the registry row, and
+# writing them here is a claim that the server is already in this state. As of
+# 2026-08-25 it is NOT: `lms ps` reports CONTEXT=65536 PARALLEL=4 against the
+# row's 131072 and 1. Per the pre-registration -- "If LM Studio is not already
+# in this config, stop and ask Drake to set it; do not change it yourself" --
+# that is a human action. `python3 runner/run.py preflight` refuses, naming
+# expected versus observed, and is the check to run before dispatching this file.
+#
+# Why PARALLEL=1 rather than 4: under PARALLEL=4 one seat's decode fell to
+# 0.05 tok/s while a neighbour prefilled -- a 380x wall-clock swing on identical
+# work. With timeouts excluded from the denominator (issue #12 d) that no longer
+# corrupts the pass rate, but it still makes wall_s uninterpretable, and the
+# ladder's high-harness arms carry the largest prompts. PARALLEL=1 at 131072
+# costs no extra KV memory versus PARALLEL=4 at 65536 (findings.md).
+
+serving:
+  parallel: 1
+  context_length: 131072
+  # A CAP the run will use, compared against the row's FLOOR by ordering. The
+  # floor is 8192 because at a 600-token cap 5/6 reasoning probes returned empty
+  # content: GLM's reasoning tokens are drawn from max_tokens, so a run under the
+  # floor measures the cap and not the model.
+  max_tokens: 8192
+  temperature: 0
+  seed: 42
+
+defaults:
+  # Wall-clock caps are a backstop, not the estimand. Issue #8's surviving design
+  # caps TURNS; a wall-clock expiry logs exit_reason "timeout", which is excluded
+  # from the pass-rate denominator and reported separately (issue #12 d). These
+  # are sized off the row's measured prefill band via
+  # serving_registry.derive_turn_cap_s, deliberately from the SLOW end (57 tok/s).
+  timeout_t1_t2_s: 3600
+  timeout_t3_s: 7200
+  timeout_t4_s: 7200
+  timeout_t5_s: 7200
+  seed: 1337
+  k_acceptance: 5
+
+sweeps:
+  # Stage 1, primary arm. 15 tasks x 3 reps, bare, claude-code driver.
+  # "Autonomous pass" means the task's own check passes with ZERO parent
+  # intervention -- no retry, no fixup commit, no manual nudge.
+  - name: glm-stage1
+    driver: claude-code
+    harness: false
+    reps: [1, 2, 3]
+    tasks: [t1-py-a, t1-py-b, t1-ts-a, t1-ts-b, t2-py-a, t2-py-b, t2-ts-a, t2-ts-b, t3-a, t4-py-a, t4-py-b, t4-ts-a, t5-py-a, t5-py-b, t5-ts-a]
+    configs:
+      - {model: glm-4.7-local, effort: high}
+
+  # Positive control. Any task Sonnet fails is a broken task and leaves the
+  # denominator: a control-arm failure indicts the task, not GLM. Not gated by
+  # the serving registry -- claude-sonnet-5 has no row, because it is not served
+  # by the stack this experiment is pinning, and inventing a row for it would
+  # manufacture a measurement. run.py prints it in the `ungated=` count.
+  - name: glm-stage1-control
+    harness: false
+    reps: [1]
+    tasks: [t1-py-a, t1-py-b, t1-ts-a, t1-ts-b, t2-py-a, t2-py-b, t2-ts-a, t2-ts-b, t3-a, t4-py-a, t4-py-b, t4-ts-a, t5-py-a, t5-py-b, t5-ts-a]
+    configs:
+      - {model: claude-sonnet-5, effort: high}

@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 import broker
 import registry
 import sandbox_seal
+import serving_registry
 import usage_ledger
 
 # Import direction is one-way and now acyclic (ticket 30): run -> usage_ledger ->
@@ -335,6 +336,35 @@ def resolve_effort(effort, model, winning):
     return effort
 
 
+def serving_config_from(cfg):
+    """The serving config the runs config DECLARES every run will use.
+
+    The source is the `serving:` block, and it is deliberately a DECLARATION
+    rather than a probe of the live server. Two reasons. Gating has to be
+    deterministic and reviewable -- the thing a result is labelled with belongs
+    in version control next to the matrix that produced it, not in whatever
+    state a GUI happened to be in at dispatch time. And the pre-registration's
+    "if LM Studio is not already in this config, stop and ask Drake" is a
+    PRE-FLIGHT instruction to a human, which is a different mechanism with a
+    different failure mode; it lives in `preflight` below.
+
+    Returned as numbers, straight from the config. Not copied out of the registry
+    row: a request built from the row it is about to be compared against agrees
+    with it by construction, which is a gate that cannot fail.
+
+    An absent block is `{}` here rather than an error, because whether that is
+    an error depends on the run -- check_dispatch refuses it with
+    UninspectedConfig for a model that has a row, and a model with no row was
+    never making a claim about serving in the first place.
+    """
+    serving = cfg.get("serving") or {}
+    if not isinstance(serving, dict):
+        raise ValueError(
+            f"the config's `serving:` block must be a map of field: number, "
+            f"got {type(serving).__name__}")
+    return dict(serving)
+
+
 def build_runs(cfg):
     winning = cfg.get("winning_effort", {}) or {}
     seed = (cfg.get("defaults", {}) or {}).get("seed", 1337)
@@ -378,6 +408,20 @@ def build_runs(cfg):
                             "model": model,
                             "effort": effort,
                             "harness": bool(harness),
+                            # issue #12. WHICH CLI drives the model, per the
+                            # serving registry's (model, driver) key. Read with
+                            # no default and left as None when undeclared: the
+                            # gate decides whether a missing driver is an error,
+                            # and it is an error exactly when the model has a row
+                            # (serving_registry.require_driver says why).
+                            "driver": conf.get("driver", sweep.get("driver")),
+                            # The RUNG of the L1-L5 dose ladder, when a config
+                            # declares one. Distinct from `harness` above, which
+                            # is the pre-ladder boolean and is not a level: the
+                            # capability check needs a number to compare against
+                            # a driver's ceiling, and False is not 0.
+                            "harness_level": conf.get("harness_level",
+                                                      sweep.get("harness_level")),
                             "task": task,
                             "rep": rep,
                             "mode": mode,
@@ -1620,6 +1664,40 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     return row
 
 
+def record_structurally_impossible(run, reason, results_path):
+    """Write the row for a cell the driver cannot express (issue #12 c).
+
+    A cell that cannot exist must leave a trace. Dropping it silently turns
+    "this driver has no hooks, so this rung does not exist for it" into "nobody
+    ran it", and those are different facts -- only the first one is reportable,
+    and only if something wrote it down.
+
+    `pass` is None, never False. False is a measurement: it says the model
+    attempted the task and did not complete it, which puts a cell that never
+    existed into the denominator and drags the vehicle contrast toward the
+    pooled mean. exit_reason is its own status for the same reason -- it is not
+    "ok", so every existing reader gate (existing_ids, corpus_gates.summarizable,
+    ladder_from_results) already excludes it without being taught anything new.
+    """
+    row = {
+        "run_id": run["run_id"], "ts": now_iso(), "sweep": run["sweep"],
+        "model": run["model"], "model_id": resolve_model(run["model"])[0],
+        "effort": run["effort"], "harness": run["harness"],
+        "harness_level": run.get("harness_level"), "driver": run.get("driver"),
+        "task": run["task"], "rep": run["rep"],
+        "pass": None, "pass_raw": None, "pass_at_cap": None,
+        "exit_reason": "structurally_impossible",
+        "structurally_impossible_reason": reason,
+        "tokens_in": None, "tokens_out": None, "turns": None, "wall_s": None,
+        "loc_changed": None, "sealed": None, "write_contained": None,
+        "home_isolated": None, "invocation_mode": None,
+        "brokered": None, "k_cap": None, "acceptance_requests": None,
+        "cap_exhausted": False, "tampered": False, "tamper_files": [],
+    }
+    append_row(results_path, row)
+    return row
+
+
 def main():
     ap = argparse.ArgumentParser(description="model-gauntlet runner")
     ap.add_argument("--config", default=os.path.join(RUNNER_DIR, "runs.yaml"))
@@ -1656,14 +1734,53 @@ def main():
     # an undeclared effort tier is a config bug, and finding it 40 runs into a
     # sweep means those 40 runs were spent on a matrix that was never going to
     # finish. Fail closed, up front, at zero cost.
+    #
+    # issue #12: the serving gate runs HERE, in this same loop, because this is
+    # the last point at which a refusal costs nothing. serving_registry answers
+    # "is the config this run declares the one its registry row was produced
+    # under, and can this driver express this cell at all".
+    #
+    # Gated = the model has a row. The registry holds glm-4.7 today; fable, sol
+    # and everything predating it have no row and are not gated, because
+    # inventing rows for them would manufacture a serving config nobody measured.
+    # Both counts are printed below: the defect this closes was a gate with zero
+    # invokers, and the only durable defence against its return is that the
+    # runner says out loud how many runs it actually inspected.
+    rows = serving_registry.load_rows()
+    gated_models = serving_registry.models_with_rows(rows)
+    requested_serving = serving_config_from(cfg)
+
     bad = []
+    impossible = []
+    gated = ungated = 0
     for r in runs:
         try:
-            resolve_model(r["model"])
+            model_id = resolve_model(r["model"])[0]
             check_effort(r["model"], r["effort"])
             # Same posture for the wall-clock cap: an undeclared tier is a config
             # bug, and the run it would spoil is the one that already cost money.
             resolve_timeout_s(r["task"], cfg.get("defaults", {}) or {})
+
+            row_model = serving_registry.serving_model_name(model_id)
+            if row_model in gated_models:
+                serving_registry.check_dispatch(
+                    rows, row_model,
+                    serving_registry.require_driver(r.get("driver"), row_model),
+                    requested_serving,
+                    harness_level=r.get("harness_level"))
+                gated += 1
+            else:
+                ungated += 1
+        except serving_registry.StructurallyImpossible as e:
+            # CAUGHT BEFORE ValueError, and the order is the whole point.
+            # StructurallyImpossible subclasses RegistryError subclasses
+            # ValueError, so appending it to `bad` would make ONE inexpressible
+            # cell exit 2 for the entire sweep. A matrix containing pi x L5 is
+            # not an invalid config; it is a valid matrix containing cells that
+            # do not exist. They are dropped from the dispatch list and recorded
+            # with their own status -- never scored 0, which would assert that
+            # the model attempted the task and failed it.
+            impossible.append((r, str(e)))
         except ValueError as e:
             bad.append(f"  {r['run_id']}: {e}")
     if bad:
@@ -1671,6 +1788,16 @@ def main():
         for b in dict.fromkeys(bad):
             print(b)
         sys.exit(2)
+
+    print(f"serving gate: gated={gated} ungated={ungated} "
+          f"structurally_impossible={len(impossible)} "
+          f"declared={sorted(requested_serving) or 'none'}")
+    if impossible:
+        dropped = {r["run_id"] for r, _ in impossible}
+        for r, why in impossible:
+            print(f"  [structurally-impossible] {r['run_id']}: {why}")
+            record_structurally_impossible(r, why, args.results)
+        runs = [r for r in runs if r["run_id"] not in dropped]
 
     # Same posture, same reason: a K outside the pre-registered range makes every
     # row of the sweep unreportable, and finding that at analysis time is finding

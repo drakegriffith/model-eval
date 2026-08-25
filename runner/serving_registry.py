@@ -49,20 +49,56 @@ Errors
     `unknown` refuses comparison, because two absences are not an equality --
     that is the could-not-determine result wearing a pass.
 
-Wiring (NOT applied here; runner/run.py is owned by another change this wave)
-    run.py already validates the whole matrix before the first CLI call, at the
-    `for r in runs:` loop around line 1415, inside a `except ValueError` that
-    collects failures and exits 2. The gate is one added call in that try
-    block:
+Wiring (APPLIED -- runner/run.py, issue #12). The recipe below is the code that
+    actually runs, not an illustration. The first draft of this section was
+    pseudocode in which three of the four arguments did not exist:
+    `requested_serving_from()` was never defined, run dicts carried no `driver`
+    key, and no runs config carried a serving block. It read as an existing
+    helper, which is worse than no recipe at all.
 
-        serving_registry.check_dispatch(
-            serving_registry.load_rows(), r["model"], r.get("driver", "claude-code"),
-            requested_serving_from(cfg))
+    run.py validates the whole matrix before the first CLI call, in the
+    `for r in runs:` loop in main(). The gate sits in that loop:
 
-    No other edit is needed: RegistryError is a ValueError, so the existing
-    handler already reports it in the "config rejected" block at zero cost. A
-    caller that wants the structurally-impossible cells reported as their own
-    status rather than as config errors catches StructurallyImpossible first.
+        rows = serving_registry.load_rows()
+        gated_models = serving_registry.models_with_rows(rows)
+        requested = run.serving_config_from(cfg)   # the `serving:` block
+        ...
+        row_model = serving_registry.serving_model_name(resolve_model(r["model"])[0])
+        if row_model in gated_models:
+            serving_registry.check_dispatch(
+                rows, row_model,
+                serving_registry.require_driver(r.get("driver"), row_model),
+                requested, harness_level=r.get("harness_level"))
+
+    Four things that recipe gets right and the first draft did not:
+
+    1. The requested config is the DECLARED `serving:` block of the runs config,
+       read by run.serving_config_from. It is deterministic and it is in version
+       control, which a probe of the live server would not be. Whether the LIVE
+       server matches is a separate, pre-flight question -- see
+       run.py's `preflight` command, which refuses when `lms ps` disagrees with
+       the row. Two questions, two mechanisms; the gate does not poll anything.
+
+    2. The driver comes through require_driver, which RAISES on a missing one.
+       `.get("driver", "claude-code")` files every pi run against the claude-code
+       row, and findings.md reports pi as a separate vehicle contrast.
+
+    3. Only models that HAVE a row are gated, and run.py prints
+       `gated=N ungated=M` so "the gate ran on nothing" is never again
+       indistinguishable from "the gate ran". Models with no row -- fable, sol,
+       everything predating this registry -- pass through; inventing rows for
+       them would manufacture a serving config nobody measured.
+
+    4. StructurallyImpossible is caught FIRST, before `except ValueError`.
+       Because it subclasses RegistryError subclasses ValueError, a naive
+       insertion makes one inexpressible cell exit 2 for the whole sweep. A
+       matrix containing pi x L5 is not an invalid config; it is a valid matrix
+       containing cells that do not exist, and run.py drops those cells with
+       exit_reason "structurally_impossible" and pass=None -- never 0, which
+       would assert an attempt that never happened.
+
+    Everything else falls through as a RegistryError, which is a ValueError, so
+    the existing "config rejected ... exit 2" handler reports it at zero cost.
 
 Limitations
     - Hand-maintained facts, same as registry.py. The seed rows carry the
@@ -383,6 +419,60 @@ def load_rows(path=REGISTRY_PATH):
 
 def row_key(row):
     return (row["model"], row["driver"])
+
+
+# runner/registry.py calls the model `glm-4.7-local`; runner/models.yaml calls
+# the same thing `glm-4.7`. The suffix belongs to the model roster, where it says
+# "this id is served by the local family" -- a serving ROW is already keyed by
+# driver, so carrying the suffix here would say the same thing twice.
+#
+# The convention was implicit in one assertion inside this module's own test
+# (`registry.resolve_model(row["model"] + "-local")`). The gate needs the inverse
+# on every dispatch, so it is a named function with its own test rather than a
+# suffix strip buried in the runner's main().
+LOCAL_ID_SUFFIX = "-local"
+
+
+def serving_model_name(model_id):
+    """The registry-row name for a runner model id. Identity for everything else."""
+    if model_id.endswith(LOCAL_ID_SUFFIX):
+        return model_id[:-len(LOCAL_ID_SUFFIX)]
+    return model_id
+
+
+def models_with_rows(rows):
+    """The set of row model names.
+
+    What a caller consults to ask "is this run gated at all?" BEFORE it knows the
+    driver -- which it must be able to do, because a missing driver on a gated
+    run is an error and on an ungated run is not.
+    """
+    return {row["model"] for row in rows}
+
+
+def require_driver(driver, model):
+    """The driver a gated run declares, or RegistryError naming what to add.
+
+    Never defaulted. `.get("driver", "claude-code")` -- the default in this
+    module's own first-draft docstring -- files every pi row against the
+    claude-code row, and findings.md reports pi as a separately-reported vehicle
+    contrast: pi has no hooks and no subagents, so the driver is part of the
+    TREATMENT, not a detail of how the treatment was delivered. A silent merge
+    there does not produce a wrong number in one column; it produces a table that
+    pools two populations under one label, which no reader can detect afterwards.
+    """
+    if not driver:
+        raise RegistryError(
+            f"run of {model!r} declares no driver, and this model has a serving "
+            f"registry row per driver (known: {', '.join(DRIVERS)}). Add "
+            f"`driver: <name>` to the sweep or to the config entry. It is NOT "
+            f"defaulted: filing a pi run against the claude-code row merges a "
+            f"separately-reported vehicle contrast into the dose table.")
+    if driver not in DRIVER_CAPABILITIES:
+        raise RegistryError(
+            f"unknown driver {driver!r} for model {model!r}; known: "
+            f"{', '.join(DRIVERS)}")
+    return driver
 
 
 def find_row(rows, model, driver):
