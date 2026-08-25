@@ -359,6 +359,53 @@ def test_a_request_below_the_floor_is_refused(key):
     assert "floor" in msg.lower()
 
 
+@pytest.mark.parametrize("bad", ["unknown", None, "8192", [8192]])
+def test_a_non_numeric_request_for_a_floor_field_is_refused_as_a_value_error(bad):
+    """The floor comparison is an ordering, and an ordering against a string or a
+    None is a TypeError -- which is NOT a ValueError, so it would have escaped
+    run.py's `except ValueError` handler and killed the sweep with a traceback
+    instead of a clean exit 2. The escape is reachable with this file's own
+    sentinel: `unknown` is shipped on `quant` today, and a caller copying a row
+    into a request hands it straight to the ordering.
+
+    Refuse it as a RegistryError, naming the field, the value and its type."""
+    with pytest.raises(sr.RegistryError) as e:
+        sr.check_run_config(_row(), {"max_tokens": bad})
+    msg = str(e.value)
+    assert "max_tokens_floor" in msg
+    assert repr(bad) in msg
+    assert type(bad).__name__ in msg
+
+
+@pytest.mark.parametrize("bad", ["unknown", None])
+def test_the_refusal_reaches_the_runner_through_check_dispatch(bad):
+    """Same guard at the entry point run.py calls, and still a ValueError there:
+    the whole point is that the runner's existing handler catches it."""
+    with pytest.raises(ValueError):
+        sr.check_dispatch(sr.load_rows(), "glm-4.7", "claude-code",
+                          {"max_tokens": bad})
+
+
+@pytest.mark.parametrize("good", [16384, 8192, 8192.0])
+def test_numeric_requests_for_a_floor_field_still_compare(good):
+    """Positive control: the guard must not swallow the values it exists to let
+    through, or the floor fix is undone."""
+    assert sr.check_run_config(_row(), {"max_tokens": good}) == 1
+
+
+def test_a_bool_is_refused_by_the_floor_not_by_the_type_guard():
+    """The guard is about orderability, not about tidiness. `True` is an int in
+    Python and orders fine -- it is worth 1, which is genuinely below the 8192
+    floor, so it must be refused as a FLOOR violation. A guard that rejected it
+    on type would be policing values the comparison handles correctly, and would
+    report the wrong reason to the caller."""
+    with pytest.raises(sr.RegistryError) as e:
+        sr.check_run_config(_row(), {"max_tokens": True})
+    msg = str(e.value)
+    assert "below the row's floor" in msg
+    assert "not a number" not in msg
+
+
 def test_the_floor_is_still_an_equality_between_rows():
     """Floor semantics belong to (a), not to (b). Two rows that disagree on the
     floor were produced under different serving configs and are not comparable,

@@ -566,10 +566,23 @@ def check_run_config(row, requested):
                 f"{', '.join(SERVING_FIELDS)}")
         have = row["serving"][field]
         if field in FLOOR_FIELDS:
-            # A floor is a minimum, not an equality. 8192 is the value BELOW
-            # which GLM returns empty content, so a run asking for more is
-            # further from that failure, not in conflict with the row.
-            # Equality here refused the safest request a caller could make.
+            # A floor is compared by ORDERING, and an ordering is the one
+            # comparison in this module that can raise something that is not a
+            # ValueError. `'unknown' < 8192` is a TypeError, which would escape
+            # the runner's `except ValueError` and end the sweep in a traceback
+            # rather than a clean exit 2 -- and `unknown` is this file's own
+            # sentinel, shipped on quant, so a caller copying a row into a
+            # request reaches it without doing anything strange. Guard on
+            # orderability only: bool is an int, orders fine, and is left to the
+            # floor check below to refuse on its value.
+            if not isinstance(want, (int, float)):
+                raise RegistryError(
+                    f"{field}: requested value {want!r} is not a number "
+                    f"(type {type(want).__name__}), and a floor is compared by "
+                    f"ordering. Send the max_tokens the run will actually use. "
+                    f"Note that {UNKNOWN!r} is this registry's sentinel for an "
+                    f"unmeasured value: it can be recorded on a row, but it can "
+                    f"never be requested by a run.")
             if want < have:
                 diffs.append(
                     f"{field}: run requests {want!r}, below the row's floor of "
