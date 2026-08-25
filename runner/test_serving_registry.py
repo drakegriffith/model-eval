@@ -218,6 +218,40 @@ def test_refusal_a_passes_when_the_request_matches_the_row():
     sr.check_run_config(_row(), dict(FULL_SERVING))
 
 
+@pytest.mark.parametrize("requested", [{}, None])
+def test_refusal_a_refuses_a_request_that_asserts_nothing(requested):
+    """A gate that inspected zero fields did not pass -- it failed to run.
+
+    The original version returned quietly here, so `check_dispatch(rows, model,
+    driver, {})` was a green light that had compared nothing. That is the exact
+    shape of the silent pass this gate exists to prevent: the caller believes the
+    serving config was checked, and the row gets labelled with a config nobody
+    confirmed.
+    """
+    with pytest.raises(sr.UninspectedConfig) as e:
+        sr.check_run_config(_row(), requested)
+    assert "zero" in str(e.value)
+
+
+def test_uninspected_config_is_its_own_type_under_registry_error():
+    """Distinct type so a caller can tell "your config is wrong" from "you did
+    not give me a config", which have different fixes."""
+    assert issubclass(sr.UninspectedConfig, sr.RegistryError)
+
+
+def test_check_dispatch_refuses_an_empty_requested_config():
+    """Same hole, reached through the entry point the runner actually calls."""
+    with pytest.raises(sr.UninspectedConfig):
+        sr.check_dispatch(sr.load_rows(), "glm-4.7", "claude-code", {})
+
+
+def test_check_run_config_reports_how_many_fields_it_inspected():
+    """The positive control for the control: a passing check says what it looked
+    at, so "passed" and "looked at nothing" cannot read the same."""
+    assert sr.check_run_config(_row(), {"parallel": 1}) == 1
+    assert sr.check_run_config(_row(), dict(FULL_SERVING)) == 6
+
+
 def test_refusal_b_cross_model_comparison_across_different_serving_configs():
     """(b) Auto-assert 3: comparisons are valid only between rows with identical
     serving config."""

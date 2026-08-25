@@ -128,6 +128,17 @@ class RegistryError(ValueError):
     fail-closed handlers stop on it without being taught a new exception."""
 
 
+class UninspectedConfig(RegistryError):
+    """The caller asked the gate to check a run against nothing.
+
+    Its own type because "your requested config contradicts the row" and "you
+    handed me no requested config" have different fixes, and because the second
+    one used to pass silently. A gate that inspected zero fields has not passed;
+    it has failed to run, and the run it waved through gets labelled with a
+    serving config nobody confirmed.
+    """
+
+
 class StructurallyImpossible(RegistryError):
     """Refusal case (c): the driver cannot express this cell at all.
 
@@ -459,7 +470,18 @@ def check_run_config(row, requested):
     about `quant` is not claiming anything false about it. What is refused is a
     stated intent that CONTRADICTS the row, because the row is the label every
     result gets reported under.
+
+    Naming NO field is different, and is refused outright. Returns the number of
+    fields inspected so a caller (and the tests) can tell a pass from a
+    no-op: a check that comes back quiet after comparing nothing is
+    indistinguishable from a check that compared everything and agreed.
     """
+    if not requested:
+        raise UninspectedConfig(
+            f"refusing to clear {row_key(row)} against zero requested serving "
+            f"fields. Name what the run will actually use -- at minimum "
+            f"{', '.join(SERVING_FIELDS)} -- because a gate that inspected zero "
+            f"fields has not agreed with the row, it has failed to look at it.")
     diffs = []
     for field, want in requested.items():
         if field not in SERVING_FIELDS:
@@ -476,6 +498,7 @@ def check_run_config(row, requested):
               "Either change the server to match the row (a human action -- this "
               "code does not touch LM Studio's settings) or record a new row for "
               "the config you actually intend to run.")
+    return len(requested)
 
 
 def check_comparable(row_a, row_b):
