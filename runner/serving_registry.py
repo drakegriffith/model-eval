@@ -1046,6 +1046,21 @@ def cmd_validate(args):
     inspected. A validator that inspected zero rows has not passed."""
     rows = load_rows(args.path)
     problems = []
+    # GAPS are not PROBLEMS, and that distinction is the point of this command.
+    # A problem means the registry contradicts itself or runner/registry.py and
+    # somebody has to fix a value. A gap means a row is missing evidence a rule
+    # requires -- nobody has measured the thing yet. Both must be visible; only
+    # the first is a failure.
+    #
+    # Before this, a gap was invisible: validate printed "OK" over the pi row,
+    # which carries neither a reasoning probe nor a noise probe, so a reader
+    # asking "is this registry ready to report against?" was told yes, in one
+    # word. The asymmetry between the two shipped rows is HONEST -- findings.md
+    # never says which driver the panel's reasoning probe ran under, and copying
+    # it across would manufacture a measurement -- but nothing marked it as a gap
+    # rather than a choice. That is auto-assert rule 4's on-add half going
+    # unenforced (issue #12, cosmetic item 2).
+    gaps = []
     for row in rows:
         try:
             registry.resolve_model(row["model"] + "-local")
@@ -1053,14 +1068,40 @@ def cmd_validate(args):
             problems.append(f"{row_key(row)}: {e}")
         if row["deterministic_loops"] and row["noise_probe"] is None:
             problems.append(f"{row_key(row)}: determinism asserted with no probe")
+        # Rule 4, the on-add half. Named per row, because "which row is unprobed"
+        # is the fact a reader needs, not a total.
+        if row.get("reasoning_probe") is None:
+            gaps.append(
+                f"{row_key(row)}: no reasoning-token probe (auto-assert rule 4). "
+                f"GLM's reasoning tokens are drawn from max_tokens, so without "
+                f"one this row's max_tokens_floor rests on no measurement taken "
+                f"under this driver.")
+        # Rule 5. check_comparable already refuses on a missing noise probe, so a
+        # row without one cannot enter a comparison at all -- better said here,
+        # once, than discovered at analysis time.
+        if row.get("noise_probe") is None:
+            gaps.append(
+                f"{row_key(row)}: no noise probe (auto-assert rule 5), so "
+                f"check_comparable will refuse every comparison involving it.")
     print(f"rows inspected: {len(rows)}")
     for p in problems:
-        print(f"  {p}")
+        print(f"  PROBLEM  {p}")
+    for g in gaps:
+        print(f"  GAP      {g}")
     if not rows:
         print("UNENFORCED: the registry is empty, so nothing was checked")
         return 2
     if problems:
+        print(f"FAILED: {len(problems)} problem(s), {len(gaps)} evidence gap(s)")
         return 1
+    if gaps:
+        # Deliberately NOT the word "OK" alone. The registry passed its
+        # consistency checks and is not fully evidenced, and a one-word summary
+        # cannot say both -- saying only the first is what made this a finding.
+        print(f"CONSISTENT, WITH GAPS: {len(rows)} row(s) internally consistent; "
+              f"{len(gaps)} evidence gap(s) named above. A row carrying a gap can "
+              f"be recorded, but should not be reported against until probed.")
+        return 0
     print("OK")
     return 0
 
