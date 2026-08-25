@@ -19,11 +19,13 @@ MOCK mode (no tokens spent):
 import argparse
 import contextlib
 import fnmatch
+import ipaddress
 import json
 import os
 import random
 import re
 import shutil
+import socket
 import signal
 import subprocess
 import sys
@@ -874,7 +876,32 @@ def is_loopback_endpoint(url):
         return False
     if not host:
         return False
-    return host in ("localhost", "::1") or host.startswith("127.")
+    # `localhost` is the one NAME allowed through, because the platform pins it.
+    # Everything else must be a literal address that ipaddress agrees is
+    # loopback -- which covers all of 127/8 and ::1 without enumerating them.
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        pass
+    # ipaddress is STRICT and rejects the abbreviated IPv4 forms the resolver
+    # accepts: `127.1`, `0177.0.0.1` and `2130706433` all mean 127.0.0.1 to
+    # inet_aton, and a check that refuses them while the connection itself
+    # succeeds is measuring spelling rather than destination. inet_aton parses
+    # exactly those and rejects every DNS name -- `127.1.evil.com` included -- so
+    # it draws the line where it belongs: is this a numeric address, and is it in
+    # 127/8.
+    try:
+        return socket.inet_aton(host)[0] == 127
+    except OSError:
+        # Not a literal address at all, so it is a DNS name whose resolution is
+        # not knowable here. Refused -- and this is the whole finding: the
+        # original test was `host.startswith("127.")`, a STRING match on
+        # something that is not a string quantity, so `127.0.0.1.evil.com` -- an
+        # ordinary DNS name its owner points wherever they like -- walked
+        # straight through a check named after the thing it was meant to stop.
+        return False
 
 
 def check_local_endpoint(model, endpoint):
@@ -893,18 +920,48 @@ def check_local_endpoint(model, endpoint):
     The override itself is NOT refused -- changing the port is how this family is
     meant to be used, and the pre-registration makes the serving stack a human's
     to set. What is refused is leaving the machine the row describes.
+
+    THE REASON DEPENDS ON WHETHER A ROW EXISTS, and that is not decoration. Only
+    glm-4.7 has a serving row. Told the same sentence, qwen3-coder-next-local --
+    local family, no row -- was refused with "Its registry row pins parallel,
+    context_length and a measured 57-71 tok/s prefill band", quoting another
+    model's measurement at a model nobody has probed. Asserting a measurement
+    that was never taken is the exact failure this branch exists to prevent, and
+    a refusal that commits it while preventing it teaches the reader to distrust
+    the message.
+
+    Both are still refused. The row argument is the stronger one and applies only
+    to gated models, but the weaker one applies to every local run: "local" names
+    a family whose defining property is that the server is on this box, and an
+    off-box endpoint ships the task tree and the model's prompts to a host the
+    operator did not name in the config. Issue #7 is about the variable accepting
+    a non-loopback URL at all, not about one model's row.
     """
     if model is None or model_family(model) != "local":
         return
-    if not is_loopback_endpoint(endpoint):
-        raise ValueError(
-            f"run of {model!r} would be served from {endpoint!r}, which is not "
-            f"this machine (set via MODEL_EVAL_LOCAL_BASE_URL). Its registry row "
-            f"pins parallel, context_length and a measured 57-71 tok/s prefill "
-            f"band, all probed on the LOCAL LM Studio over loopback. None of "
-            f"them were measured on another host, and the results would be "
-            f"reported under them anyway. Point it back at loopback, or record a "
-            f"separate row for the machine you actually intend to serve from.")
+    if is_loopback_endpoint(endpoint):
+        return
+
+    head = (f"run of {model!r} would be served from {endpoint!r}, which is not "
+            f"this machine (set via MODEL_EVAL_LOCAL_BASE_URL). ")
+    gated = (serving_registry.serving_model_name(resolve_model(model)[0])
+             in serving_registry.models_with_rows(serving_registry.load_rows()))
+    if gated:
+        why = ("Its registry row pins parallel, context_length and a measured "
+               "57-71 tok/s prefill band, all probed on the LOCAL LM Studio over "
+               "loopback. None of them were measured on another host, and the "
+               "results would be reported under them anyway.")
+    else:
+        # No row, so there is no measurement to be mislabelled -- say that, and
+        # give the reason that does apply, rather than borrowing glm-4.7's.
+        why = ("This model has no serving registry row, so nothing here records "
+               "what it was served under and no measurement can be checked "
+               "against the host answering. A local-family run is defined by "
+               "serving from this box; an off-box endpoint sends the task tree "
+               "and the model's prompts somewhere the config never names.")
+    raise ValueError(
+        head + why + " Point it back at loopback, or record a row for the "
+        "machine you actually intend to serve from.")
 
 
 def invocation_provenance(model):
@@ -1872,6 +1929,43 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     return row
 
 
+def recorded_impossible_ids(results_path):
+    """run_ids already written as structurally-impossible.
+
+    Ported from PR #16. The runner is resume-friendly by design -- main() is
+    re-invoked to pick up pending work and re-walks the whole matrix each time --
+    and the impossible cells are still impossible on every pass, so without this
+    each invocation appended the same run_id again.
+
+    existing_ids() does not cover it: that set is built from rows whose
+    exit_reason is "ok" or "cap_exhausted", and a structurally_impossible row is
+    deliberately neither, since it must never look like a completed run.
+
+    Left unguarded, one re-invocation per day adds one duplicate status row per
+    day, so `structurally_impossible=N` in any report counts INVOCATIONS rather
+    than cells -- a number that grows while nothing runs.
+
+    A corrupt line is skipped rather than ending the scan: a half-written row
+    from a killed run must not make the guard forget every id after it, which
+    would silently restore the duplication.
+    """
+    ids = set()
+    if not os.path.exists(results_path):
+        return ids
+    with open(results_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("exit_reason") == "structurally_impossible":
+                ids.add(row.get("run_id"))
+    return ids
+
+
 def record_structurally_impossible(run, reason, results_path):
     """Write the row for a cell the driver cannot express (issue #12 c).
 
@@ -2010,9 +2104,11 @@ def main():
           f"declared={sorted(requested_serving) or 'none'}")
     if impossible:
         dropped = {r["run_id"] for r, _ in impossible}
+        already = recorded_impossible_ids(args.results)
         for r, why in impossible:
             print(f"  [structurally-impossible] {r['run_id']}: {why}")
-            record_structurally_impossible(r, why, args.results)
+            if r["run_id"] not in already:
+                record_structurally_impossible(r, why, args.results)
         runs = [r for r in runs if r["run_id"] not in dropped]
 
     # Same posture, same reason: a K outside the pre-registered range makes every
