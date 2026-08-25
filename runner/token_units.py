@@ -302,14 +302,63 @@ def _claude_session_id(run_id):
         return None
 
 
+# Which SESSION LOG a family leaves behind, as a declared table rather than an
+# if/else with a fallthrough -- the same shape, and for the same reason, as
+# usage_ledger.FAMILY_PARSE_BRANCH. Where the log lives is a property of the CLI
+# BINARY: the `claude` binary writes ~/.claude/projects/<slug>/<session>.jsonl
+# whatever endpoint it is pointed at, and `codex exec` writes a dated rollout.
+#
+# This was `if family in ("claude", "kimi") ... else <codex>` until 2026-08-25,
+# and the else was the defect (issue #14, F2). `local` -- the same claude binary
+# pointed at an LM Studio server -- was sent to the codex rollout index, matched
+# nothing, and returned (None, None, []), which crosscheck files as
+# `no_independent_record`. So the independent check reported "no record" for
+# 100% of GLM rows and reported it as a quiet inventory count, which reads as an
+# absence of problems rather than as a check that never ran.
+#
+# Fail-closed on an undeclared family for the reason the sibling table gives: an
+# unrouted family means nobody has checked which shape it emits, and the honest
+# answer to "which log?" is a named failure, never whichever branch was written
+# last. Adding a family costs a deliberate edit here plus a fixture test.
+CLAUDE_SESSION_LOG = "claude_session_log"
+CODEX_SESSION_LOG = "codex_rollout"
+
+SESSION_LOG_FAMILIES = {
+    "claude": CLAUDE_SESSION_LOG,
+    "kimi": CLAUDE_SESSION_LOG,
+    "local": CLAUDE_SESSION_LOG,
+    "codex": CODEX_SESSION_LOG,
+}
+
+# Every family the per-family report must carry a row for. Derived from the
+# routing table, never restated: the literal ("codex", "claude", "kimi") is what
+# left `local` -- the family this experiment is about -- out of the report even
+# after its rows parsed correctly.
+REPORTED_FAMILIES = tuple(sorted(SESSION_LOG_FAMILIES))
+
+
+def session_log_kind(family):
+    """Which session log `family` leaves. Raises on an undeclared family."""
+    kind = SESSION_LOG_FAMILIES.get(family)
+    if kind is None:
+        raise ValueError(
+            f"family {family!r} declares no session-log shape; declared: "
+            f"{', '.join(sorted(SESSION_LOG_FAMILIES))}. Add it to "
+            f"SESSION_LOG_FAMILIES with a fixture test proving which log it "
+            f"writes -- defaulting would re-open issue #14's F2, where a "
+            f"misrouted family reported 'no independent record' instead of an "
+            f"error.")
+    return kind
+
+
 def series_for_run(run_id, family, claude_idx=None, codex_idx=None):
     """(series, source_path, alternates) from the CLI's own session log.
 
     `alternates` are the other sessions recorded against the same scratch
-    directory. claude/kimi have none: the summary transcript names the exact
-    session id, so there is nothing to disambiguate.
+    directory. The claude-shaped families have none: the summary transcript
+    names the exact session id, so there is nothing to disambiguate.
     """
-    if family in ("claude", "kimi"):
+    if session_log_kind(family) == CLAUDE_SESSION_LOG:
         idx = claude_idx if claude_idx is not None else _claude_session_index()
         sid = _claude_session_id(run_id)
         d = idx.get(run_id)
@@ -434,9 +483,27 @@ def cmd_check(usage_path=USAGE_PATH, series_path=SERIES_PATH):
         slot[1] += 1
         if c["agrees"]:
             slot[0] += 1
+    #
+    # Iterated over the DECLARED families rather than over the families that
+    # happen to appear in the data. A tally built from the rows present prints
+    # nothing at all for a family with none, and an absent line reads as an
+    # absence of problems -- which is exactly how issue #14's F2 stayed
+    # invisible: every GLM row was unchecked and the output said so only as a
+    # count in the `no independent record` line above. A check that inspected
+    # zero subjects has not passed; it has failed to look, and it now says which.
     print("\n  CLI-reported session figure == sum of that CLI's per-request contexts:")
-    for fam, (ok, n) in sorted(per.items()):
-        print(f"    {fam:<8} {ok}/{n}")
+    for fam in REPORTED_FAMILIES:
+        ok, n = per.get(fam, (0, 0))
+        if n == 0:
+            print(f"    {fam:<8} 0 subjects -- this check did NOT run for this family")
+        else:
+            print(f"    {fam:<8} {ok}/{n}")
+    for fam in sorted(set(per) - set(REPORTED_FAMILIES)):
+        # A family in the data but not in the routing table. Reachable only if
+        # the ledger and the table disagree, and worth saying out loud rather
+        # than dropping on the floor.
+        ok, n = per[fam]
+        print(f"    {fam:<8} {ok}/{n}  (UNDECLARED family -- not in SESSION_LOG_FAMILIES)")
     return by["DISCREPANCY"]
 
 
@@ -472,9 +539,13 @@ def cmd_report(usage_path=USAGE_PATH, series_path=SERIES_PATH):
 
     print("\nper family, and the share of the axis that is cache-read "
           "(a reader's fresh-input rate does NOT apply to it):")
-    for fam in ("codex", "claude", "kimi"):
+    for fam in REPORTED_FAMILIES:
         fs = [f for (fm, _), lst in per.items() if fm == fam for f in lst]
         if not fs:
+            # Named, not skipped. The literal this loop used to iterate omitted
+            # `local` entirely, so the family the GLM experiment is about had no
+            # row and nothing said so (issue #14, F2).
+            print(f"  {fam:<8} 0 subjects -- no measured rows for this family")
             continue
         tot = sum(f["session_total"] for f in fs)
         cr = sum(f["cache_read_total"] for f in fs)
