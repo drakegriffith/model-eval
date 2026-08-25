@@ -197,10 +197,22 @@ def table2_efficiency_frontier(rows):
     table_modes = set()
     for (model, effort), rs in sorted(
             g.items(), key=lambda kv: (kv[0][0], EFFORT_ORDER.get(kv[0][1], 9))):
-        n = len(rs)
-        passes = sum(1 for r in rs if r.get("pass"))
-        tot = [out_tokens(r) for r in rs]
+        # Same denominator as table1, from the same predicate. Before this, five
+        # tables took n = len(rs) while table1 took the scored set, so one corpus
+        # published two different pass rates for the same runs.
+        scored, _excl = run_status.partition_for_rate(rs)
+        n = len(scored)
+        passes = sum(1 for r in scored if r.get("pass"))
+        # The token axis moves with it: tokens_out from a truncated run measures
+        # where the run was cut off, not what the tier chose to spend --
+        # ladder_from_results.py makes that argument for the same reason.
+        tot = [out_tokens(r) for r in scored]
         tpp = (sum(tot) / passes) if passes else None
+        # The MODE column is not a pass-rate question -- it reports which
+        # instrument produced this cell's rows, and that is true of a row
+        # whatever its exit status. Gating it on `scored` would blank the column
+        # for a cell whose runs all timed out, which is precisely when a reader
+        # most needs to know what produced them.
         cell_modes = sorted({corpus_gates.invocation_mode_of(r) for r in rs})
         table_modes.update(cell_modes)
         data.append([model, effort, "/".join(cell_modes), pct(passes, n),
@@ -225,9 +237,10 @@ def table3_harness_delta(rows):
         cell = {}
         for tag, hv in (("bare", False), ("harness", True)):
             rs = [r for r in rows if r["model"] == model and bool(r.get("harness")) == hv]
-            n = len(rs)
-            passes = sum(1 for r in rs if r.get("pass"))
-            toks = mean([out_tokens(r) for r in rs])
+            scored, _excl = run_status.partition_for_rate(rs)
+            n = len(scored)
+            passes = sum(1 for r in scored if r.get("pass"))
+            toks = mean([out_tokens(r) for r in scored])
             cell[tag] = (n, passes, (100.0 * passes / n if n else None), toks)
         b, h = cell["bare"], cell["harness"]
         if b[0] == 0 and h[0] == 0:
@@ -253,9 +266,10 @@ def table4_hybrid_vs_solo(rows):
     g = group(t3, lambda r: r["model"])
     data = []
     for model, rs in sorted(g.items()):
-        n = len(rs)
-        passes = sum(1 for r in rs if r.get("pass"))
-        toks = mean([out_tokens(r) for r in rs])
+        scored, _excl = run_status.partition_for_rate(rs)
+        n = len(scored)
+        passes = sum(1 for r in scored if r.get("pass"))
+        toks = mean([out_tokens(r) for r in scored])
         kind = "hybrid" if model == "hybrid" else "solo"
         data.append([model, kind, n, pct(passes, n), fnum(toks)])
     return md_table(["model", "kind", "n", "pass_rate", "mean_tokens_out"], data)
@@ -266,6 +280,10 @@ def table5_variance(rows):
                                "harness" if r.get("harness") else "bare", r["task"]))
     data = []
     for (model, effort, htag, task), rs in sorted(g.items()):
+        # Variance is measured over the runs that produced a measurement. A
+        # timeout's loc_changed and tokens_out describe where it was cut off, so
+        # including them measures the scheduler's spread, not the model's.
+        rs, _excl = run_status.partition_for_rate(rs)
         if len(rs) < 2:
             continue  # variance needs repeated cells
         passes = sum(1 for r in rs if r.get("pass"))
@@ -292,6 +310,11 @@ def table6_decision_matrix(rows, qual, ledger=None):
                   lambda r: (r["effort"], "harness" if r.get("harness") else "bare"))
         best, best_key = None, None
         for key, rs in g.items():
+            # "Best config" is chosen BY pass rate, so an ungated denominator
+            # here does not just misreport a number -- it picks a different
+            # winner. A config whose runs timed out most often would have looked
+            # worst on exactly the axis that is not the model's.
+            rs, _excl = run_status.partition_for_rate(rs)
             n = len(rs)
             passes = sum(1 for r in rs if r.get("pass"))
             rate = passes / n if n else 0
@@ -331,14 +354,22 @@ def table6_decision_matrix(rows, qual, ledger=None):
         q = mean([qual.get(r["run_id"]) for r in rs
                   if r.get("pass") and corpus_gates.summarizable(r)])
         rate_pct = 100.0 * rate
-        if rate_pct >= 90:
-            use = "reliable — default choice for this class"
-        elif rate_pct >= 50:
-            use = "usable with harness / review gate"
+        # An empty denominator is not a 0% pass rate. This table turns the number
+        # into ADVICE ("not yet reliable here"), so rendering 0% for a cell whose
+        # every run timed out would recommend against a model on the strength of
+        # a measurement nobody took. Same rule as table1's "no measured runs".
+        if not rs:
+            rate_cell, use = "no measured runs", "unmeasured — no basis to advise"
         else:
-            use = "not yet reliable here"
+            rate_cell = f"{rate_pct:.0f}%"
+            if rate_pct >= 90:
+                use = "reliable — default choice for this class"
+            elif rate_pct >= 50:
+                use = "usable with harness / review gate"
+            else:
+                use = "not yet reliable here"
         data.append([
-            model, f"{effort}/{htag}", f"{rate_pct:.0f}%",
+            model, f"{effort}/{htag}", rate_cell,
             fnum(q, 2) if q is not None else "-",
             tin_cell, use,
         ])
@@ -360,7 +391,11 @@ def table6_decision_matrix(rows, qual, ledger=None):
 
 def build_report(results, judgments, ledger=None):
     qual = quality_by_run(judgments)
-    n_pass = sum(1 for r in results if r.get("pass"))
+    # The headline count is the ESTIMAND's, not every row's. It used to read
+    # "N run row(s), P passing" with P taken over the whole corpus, so the
+    # sentence a reader meets first disagreed with every table beneath it.
+    scored, excl_status = run_status.partition_for_rate(results)
+    n_pass = sum(1 for r in scored if r.get("pass"))
 
     # AC#4: count the subjects out loud, in the header, before any table. A
     # filtered corpus and an unfiltered one must not render identically, and a
@@ -372,8 +407,17 @@ def build_report(results, judgments, ledger=None):
     parts = [
         "# model-gauntlet results",
         "",
-        f"Source: {len(results)} run row(s), {n_pass} passing, "
-        f"{len(judgments)} judged.",
+        f"Source: {len(results)} run row(s), "
+        + (f"{n_pass} passing of {len(scored)} scored" if scored
+           else "no measured runs (every row left the denominator)")
+        + f", {len(judgments)} judged.",
+        "",
+        "> **estimand** (issue #12 d) — a pass rate counts only runs that "
+        "produced a measurement of the model. Timeouts, infra faults and "
+        "structurally-impossible cells are distinct statuses, excluded from "
+        "every denominator above and reported here, never as model failures: "
+        + (run_status.format_excluded(excl_status) or "nothing excluded")
+        + f" (scored={len(scored)} of {len(results)}).",
         "",
         "> **dispositions** (ticket 31 AC#4 / ticket 34) — "
         + corpus_gates.format_exclusions(

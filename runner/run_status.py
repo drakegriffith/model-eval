@@ -47,6 +47,17 @@ protocol treatment out of the denominator.
 Stdlib only. No file I/O, no imports of the instrument.
 """
 
+# DECLARATION READ BY runner/import_gate.py. stats.py imports this module,
+# and a core module may import only the stdlib and other core modules, so
+# leaving it outside the boundary would make stats.py's own import illegal.
+# It qualifies on the merits and not merely by necessity: pure predicates
+# over a dict, no file I/O, no environment reads, nothing to configure.
+#
+# The name is ALSO listed in import_gate.CORE_MODULES and, independently, in
+# tests/test_import_gate.EXPECTED_CORE_MODULES -- three places on purpose,
+# and that is the intended friction, not duplication to design away.
+CORE_MODULE = True
+
 # The four dispositions, plus the one that says nobody has decided.
 SCORED = "scored"
 TIMEOUT = "timeout"

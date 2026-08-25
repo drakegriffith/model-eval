@@ -38,6 +38,7 @@ sys.path.insert(0, RUNNER_DIR)
 # is named in both copies of import_gate's literal list). A core module may import
 # the stdlib and the core, nothing else.
 import corpus_gates  # noqa: E402
+import run_status  # noqa: E402
 
 # 95% two-sided normal quantile (z_{0.975}), full precision.
 Z95 = 1.959963984540054
@@ -583,9 +584,24 @@ def build_report(results, judgments):
     # excluded from every test below, because its `pass` was never earned by
     # enumeration and its token count describes a truncated session. The
     # predicate is corpus_gates', not a private copy.
+    #
+    # TWO gates, because there are two axes and they disagree on exactly one
+    # status (issue #12 d). `corpus_gates.summarizable` answers "are this row's
+    # NUMBERS publishable" -- is the session truncated. `run_status.in_denominator`
+    # answers "may this row enter a PASS RATE" -- did the model get a fair
+    # attempt. A `cap_exhausted` run is a model measurement (it spent its K
+    # revisions and did not converge, which the estimand scores as a failure)
+    # whose token counts describe a truncated session, so it belongs in the
+    # first denominator and not the second.
+    #
+    # Every section on this page is a PASS-axis test except §6, which is the one
+    # that reads tokens and applies the summarizable gate itself. Gating the page
+    # on summarizable alone silently dropped every capped run from the exact
+    # tests, which is the estimand's own headline number going missing.
     n_in = len(results)
     kept, excluded = corpus_gates.summarizable_rows(results)
-    results = kept
+    scored, excl_status = run_status.partition_for_rate(results)
+    results = scored
 
     n_pass = sum(1 for r in results if is_pass(r))
     parts = [
@@ -597,6 +613,13 @@ def build_report(results, judgments):
         "",
         f"Source: {len(results)} run row(s), {n_pass} passing, "
         f"{len(judgments)} judged.",
+        "",
+        "> **estimand** (issue #12 d) — the pass axis on this page counts only "
+        "runs that produced a measurement of the model. Timeouts, infra faults "
+        "and structurally-impossible cells are distinct statuses, excluded from "
+        "every denominator and reported here, never as model failures: "
+        + (run_status.format_excluded(excl_status) or "nothing excluded")
+        + f" (scored={len(scored)} of {n_in}).",
         "",
         "> **exclusions** — "
         + corpus_gates.format_exclusions("results rows", n_in, kept, excluded)
@@ -611,7 +634,13 @@ def build_report(results, judgments):
         section_effort_rungs(results),
         section_harness(results),
         section_permutation(results),
-        section_cost_matched(results),
+        # §6 is the one section that reads a TOKEN column, so it is the one
+        # section handed the token-gated set rather than the pass-gated one.
+        # Gating here, at the single call site, rather than inside the section:
+        # this function owns "which rows may a section see" (see THE GATE above),
+        # and a section that re-filters its own input is a second copy of the
+        # rule that can drift from this one.
+        section_cost_matched([r for r in results if corpus_gates.summarizable(r)]),
         section_judges(judgments),
         section_power(results),
     ]
