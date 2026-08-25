@@ -152,6 +152,25 @@ def group(rows, keyfn):
 # driver. All 268 archived rows predate the field entirely, so a corpus with
 # nothing to disambiguate renders exactly as before and no published number is
 # restated.
+# THE TOKEN AXIS. Separate from the pass axis on purpose, and this is the one
+# place that says which rows a spend number may average.
+#
+# `run_status.in_denominator` counts cap_exhausted as SCORED -- correctly: a
+# model that spent its K revisions and did not converge DID get a fair attempt,
+# so it belongs in the pass denominator as a failure. But its tokens_out records
+# where the BROKER cut generation off, not what the tier chose to spend, so it
+# must not enter a spend mean.
+#
+# `ladder_from_results.tiers_for` and `stats.section_cost_matched` already draw
+# the line here. Until this commit tables 2-6 drew it at in_denominator instead,
+# so one corpus published two different spend means -- 1000 via the ladder and
+# 752 via table2 -- while table2's own comment cited the ladder as its authority.
+def token_rows(rs):
+    """(rows a spend number may average, count excluded as truncated)."""
+    kept = [r for r in rs if corpus_gates.summarizable(r)]
+    return kept, len(rs) - len(kept)
+
+
 def driver_of(row):
     return row.get("driver")
 
@@ -240,7 +259,8 @@ def table2_efficiency_frontier(rows):
         # The token axis moves with it: tokens_out from a truncated run measures
         # where the run was cut off, not what the tier chose to spend --
         # ladder_from_results.py makes that argument for the same reason.
-        tot = [out_tokens(r) for r in scored]
+        spend, _dropped = token_rows(rs)
+        tot = [out_tokens(r) for r in spend]
         tpp = (sum(tot) / passes) if passes else None
         # The MODE column is not a pass-rate question -- it reports which
         # instrument produced this cell's rows, and that is true of a row
@@ -276,7 +296,7 @@ def table3_harness_delta(rows):
             scored, _excl = run_status.partition_for_rate(rs)
             n = len(scored)
             passes = sum(1 for r in scored if r.get("pass"))
-            toks = mean([out_tokens(r) for r in scored])
+            toks = mean([out_tokens(r) for r in token_rows(rs)[0]])
             cell[tag] = (n, passes, (100.0 * passes / n if n else None), toks)
         b, h = cell["bare"], cell["harness"]
         if b[0] == 0 and h[0] == 0:
@@ -305,7 +325,7 @@ def table4_hybrid_vs_solo(rows):
         scored, _excl = run_status.partition_for_rate(rs)
         n = len(scored)
         passes = sum(1 for r in scored if r.get("pass"))
-        toks = mean([out_tokens(r) for r in scored])
+        toks = mean([out_tokens(r) for r in token_rows(rs)[0]])
         kind = "hybrid" if model == "hybrid" else "solo"
         data.append([model, kind, n, pct(passes, n), fnum(toks)])
     return md_table(["model", "kind", "n", "pass_rate", "mean_tokens_out"], data)
@@ -324,8 +344,9 @@ def table5_variance(rows):
         if len(rs) < 2:
             continue  # variance needs repeated cells
         passes = sum(1 for r in rs if r.get("pass"))
-        locs = [r.get("loc_changed", 0) for r in rs]
-        toks = [out_tokens(r) for r in rs]
+        spend, _dropped = token_rows(rs)
+        locs = [r.get("loc_changed", 0) for r in spend]
+        toks = [out_tokens(r) for r in spend]
         data.append([
             f"{model}/{effort}/{htag}", task, len(rs), f"{passes}/{len(rs)}",
             f"{min(locs)}/{round(statistics.median(locs))}/{max(locs)}",
@@ -357,7 +378,7 @@ def table6_decision_matrix(rows, qual, ledger=None):
             n = len(rs)
             passes = sum(1 for r in rs if r.get("pass"))
             rate = passes / n if n else 0
-            toks = mean([out_tokens(r) for r in rs]) or 0
+            toks = mean([out_tokens(r) for r in token_rows(rs)[0]]) or 0
             score = (rate, -toks)
             if best is None or score > best:
                 best, best_key = score, (key, rate, toks, rs)
