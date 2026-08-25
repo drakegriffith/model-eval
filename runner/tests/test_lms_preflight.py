@@ -188,9 +188,12 @@ def test_cli_exits_with_the_refusal_code_on_todays_state():
     assert "65536" in proc.stdout and "131072" in proc.stdout
 
 
-def test_cli_exits_with_the_uninspectable_code_when_nothing_is_loaded():
-    """Could-not-inspect is not a pass, and it is not the same failure as a
-    mismatch either."""
+def test_cli_exits_with_the_not_loaded_code_when_nothing_is_loaded():
+    """Not a pass, not a mismatch, and -- since the 4/5 split -- not the same
+    thing as an unreadable table either. LM Studio ANSWERED here and simply does
+    not hold the model, so the operator's action is "load it", not "start the
+    server". The parent type is still what a caller catches to mean "the
+    pre-flight did not clear"."""
     header = fixture(LIVE_MISMATCH).splitlines()[1]
     empty = os.path.join(FIXTURES, "lms-ps-nothing-loaded.txt")
     with open(empty, "w", encoding="utf-8") as f:
@@ -198,9 +201,10 @@ def test_cli_exits_with_the_uninspectable_code_when_nothing_is_loaded():
     try:
         proc = run_cli("--lms-output", empty)
 
-        assert proc.returncode == sr.EXIT_PREFLIGHT_UNINSPECTABLE
-        assert proc.returncode == 4
+        assert proc.returncode == sr.EXIT_PREFLIGHT_NOT_LOADED
+        assert proc.returncode == 5
         assert proc.returncode != 0
+        assert issubclass(sr.PreflightNotLoaded, sr.PreflightUninspectable)
     finally:
         os.remove(empty)
 

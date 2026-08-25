@@ -787,12 +787,23 @@ def check_dispatch(rows, model, driver, requested_serving, harness_level=None,
 # lms_ps_command() is the whole surface this module will invoke, it is `ps`, and
 # a test asserts the argv rather than trusting this comment.
 #
-# The exit codes are distinct on purpose. A caller scripting the stage must be
-# able to tell "your matrix is wrong" (2, from the runner) from "go and change
-# the server" (3) from "I could not find out" (4). Neither 3 nor 4 is a pass:
-# could-not-inspect is a result requiring a decision, never a quiet success.
+# The exit codes are distinct on purpose, and each one names a DIFFERENT ACTION
+# by a different person. A caller scripting the stage must be able to tell "your
+# matrix is wrong" (2, from the runner) from "go and change the server" (3) from
+# "load the model" (5) from "I could not find out at all" (4).
+#
+# 5 was split out of 4 because those two were one code and are two jobs: a model
+# that is not loaded means LM Studio is up and answering and simply does not hold
+# glm-4.7, which is fixed by loading it; an unreadable `lms ps` means the binary
+# is missing or the server is down, which is fixed somewhere else entirely. An
+# operator handed one number for both has to go and look anyway, which is the
+# work this command exists to save.
+#
+# None of 3, 4 or 5 is a pass. Could-not-inspect is a result requiring a
+# decision, never a quiet success.
 EXIT_PREFLIGHT_MISMATCH = 3
 EXIT_PREFLIGHT_UNINSPECTABLE = 4
+EXIT_PREFLIGHT_NOT_LOADED = 5
 
 LMS_BINARY = os.path.expanduser("~/.lmstudio/bin/lms")
 
@@ -816,6 +827,17 @@ class PreflightUninspectable(RegistryError):
     stopped LM Studio prints a clean, empty, perfectly parseable table, and
     reading that as "nothing disagreed" is precisely a gate that inspected zero
     subjects and reported success.
+    """
+
+
+class PreflightNotLoaded(PreflightUninspectable):
+    """LM Studio answered, and this model is not in it.
+
+    A SUBTYPE rather than a sibling, because everything true of an
+    uninspectable state is true of this one -- it is not a pass, and no
+    comparison happened. What it adds is that the server was reachable, so the
+    operator's next action is "load the model", not "start LM Studio". A caller
+    that only needs "did the pre-flight clear" still catches the parent.
     """
 
 
@@ -887,11 +909,12 @@ def observed_for(model, loaded):
         if row.get("identifier") == model or row.get("model") == model:
             return row
     seen = ", ".join(sorted(r.get("identifier", "?") for r in loaded)) or "(nothing)"
-    raise PreflightUninspectable(
+    raise PreflightNotLoaded(
         f"model {model!r} is not loaded in LM Studio, so its live serving config "
         f"could not be inspected. Loaded: {seen}. This is NOT a pass -- a "
-        f"pre-flight that inspected zero subjects has failed to look. Load the "
-        f"model in LM Studio (a human action) and re-run.")
+        f"pre-flight that inspected zero subjects has failed to look. LM Studio "
+        f"itself answered, so the action is to LOAD THE MODEL (a human action) "
+        f"and re-run; the server does not need starting.")
 
 
 def check_live_serving(row, observed):
@@ -962,6 +985,12 @@ def cmd_preflight(args):
     except PreflightMismatch as e:
         print(f"preflight: MISMATCH (source: {source})\n{e}")
         return EXIT_PREFLIGHT_MISMATCH
+    except PreflightNotLoaded as e:
+        # Caught BEFORE its parent, or the subtype's whole purpose is lost to
+        # the broader handler below -- the same ordering rule the dispatch gate
+        # follows for StructurallyImpossible.
+        print(f"preflight: MODEL NOT LOADED (source: {source})\n{e}")
+        return EXIT_PREFLIGHT_NOT_LOADED
     except (PreflightUninspectable, RegistryError) as e:
         print(f"preflight: COULD NOT INSPECT (source: {source})\n{e}")
         return EXIT_PREFLIGHT_UNINSPECTABLE

@@ -58,14 +58,20 @@ Stdlib only. No file I/O, no imports of the instrument.
 # and that is the intended friction, not duplication to design away.
 CORE_MODULE = True
 
-# The four dispositions, plus the one that says nobody has decided.
+# The five dispositions, plus the one that says nobody has decided.
 SCORED = "scored"
 TIMEOUT = "timeout"
 INFRA = "infra"
 STRUCTURAL = "structurally_impossible"
+# Mock runs apply solution.patch and never call a model. These were filed under
+# INFRA, which kept every denominator correct and made the REPORTED number
+# misleading: a --mock sweep printed "infra=75", and "infra=75" is what a badly
+# broken serving stack looks like. The separate report exists to be read by an
+# operator, so a class that makes it misread defeats the point of having one.
+MOCK = "mock"
 UNCLASSIFIED = "unclassified"
 
-# Only these two put a row in the denominator.
+# Only this one puts a row in the denominator.
 IN_DENOMINATOR = (SCORED,)
 
 # The declared table. An exit_reason absent from it is UNCLASSIFIED, never
@@ -97,15 +103,15 @@ EXIT_REASON_CLASS = {
     # tests, and they are not measurements of anything, so they never enter a
     # rate. Named rather than left to fall through to UNCLASSIFIED, so a real
     # unknown status stays distinguishable from a deliberate non-measurement.
-    "mock": INFRA,
-    "mock_fail": INFRA,
-    "mock_patch_failed": INFRA,
+    "mock": MOCK,
+    "mock_fail": MOCK,
+    "mock_patch_failed": MOCK,
 }
 
 # When run.py appends a second reason with '+', the row carries both facts. The
 # worse one wins, worst first: a run that timed out AND whose grader hung is
 # still, first, a run nobody measured.
-_SEVERITY = (UNCLASSIFIED, STRUCTURAL, TIMEOUT, INFRA, SCORED)
+_SEVERITY = (UNCLASSIFIED, STRUCTURAL, TIMEOUT, INFRA, MOCK, SCORED)
 
 
 def status_class(exit_reason):
