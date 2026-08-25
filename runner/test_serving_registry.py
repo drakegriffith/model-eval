@@ -252,6 +252,41 @@ def test_check_run_config_reports_how_many_fields_it_inspected():
     assert sr.check_run_config(_row(), dict(FULL_SERVING)) == 6
 
 
+@pytest.mark.parametrize("key", ["max_tokens", "max_tokens_floor"])
+def test_a_request_above_the_floor_is_not_a_mismatch(key):
+    """A floor is a minimum, not an equality. 8192 is the value below which GLM
+    returns empty content (5/6 probes empty at a 600-token cap); a run asking for
+    16384 is further from that failure, not in conflict with the row. Comparing
+    it with == refused the safest possible request."""
+    assert sr.check_run_config(_row(), {key: 16384}) == 1
+    assert sr.check_run_config(_row(), {key: 8192}) == 1
+
+
+@pytest.mark.parametrize("key", ["max_tokens", "max_tokens_floor"])
+def test_a_request_below_the_floor_is_refused(key):
+    """600 is the cap the panel measured returning empty content. The refusal
+    names the floor and the reason, because the fix is to raise the cap."""
+    with pytest.raises(sr.RegistryError) as e:
+        sr.check_run_config(_row(), {key: 600})
+    msg = str(e.value)
+    assert "600" in msg and "8192" in msg
+    assert "floor" in msg.lower()
+
+
+def test_the_floor_is_still_an_equality_between_rows():
+    """Floor semantics belong to (a), not to (b). Two rows that disagree on the
+    floor were produced under different serving configs and are not comparable,
+    whichever floor is higher."""
+    a, b = _row(), _row()
+    for r in (a, b):
+        r["serving"]["quant"] = "Q4_K_M"
+        sr.record_noise_probe(r, flip_rate=0.0, date="2026-08-25", identical=5, of=5)
+    b["serving"]["max_tokens_floor"] = 16384
+    with pytest.raises(sr.RegistryError) as e:
+        sr.check_comparable(a, b)
+    assert "max_tokens_floor" in str(e.value)
+
+
 def test_refusal_b_cross_model_comparison_across_different_serving_configs():
     """(b) Auto-assert 3: comparisons are valid only between rows with identical
     serving config."""

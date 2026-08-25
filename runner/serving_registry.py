@@ -100,6 +100,22 @@ UNKNOWN = "unknown"
 SERVING_FIELDS = ("parallel", "context_length", "max_tokens_floor",
                   "temperature", "seed", "quant")
 
+# Fields whose name means a MINIMUM, and which check_run_config therefore
+# compares with >= rather than ==. Only max_tokens_floor today. The distinction
+# is not cosmetic: comparing a floor by equality refuses the safest request a
+# caller can make (a cap well above the floor) while accepting only the exact
+# boundary value.
+#
+# Between ROWS the same field is still an equality -- see check_comparable. Two
+# rows disagreeing on the floor were produced under different serving configs
+# and are not comparable, whichever floor is higher.
+FLOOR_FIELDS = ("max_tokens_floor",)
+
+# What a RUN calls the thing the ROW calls a floor. A run does not request a
+# floor, it requests a cap, and rejecting `max_tokens` as "not a pinned serving
+# field" taught callers to send the wrong key.
+REQUEST_ALIASES = {"max_tokens": "max_tokens_floor"}
+
 # Auto-assert 2: the capability manifest is a fact of the DRIVER, not a choice
 # of whoever adds the model. pi's surface was measured by the panel (7 tools;
 # grep/find/ls off by default; --skill, --prompt-template, -e extensions; no
@@ -484,12 +500,24 @@ def check_run_config(row, requested):
             f"fields has not agreed with the row, it has failed to look at it.")
     diffs = []
     for field, want in requested.items():
+        field = REQUEST_ALIASES.get(field, field)
         if field not in SERVING_FIELDS:
             raise RegistryError(
                 f"{field!r} is not a pinned serving field; pinned: "
                 f"{', '.join(SERVING_FIELDS)}")
         have = row["serving"][field]
-        if have != want:
+        if field in FLOOR_FIELDS:
+            # A floor is a minimum, not an equality. 8192 is the value BELOW
+            # which GLM returns empty content, so a run asking for more is
+            # further from that failure, not in conflict with the row.
+            # Equality here refused the safest request a caller could make.
+            if want < have:
+                diffs.append(
+                    f"{field}: run requests {want!r}, below the row's floor of "
+                    f"{have!r} -- GLM reasoning tokens consume max_tokens, and at "
+                    f"a 600-token cap 5/6 probes returned empty content. Raise the "
+                    f"cap; a run under the floor measures the cap, not the model.")
+        elif have != want:
             diffs.append(f"{field}: registry row says {have!r}, run requests {want!r}")
     if diffs:
         raise RegistryError(
