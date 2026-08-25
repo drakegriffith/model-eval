@@ -25,7 +25,6 @@ import os
 import random
 import re
 import shutil
-import socket
 import signal
 import subprocess
 import sys
@@ -881,20 +880,15 @@ def is_loopback_endpoint(url):
     # loopback -- which covers all of 127/8 and ::1 without enumerating them.
     if host == "localhost":
         return True
+    # ipaddress is STRICT and it stays strict: the abbreviated forms (`127.1`,
+    # `0177.0.0.1`, `2130706433`) are refused even though a resolver would accept
+    # them as loopback. That direction is deliberate. A false REFUSAL of an
+    # unusual spelling costs an operator one edit; a false ACCEPT is the bug this
+    # check exists to stop, and inet_aton's lax parsing is a wider accept surface
+    # bought for no safety.
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
-        pass
-    # ipaddress is STRICT and rejects the abbreviated IPv4 forms the resolver
-    # accepts: `127.1`, `0177.0.0.1` and `2130706433` all mean 127.0.0.1 to
-    # inet_aton, and a check that refuses them while the connection itself
-    # succeeds is measuring spelling rather than destination. inet_aton parses
-    # exactly those and rejects every DNS name -- `127.1.evil.com` included -- so
-    # it draws the line where it belongs: is this a numeric address, and is it in
-    # 127/8.
-    try:
-        return socket.inet_aton(host)[0] == 127
-    except OSError:
         # Not a literal address at all, so it is a DNS name whose resolution is
         # not knowable here. Refused -- and this is the whole finding: the
         # original test was `host.startswith("127.")`, a STRING match on
