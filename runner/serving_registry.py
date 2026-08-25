@@ -75,9 +75,11 @@ Wiring (APPLIED -- runner/run.py, issue #12). The recipe below is the code that
     1. The requested config is the DECLARED `serving:` block of the runs config,
        read by run.serving_config_from. It is deterministic and it is in version
        control, which a probe of the live server would not be. Whether the LIVE
-       server matches is a separate, pre-flight question -- see
-       run.py's `preflight` command, which refuses when `lms ps` disagrees with
-       the row. Two questions, two mechanisms; the gate does not poll anything.
+       server matches is a separate, pre-flight question -- see this module's
+       `preflight` subcommand, which refuses with exit 3 when `lms ps` disagrees
+       with the row and exit 4 when it cannot find out. Two questions, two
+       mechanisms; the gate does not poll anything, and the pre-flight gates
+       nothing.
 
     2. The driver comes through require_driver, which RAISES on a missing one.
        `.get("driver", "claude-code")` files every pi run against the claude-code
@@ -118,6 +120,8 @@ Limitations
 """
 import argparse
 import os
+import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -762,6 +766,219 @@ def check_dispatch(rows, model, driver, requested_serving, harness_level=None,
 
 
 # --------------------------------------------------------------------------- #
+# Pre-flight: the LIVE server versus the row
+# --------------------------------------------------------------------------- #
+# The gate above compares a run's DECLARED serving config against its row. That
+# is deterministic and reviewable, and it cannot see the one thing that actually
+# goes wrong: the declaration and the row agreeing with each other while the
+# SERVER sits in a third state. Nothing in this repo can see that without looking
+# at the server, so this is the second mechanism:
+#
+#     gate       declared config vs row     every dispatch, from files
+#     preflight  LIVE server     vs row     once, before a stage starts
+#
+# The pre-registration makes the remedy a human's, not this code's:
+#
+#     Serving config for every run: LM Studio PARALLEL=1, context 131072 ...
+#     If LM Studio is not already in this config, stop and ask Drake to set it;
+#     do not change it yourself.
+#
+# So this READS and only reads. `lms` can load, unload and reconfigure models;
+# lms_ps_command() is the whole surface this module will invoke, it is `ps`, and
+# a test asserts the argv rather than trusting this comment.
+#
+# The exit codes are distinct on purpose. A caller scripting the stage must be
+# able to tell "your matrix is wrong" (2, from the runner) from "go and change
+# the server" (3) from "I could not find out" (4). Neither 3 nor 4 is a pass:
+# could-not-inspect is a result requiring a decision, never a quiet success.
+EXIT_PREFLIGHT_MISMATCH = 3
+EXIT_PREFLIGHT_UNINSPECTABLE = 4
+
+LMS_BINARY = os.path.expanduser("~/.lmstudio/bin/lms")
+
+# `lms ps` column header -> the row field it corresponds to. Only the two that
+# the registry pins and that LM Studio exposes here; temperature, seed and quant
+# are per-request or per-quantisation facts and do not appear in `ps` at all,
+# which is why this check is narrower than check_run_config and says so.
+LMS_COLUMNS = {"CONTEXT": "context_length", "PARALLEL": "parallel"}
+
+PREFLIGHT_FIELDS = ("context_length", "parallel")
+
+
+class PreflightMismatch(RegistryError):
+    """The live server is not in the state the row was measured under."""
+
+
+class PreflightUninspectable(RegistryError):
+    """The live state could not be determined.
+
+    Its own type because it is NOT a mismatch and emphatically not a pass. A
+    stopped LM Studio prints a clean, empty, perfectly parseable table, and
+    reading that as "nothing disagreed" is precisely a gate that inspected zero
+    subjects and reported success.
+    """
+
+
+def lms_ps_command():
+    """The one command this module runs. Read-only by construction."""
+    return [LMS_BINARY, "ps"]
+
+
+def parse_lms_ps(text):
+    """Rows of `lms ps` output, as dicts.
+
+    Sliced on the HEADER's own column offsets rather than split on whitespace:
+    the SIZE column holds "158.74 GB", which is two tokens in one column, so a
+    naive split shifts CONTEXT and PARALLEL one place left and reads the wrong
+    numbers without failing.
+
+    A missing header raises. "Nothing is loaded" and "I could not read this"
+    must not both come back as an empty list -- the first is a fact, the second
+    is a failure to look.
+    """
+    lines = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in text.splitlines()]
+    header = next((line for line in lines if line.lstrip().startswith("IDENTIFIER")), None)
+    if header is None:
+        raise RegistryError(
+            f"could not find the `lms ps` header in this output, so nothing was "
+            f"parsed. An unreadable table is not an empty one. Got: {text[:200]!r}")
+
+    names = ["IDENTIFIER", "MODEL", "STATUS", "SIZE", "CONTEXT", "PARALLEL",
+             "DEVICE", "TTL"]
+    starts = []
+    for name in names:
+        idx = header.find(name)
+        starts.append(idx if idx >= 0 else None)
+    bounds = []
+    for i, start in enumerate(starts):
+        if start is None:
+            bounds.append(None)
+            continue
+        nxt = next((s for s in starts[i + 1:] if s is not None), None)
+        bounds.append((start, nxt if nxt is not None else len(header) + 1000))
+
+    out = []
+    for line in lines[lines.index(header) + 1:]:
+        if not line.strip():
+            continue
+        rec = {}
+        for name, bound in zip(names, bounds):
+            rec[name] = "" if bound is None else line[bound[0]:bound[1]].strip()
+        if not rec["IDENTIFIER"]:
+            continue
+        row = {"identifier": rec["IDENTIFIER"], "model": rec["MODEL"],
+               "status": rec["STATUS"], "size": rec["SIZE"],
+               "device": rec["DEVICE"], "ttl": rec["TTL"]}
+        for column, field in LMS_COLUMNS.items():
+            value = rec.get(column, "")
+            row[field] = int(value) if value.isdigit() else UNKNOWN
+        out.append(row)
+    return out
+
+
+def observed_for(model, loaded):
+    """The loaded entry for `model`, or PreflightUninspectable.
+
+    Matched on identifier rather than taking the first row: several models can be
+    loaded at once, and row 0 would pre-flight whichever happened to be listed
+    first.
+    """
+    for row in loaded:
+        if row.get("identifier") == model or row.get("model") == model:
+            return row
+    seen = ", ".join(sorted(r.get("identifier", "?") for r in loaded)) or "(nothing)"
+    raise PreflightUninspectable(
+        f"model {model!r} is not loaded in LM Studio, so its live serving config "
+        f"could not be inspected. Loaded: {seen}. This is NOT a pass -- a "
+        f"pre-flight that inspected zero subjects has failed to look. Load the "
+        f"model in LM Studio (a human action) and re-run.")
+
+
+def check_live_serving(row, observed):
+    """Refuse when the live config differs from the row. Returns what it compared.
+
+    Narrower than check_run_config on purpose: `lms ps` exposes CONTEXT and
+    PARALLEL and nothing else the registry pins, so temperature, seed and quant
+    are out of its reach. Returning the field names rather than None is the same
+    argument check_run_config makes by returning a count -- a check that came
+    back quiet after comparing nothing is indistinguishable from one that
+    compared everything and agreed.
+    """
+    diffs = []
+    inspected = []
+    for field in PREFLIGHT_FIELDS:
+        want = row["serving"][field]
+        have = observed.get(field, UNKNOWN)
+        if have == UNKNOWN:
+            raise PreflightUninspectable(
+                f"`lms ps` reported no {field} for {row['model']!r}, so the live "
+                f"value could not be determined. Not a pass.")
+        inspected.append(field)
+        if have != want:
+            diffs.append(f"{field}: row expects {want!r}, server reports {have!r}")
+    if not inspected:
+        raise PreflightUninspectable(
+            f"pre-flight compared zero fields for {row_key(row)}; a check that "
+            f"inspected nothing has not passed.")
+    if diffs:
+        raise PreflightMismatch(
+            f"LIVE serving config does not match registry row {row_key(row)}:\n  "
+            + "\n  ".join(diffs)
+            + "\n  STOP. The pre-registration says: 'If LM Studio is not already "
+              "in this config, stop and ask Drake to set it; do not change it "
+              "yourself.' Changing the server is a human action and this command "
+              "only reads. Dispatching against this state would produce rows "
+              "labelled with a serving config they were not produced under.")
+    return tuple(inspected)
+
+
+def cmd_preflight(args):
+    """Refuse to start a stage when the live server disagrees with the row."""
+    rows = load_rows(args.path)
+    try:
+        row = find_row(rows, args.model, args.driver)
+    except RegistryError as e:
+        print(f"preflight: {e}")
+        return EXIT_PREFLIGHT_UNINSPECTABLE
+
+    if args.lms_output:
+        with open(args.lms_output, encoding="utf-8") as f:
+            text = f.read()
+        source = args.lms_output
+    else:
+        source = " ".join(lms_ps_command())
+        try:
+            proc = subprocess.run(lms_ps_command(), stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"preflight: could not run `{source}` ({e}). NOT a pass.")
+            return EXIT_PREFLIGHT_UNINSPECTABLE
+        text = proc.stdout or ""
+
+    try:
+        loaded = parse_lms_ps(text)
+        observed = observed_for(args.model, loaded)
+        inspected = check_live_serving(row, observed)
+    except PreflightMismatch as e:
+        print(f"preflight: MISMATCH (source: {source})\n{e}")
+        return EXIT_PREFLIGHT_MISMATCH
+    except (PreflightUninspectable, RegistryError) as e:
+        print(f"preflight: COULD NOT INSPECT (source: {source})\n{e}")
+        return EXIT_PREFLIGHT_UNINSPECTABLE
+
+    # Say what was compared and what the numbers were. A bare "OK" is the same
+    # output a check that looked at nothing would print.
+    print(f"preflight OK (source: {source}) -- {args.model} x {args.driver}, "
+          f"{len(inspected)} field(s) inspected:")
+    for field in inspected:
+        print(f"  {field}: row {row['serving'][field]!r} == server "
+              f"{observed[field]!r}")
+    print("  NOT inspected here (not exposed by `lms ps`): "
+          + ", ".join(f for f in SERVING_FIELDS if f not in inspected))
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # CLI -- the thin UI over the same code
 # --------------------------------------------------------------------------- #
 def _kv(text):
@@ -871,6 +1088,17 @@ def main(argv=None):
 
     val = sub.add_parser("validate", help="check the registry against runner/registry.py")
     val.set_defaults(func=cmd_validate)
+
+    pre = sub.add_parser(
+        "preflight",
+        help="refuse to start a stage when the LIVE LM Studio config differs "
+             "from the row (reads `lms ps`; never changes anything)")
+    pre.add_argument("--model", default="glm-4.7")
+    pre.add_argument("--driver", default="claude-code", choices=DRIVERS)
+    pre.add_argument("--lms-output", default=None,
+                     help="read `lms ps` output from a FILE instead of running "
+                          "it -- how the fixtures in runner/tests are exercised")
+    pre.set_defaults(func=cmd_preflight)
 
     args = ap.parse_args(argv)
     return args.func(args) or 0
