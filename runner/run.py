@@ -766,6 +766,66 @@ def broker_enabled():
     return os.environ.get("GAUNTLET_NO_BROKER") != "1"
 
 
+# --------------------------------------------------------------------------- #
+# The model's environment (issue #15, finding F1)
+# --------------------------------------------------------------------------- #
+# Built by ALLOWLIST, never by copying os.environ and popping what looked
+# dangerous. This is the shape product/gauntlet_playground/executor.py:82
+# already uses, and it is here for the reason stated there: a subtractive env is
+# a claim about EVERYTHING THAT EXISTS, an additive one is a claim about ten
+# names, and only the second can be asserted positively -- which is what
+# runner/tests/test_child_env_allowlist.py does.
+#
+# Until 2026-08-25 this was `dict(os.environ)` minus ANTHROPIC_API_KEY and
+# OPENAI_API_KEY. Everything else rode in, and the list of what "everything
+# else" contained on this machine is not hypothetical:
+#
+#   ANTHROPIC_BASE_URL      re-points any arm at another endpoint, so a row
+#                           labelled claude-sonnet-5 could have been answered
+#                           by LM Studio
+#   ANTHROPIC_AUTH_TOKEN    the second name the binary reads a credential from;
+#                           popping only ANTHROPIC_API_KEY left it behind
+#   ANTHROPIC_MODEL         override which model actually answers, under the
+#   ANTHROPIC_SMALL_FAST_MODEL   row's own label
+#   CLAUDE_CODE_MAX_OUTPUT_TOKENS, MAX_THINKING_TOKENS
+#                           change the SERVING CONFIG the row is reported
+#                           under. serving_registry's gate cannot see this: the
+#                           gate compares the DECLARED config against the row,
+#                           and these change the actual one after it passed.
+#   XDG_CONFIG_HOME, XDG_DATA_HOME
+#                           re-point config/state discovery even after blocker
+#                           2 scoped HOME and CLAUDE_CONFIG_DIR
+#   CLAUDECODE, CLAUDE_EFFORT, CLAUDE_CODE_*
+#                           live whenever a sweep is launched from inside a
+#                           Claude Code session, which is how every sweep on
+#                           this machine has been launched
+#
+# CLAUDE_EFFORT is the one that ruins an experiment rather than merely
+# threatening it. `CLAUDE_EFFORT=high` in the parent is `CLAUDE_EFFORT=high` in
+# every arm, so an effort ladder measures one effort five times while its rows
+# carry five different `effort` labels -- and the dose ladder stage 2 exists to
+# fit would be fitted over a constant.
+#
+# Nothing on this list can carry a credential, an endpoint, a model choice or a
+# harness. Adding a name is therefore a decision about that class, not a
+# convenience: if a binary turns out to need something else, the missing name
+# shows up as a clean startup failure, which is a better outcome than a row
+# that ran under conditions nobody declared.
+CHILD_ENV_ALLOWLIST = ("PATH", "HOME", "SHELL", "USER", "LOGNAME",
+                       "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR")
+
+
+def child_env(source=None):
+    """The base environment for the model under test: the allowlist, and nothing.
+
+    Copies the names that are PRESENT and does not invent the ones that are
+    not -- handing a child a locale the parent never had is its own small lie
+    about the conditions the row was produced under.
+    """
+    src = os.environ if source is None else source
+    return {name: src[name] for name in CHILD_ENV_ALLOWLIST if name in src}
+
+
 def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=None):
     """Run headlessly, killing the process group on timeout. Returns (out, reason, wall).
 
@@ -792,6 +852,12 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=Non
     environment rather than left to the filesystem seal. `home_dir` overrides
     it with a directory a harness level supplies on purpose.
 
+    The environment the child gets is built by child_env()'s ALLOWLIST and then
+    added to here, never inherited and pruned (issue #15 F1). Every name below
+    is one this function put there on purpose; anything else the parent session
+    exported -- an endpoint, a model override, an output-token cap, an effort
+    tier -- does not reach the model under test.
+
     `bk` is a live broker.Broker (ticket 17). Its socket is the model's only
     route to acceptance feedback; the seal is widened by exactly that one
     directory, and the mirror is emptied to match. Two exit reasons come out of
@@ -800,9 +866,7 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=Non
     `broker_failed` (the counter faulted, so the run is uncounted and unusable
     under the pre-registration).
     """
-    env = dict(os.environ)
-    env.pop("ANTHROPIC_API_KEY", None)   # subscription auth only
-    env.pop("OPENAI_API_KEY", None)
+    env = child_env()   # ALLOWLIST, not os.environ minus two names -- issue #15 F1
     if model is not None and model_family(model) == "kimi":
         key = load_kimi_key()
         if not key:
