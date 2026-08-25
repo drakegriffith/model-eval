@@ -1,0 +1,81 @@
+# runs-glm-stage1.yaml -- the pre-registered GLM 4.7 autonomy experiment
+# (studio-handoff prompt-2-run-experiment.md, stage 1; model-eval issue #8).
+#
+# THIS FILE DECLARES A SERVING CONFIG, and that is what makes the serving gate
+# fire (issue #12). Every run whose model has a row in runner/models.yaml is
+# checked against that row before the first CLI call; a mismatch exits 2 having
+# spent nothing. The numbers below are the panel's SEAT-MEASURED config, and
+# they are also what the pre-registration fixes for every run.
+#
+# The gate reads the DECLARATION, not the live server. Whether LM Studio is
+# actually loaded this way is a separate, pre-flight question with a different
+# remedy -- a human changes the server -- and it is answered by
+#
+#     python3 runner/lms_preflight.py
+#
+# which refuses (exit 3) when the live CONTEXT/PARALLEL differ from the row, and
+# never modifies LM Studio's state. As of 2026-08-25 the Studio is loaded at
+# CONTEXT=65536 PARALLEL=4, which does NOT match: the pre-registration says to
+# stop and ask Drake to set it, not to change it.
+#
+# NOTHING IN THIS FILE HAS BEEN RUN. It is the matrix, declared; issue #12's
+# work was the gate that guards it.
+
+defaults:
+  # Wall-clock caps are a backstop, not the estimand. Rule 7 caps TURNS, and a
+  # run terminated by the wall clock carries a distinct status that is excluded
+  # from the pass-rate denominator (see run.py's TERMINATION_CLASSES).
+  timeout_t1_t2_s: 3600
+  timeout_t3_s: 7200
+  timeout_t4_s: 7200
+  timeout_t5_s: 7200
+  seed: 1337
+
+# The serving config every run below declares it will be served under. Compared
+# field-by-field against the (model, driver) row in runner/models.yaml.
+# max_tokens is a FLOOR on the row and is compared by ordering: a cap at or
+# above 8192 passes, one below it is refused. At a 600-token cap 5 of 6 panel
+# probes returned empty content, because GLM's reasoning tokens are drawn from
+# max_tokens.
+serving:
+  parallel: 1
+  context_length: 131072
+  max_tokens: 8192
+  temperature: 0
+  seed: 42
+
+sweeps:
+  # Stage 1, primary arm: unsupervised end-to-end completion, 15 tasks x 3 reps.
+  # A run counts as an autonomous pass only if the task's own check passes with
+  # ZERO parent intervention.
+  - name: glm-autonomy
+    driver: claude-code
+    harness: false
+    reps: [1, 2, 3]
+    tasks: [t1-py-a, t1-py-b, t1-ts-a, t1-ts-b, t2-py-a, t2-py-b, t2-ts-a, t2-ts-b, t3-a, t4-py-a, t4-py-b, t4-ts-a, t5-py-a, t5-py-b, t5-ts-a]
+    configs:
+      - {model: glm-4.7-local, effort: high}
+
+  # Positive control, 1 rep. Any task Sonnet fails is a broken task and leaves
+  # the denominator: a control-arm failure indicts the task, not GLM. Sonnet is
+  # a hosted model with no serving row, so the gate does not check it: there is
+  # no local serving config for a hosted arm to contradict.
+  - name: sonnet-control
+    driver: claude-code
+    harness: false
+    reps: [1]
+    tasks: [t1-py-a, t1-py-b, t1-ts-a, t1-ts-b, t2-py-a, t2-py-b, t2-ts-a, t2-ts-b, t3-a, t4-py-a, t4-py-b, t4-ts-a, t5-py-a, t5-py-b, t5-ts-a]
+    configs:
+      - {model: claude-sonnet-5, effort: high}
+
+  # Vehicle contrast, 1 rep, REPORTED IN A SEPARATE TABLE and never merged with
+  # the claude-code numbers: pi has no hooks and no subagents, so the driver is
+  # part of the treatment. Its own sweep rather than a second config entry above,
+  # so the separation is visible in the file rather than only in the analysis.
+  - name: pi-vehicle-contrast
+    driver: pi
+    harness: false
+    reps: [1]
+    tasks: [t1-py-a, t1-py-b, t1-ts-a, t1-ts-b, t2-py-a, t2-py-b, t2-ts-a, t2-ts-b, t3-a, t4-py-a, t4-py-b, t4-ts-a, t5-py-a, t5-py-b, t5-ts-a]
+    configs:
+      - {model: glm-4.7-local, effort: high}

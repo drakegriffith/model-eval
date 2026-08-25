@@ -49,20 +49,60 @@ Errors
     `unknown` refuses comparison, because two absences are not an equality --
     that is the could-not-determine result wearing a pass.
 
-Wiring (NOT applied here; runner/run.py is owned by another change this wave)
-    run.py already validates the whole matrix before the first CLI call, at the
-    `for r in runs:` loop around line 1415, inside a `except ValueError` that
-    collects failures and exits 2. The gate is one added call in that try
-    block:
+Wiring (APPLIED -- issue #12; the caller is run.py's check_serving_config)
+    This section used to carry a four-argument recipe, three of whose arguments
+    did not exist: `requested_serving_from` was illustrative pseudocode that
+    read as an existing helper, run dicts carried no `driver` key, and no config
+    carried a serving block for the helper to read. It is replaced here by what
+    the runner actually does, because a wiring note that cannot be followed is
+    worse than none.
 
-        serving_registry.check_dispatch(
-            serving_registry.load_rows(), r["model"], r.get("driver", "claude-code"),
-            requested_serving_from(cfg))
+    The two inputs, and where each comes from:
 
-    No other edit is needed: RegistryError is a ValueError, so the existing
-    handler already reports it in the "config rejected" block at zero cost. A
-    caller that wants the structurally-impossible cells reported as their own
-    status rather than as config errors catches StructurallyImpossible first.
+    `driver:`   declared in the runs config, on the sweep or on the config
+                entry. NEVER defaulted. `.get("driver", "claude-code")` would
+                file every pi run under the claude-code row, and findings.md
+                reports pi as a separate vehicle contrast, so the default would
+                merge two treatments into one label. A missing driver is a
+                config error.
+
+    `serving:`  a block of NUMBERS in the runs config, naming what the run will
+                actually be served under -- the DECLARED intent, not a probe of
+                the live server. Deterministic gating: the same config refuses
+                or passes the same way tomorrow. Whether the live server matches
+                the declaration is a separate, pre-flight question, answered by
+                lms_preflight.py, which refuses before a sweep starts and never
+                touches LM Studio's settings.
+
+    The call, as run.py makes it:
+
+        rows = serving_registry.load_rows()
+        model = serving_registry.serving_model_name(r["model"])   # strips -local
+        if serving_registry.has_row(rows, model):
+            serving_registry.check_dispatch(
+                rows, model, driver_of(r), cfg["serving"],
+                harness_level=r.get("harness_level"))
+
+    `serving_model_name` exists because the two registries name the same model
+    differently on purpose: registry.py's id carries the VEHICLE (`glm-4.7-local`
+    is the claude binary pointed at LM Studio), while a row here is keyed on the
+    model and carries the driver in its own field. One rule, stated once, so the
+    two rosters can drift only where a test says so.
+
+    `has_row` is what keeps the gate honest without making it universal: a model
+    with no row is a hosted model with no serving config to contradict, and is
+    not gated. A model WITH a row and no declared serving block is refused
+    (UninspectedConfig) rather than waved through. The runner prints how many
+    runs the gate inspected, because an unreported zero is indistinguishable
+    from the state issue #12 was filed about.
+
+    StructurallyImpossible is caught BEFORE ValueError at the call site. It
+    subclasses RegistryError subclasses ValueError, so a naive insertion into
+    run.py's existing `except ValueError` block would make one inexpressible
+    cell abort the whole sweep with exit 2. A matrix containing pi x L5 is not
+    an invalid config; it is a valid matrix containing a cell that does not
+    exist, and that cell is dropped with its own recorded status while the rest
+    of the matrix runs.
 
 Limitations
     - Hand-maintained facts, same as registry.py. The seed rows carry the
@@ -168,12 +208,20 @@ class StructurallyImpossible(RegistryError):
 # --------------------------------------------------------------------------- #
 # The registry file: a strict subset of YAML
 # --------------------------------------------------------------------------- #
-# Supported, and nothing else: comments, `key: value` maps nested by two-space
+# Supported, and nothing else: `key: value` maps nested by two-space
 # indentation, `- key: value` lists of maps, and scalars (int, float, true,
 # false, null, bare string, double-quoted string). Everything outside that
 # raises. The subset is small because it is exactly what dump_registry_yaml
 # emits -- the format is defined as what the writer writes, and the round-trip
 # test is what holds the two together.
+#
+# COMMENTS, precisely, because "comments" overstated it before the `" #"` fix
+# and the next person editing models.yaml by hand should learn the rule here
+# rather than from the exception: a comment may occupy its own line, or follow a
+# QUOTED value. A trailing comment after an unquoted value is a hard error, on
+# purpose -- the reader cannot tell such a `#` from one belonging to the
+# sentence, and a registry row that silently loses half its note still looks
+# plausible.
 _REFUSED = (
     ("\t", "tab indentation"),
 )
@@ -383,6 +431,37 @@ def load_rows(path=REGISTRY_PATH):
 
 def row_key(row):
     return (row["model"], row["driver"])
+
+
+# The suffix registry.py's ids carry for the local VEHICLE -- `glm-4.7-local` is
+# the claude binary pointed at an LM Studio server. A row here is keyed on the
+# MODEL and carries the driver in its own field, so the vehicle suffix has to
+# come off exactly once, in one place, rather than at each call site.
+LOCAL_ID_SUFFIX = "-local"
+
+
+def serving_model_name(model):
+    """The registry-row model name for a runner model id or alias.
+
+    Resolves through registry.resolve_model first, so an unknown name raises
+    there (a typo must not reach a paid CLI, and must not quietly miss the gate
+    either) and an alias is expanded by the one rule that owns aliases.
+    """
+    mid, _spec = registry.resolve_model(model)
+    if mid.endswith(LOCAL_ID_SUFFIX):
+        return mid[:-len(LOCAL_ID_SUFFIX)]
+    return mid
+
+
+def has_row(rows, model):
+    """True when any driver row exists for this model.
+
+    The gate's applicability test, and deliberately not `find_row(...) is not
+    None`: "this model has no serving config anyone pinned" (a hosted
+    subscription model) is a different fact from "this model is pinned but you
+    named a driver it has no row for", and the second must still refuse.
+    """
+    return any(row["model"] == model for row in rows)
 
 
 def find_row(rows, model, driver):

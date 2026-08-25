@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 import broker
 import registry
 import sandbox_seal
+import serving_registry
 import usage_ledger
 
 # Import direction is one-way and now acyclic (ticket 30): run -> usage_ledger ->
@@ -365,6 +366,15 @@ def build_runs(cfg):
                         model = conf["model"]
                         effort = resolve_effort(conf.get("effort", "high"), model, winning)
                         harness_tag = "harness" if harness else "bare"
+                        # issue #12: the two dimensions the serving gate reads.
+                        # Both default to None, never to a value -- see
+                        # driver_of() for why a defaulted driver merges two
+                        # separately-reported vehicles into one label. A config
+                        # entry overrides its sweep, so a mixed-vehicle sweep is
+                        # expressible without a second sweep block.
+                        driver = conf.get("driver", sweep.get("driver"))
+                        harness_level = conf.get("harness_level",
+                                                 sweep.get("harness_level"))
                         # Built through run_id.build_run_id, never an f-string:
                         # it is the only place that knows where a new segment
                         # (agent, harness_level) goes, and it refuses a field
@@ -382,6 +392,8 @@ def build_runs(cfg):
                             "task": task,
                             "rep": rep,
                             "mode": mode,
+                            "driver": driver,
+                            "harness_level": harness_level,
                             "_sort": (rep, task_index.get(task, 0), ci,
                                       0 if not harness else 1),
                         })
@@ -1373,6 +1385,133 @@ def existing_ids(results_path):
 
 
 # --------------------------------------------------------------------------- #
+# The serving gate (issue #12) -- the runner's half of serving_registry
+# --------------------------------------------------------------------------- #
+# serving_registry shipped in PR #10 as a library with zero invokers: a run
+# could be dispatched under any serving config at all and the gate would not
+# see it. These three functions are what call it, from main()'s pre-dispatch
+# loop, before the first CLI call.
+#
+# The requested config is the DECLARED one -- a `serving:` block of numbers in
+# the runs config -- not a probe of the live server. Two reasons. Gating has to
+# be deterministic: the same config must refuse or pass the same way tomorrow,
+# and a probe makes the verdict depend on what a server happened to be doing.
+# And the pre-registration's "if LM Studio is not already in this config, stop
+# and ask Drake" is a PRE-FLIGHT concern with a different remedy (a human
+# changes the server), which runner/lms_preflight.py answers separately.
+
+
+def requested_serving_from(cfg):
+    """The serving config the runs config DECLARES, as a plain dict of numbers.
+
+    Returns {} for an absent block rather than raising here, so the refusal
+    comes from the gate itself with the gate's own message: "a gate that
+    inspected zero fields has not agreed with the row, it has failed to look at
+    it". Passing {} to make the wiring compile is exactly what
+    serving_registry.UninspectedConfig exists to catch, and routing the absence
+    through it keeps one error text instead of two that can drift.
+    """
+    serving = cfg.get("serving")
+    if serving is None:
+        return {}
+    if not isinstance(serving, dict):
+        raise ValueError(
+            f"the config's `serving:` block must be a map of numbers, got "
+            f"{type(serving).__name__}")
+    return serving
+
+
+def driver_of(run):
+    """The driver this run is dispatched under, or ValueError if none was declared.
+
+    NEVER defaulted. `.get("driver", "claude-code")` would file every pi run
+    under the claude-code row, and findings.md reports pi as a separate vehicle
+    contrast -- no hooks, no subagents, so the driver is part of the treatment.
+    Merging the two would not be a rounding error in the label; it would pool
+    two different experiments.
+    """
+    driver = run.get("driver")
+    if not driver:
+        raise ValueError(
+            f"no driver declared for {run['run_id']}. Add `driver: <name>` to "
+            f"the sweep or the config entry -- one of "
+            f"{', '.join(serving_registry.DRIVERS)}. It is not defaulted: "
+            f"filing a pi run under the claude-code row would merge a "
+            f"separately-reported vehicle contrast into the dose table.")
+    if driver not in serving_registry.DRIVERS:
+        raise ValueError(
+            f"unknown driver {driver!r} for {run['run_id']}; known: "
+            f"{', '.join(serving_registry.DRIVERS)}")
+    return driver
+
+
+def check_serving_config(run, cfg, rows):
+    """Run the pre-dispatch gate for one run. Returns True when it was gated.
+
+    A model with no registry row is NOT gated and returns False: a hosted
+    subscription model has no pinned serving config to contradict, and refusing
+    it would make the gate unusable for every arm that is not on the local
+    stack. A model WITH a row and no declared `serving:` block IS refused --
+    that is the case the gate must not be wirable around.
+
+    Raises StructurallyImpossible for a cell the driver cannot express, which
+    the caller must catch FIRST; every other refusal is a RegistryError, hence
+    a ValueError, and lands in the existing config-rejected block.
+    """
+    model = serving_registry.serving_model_name(run["model"])
+    if not serving_registry.has_row(rows, model):
+        return False
+    serving_registry.check_dispatch(
+        rows, model, driver_of(run), requested_serving_from(cfg),
+        harness_level=run.get("harness_level"))
+    return True
+
+
+def impossible_row(run, reason):
+    """The results row for a cell the driver cannot express.
+
+    `pass` is None, never False. A False asserts that the model attempted the
+    task and failed it, and a cell that does not exist did not fail -- it is
+    not in the denominator at all. exit_reason carries its own status so no
+    reader has to infer the difference from a null.
+    """
+    return {
+        "run_id": run["run_id"], "ts": now_iso(), "sweep": run["sweep"],
+        "model": run["model"], "effort": run["effort"],
+        "harness": run["harness"], "harness_level": run.get("harness_level"),
+        "driver": run.get("driver"), "task": run["task"], "rep": run["rep"],
+        "pass": None, "pass_raw": None,
+        "exit_reason": "structurally_impossible",
+        "reason": reason,
+        "tokens_in": 0, "tokens_out": 0, "turns": 0, "wall_s": None,
+    }
+
+
+def recorded_impossible_ids(results_path):
+    """run_ids already written as structurally-impossible.
+
+    The runner is resume-friendly and gets re-invoked; without this, one
+    re-invocation per day would add one duplicate status row per day and any
+    count taken off the corpus would drift upward on its own.
+    """
+    ids = set()
+    if not os.path.exists(results_path):
+        return ids
+    with open(results_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("exit_reason") == "structurally_impossible":
+                ids.add(row.get("run_id"))
+    return ids
+
+
+# --------------------------------------------------------------------------- #
 # Wall-clock cap
 # --------------------------------------------------------------------------- #
 # Tiers 1 and 2 shared one key and tier 3 had its own, which is the whole cap
@@ -1664,6 +1803,9 @@ def main():
     # sweep means those 40 runs were spent on a matrix that was never going to
     # finish. Fail closed, up front, at zero cost.
     bad = []
+    impossible = []
+    gated = 0
+    serving_rows = serving_registry.load_rows()
     for r in runs:
         try:
             resolve_model(r["model"])
@@ -1671,13 +1813,52 @@ def main():
             # Same posture for the wall-clock cap: an undeclared tier is a config
             # bug, and the run it would spoil is the one that already cost money.
             resolve_timeout_s(r["task"], cfg.get("defaults", {}) or {})
+            # issue #12: the serving gate, on the real dispatch path. Last in
+            # the block so a run with an unknown model id is reported as that,
+            # not as a missing registry row.
+            gated += bool(check_serving_config(r, cfg, serving_rows))
+        except serving_registry.StructurallyImpossible as e:
+            # Caught BEFORE ValueError, and the order is the whole point.
+            # StructurallyImpossible subclasses RegistryError subclasses
+            # ValueError, so leaving it to the handler below would make one
+            # inexpressible cell abort the entire sweep with exit 2. A matrix
+            # containing pi x L5 is not an invalid config; it is a valid matrix
+            # containing a cell that does not exist.
+            impossible.append((r, str(e)))
         except ValueError as e:
             bad.append(f"  {r['run_id']}: {e}")
+
+    if impossible:
+        # Dropped from the matrix, recorded with their own status, and never
+        # scored 0 -- a 0 says the model tried and failed.
+        print(f"{len(impossible)} structurally-impossible cell(s), dropped from "
+              f"the matrix and recorded:")
+        for r, msg in impossible:
+            print(f"  {r['run_id']}: {msg.splitlines()[0]}")
+        dropped = {r["run_id"] for r, _ in impossible}
+        runs = [r for r in runs if r["run_id"] not in dropped]
+        if not args.dry_run:
+            already = recorded_impossible_ids(args.results)
+            for r, msg in impossible:
+                if r["run_id"] not in already:
+                    append_row(args.results, impossible_row(r, msg))
+
     if bad:
         print(f"config rejected -- {len(bad)} invalid run(s):")
         for b in dict.fromkeys(bad):
             print(b)
+        if any("serving" in b for b in bad):
+            print("  (the requested serving config is the `serving:` block in "
+                  "the runs config -- declare the numbers the run will actually "
+                  "be served under)")
         sys.exit(2)
+
+    # Silence is not evidence: an unreported zero here is indistinguishable from
+    # the state issue #12 was filed about, where the gate existed and nothing
+    # called it. A model with no registry row is legitimately not gated, and the
+    # count says how many were.
+    print(f"serving gate: {gated}/{len(runs)} run(s) checked against a "
+          f"(model, driver) registry row")
 
     # Same posture, same reason: a K outside the pre-registered range makes every
     # row of the sweep unreportable, and finding that at analysis time is finding
