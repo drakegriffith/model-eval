@@ -43,6 +43,14 @@ def test_claude_and_kimi_families_are_multi_turn():
     assert usage_ledger.invocation_mode("kimi") == "multi_turn"
 
 
+def test_the_local_family_is_multi_turn():
+    """`local` rides the same `claude -p` agentic session as claude/kimi, only
+    pointed at LM Studio (run.py's local branch), so its mode is that binary's
+    mode. Undeclared, every GLM row landed labelled "unknown" — a real property
+    of the invocation reported as unknowable."""
+    assert usage_ledger.invocation_mode("local") == "multi_turn"
+
+
 def test_the_codex_family_is_single_shot():
     assert usage_ledger.invocation_mode("codex") == "single_shot"
 
