@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 from datetime import datetime, timezone
 
 import broker
@@ -857,6 +858,53 @@ def broker_enabled():
 # that ran under conditions nobody declared.
 CHILD_ENV_ALLOWLIST = ("PATH", "HOME", "SHELL", "USER", "LOGNAME",
                        "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR")
+
+
+def is_loopback_endpoint(url):
+    """True when `url`'s host is this machine.
+
+    Fail-closed: a URL this cannot parse is not one it may vouch for. Matched on
+    HOST only, never the port -- which port LM Studio listens on is a local
+    convention, and which MACHINE answers is the thing a registry row can be
+    wrong about.
+    """
+    try:
+        host = urllib.parse.urlsplit(url).hostname
+    except ValueError:
+        return False
+    if not host:
+        return False
+    return host in ("localhost", "::1") or host.startswith("127.")
+
+
+def check_local_endpoint(model, endpoint):
+    """Refuse a local-family run served from off this machine (finding 2, issue #7).
+
+    The serving gate cannot catch this. It compares the DECLARED serving config
+    against the row, and the declared config still matches -- the endpoint was
+    never one of the pinned fields.
+
+    But the row's numbers are measurements OF ONE MACHINE: parallel=1,
+    context_length=131072 and the 57-71 tok/s prefill band were probed on the Mac
+    Studio's LM Studio over loopback. Pointed at another host, every one of them
+    becomes a claim about a box nobody probed, while the row goes on asserting
+    them and the results are labelled with it.
+
+    The override itself is NOT refused -- changing the port is how this family is
+    meant to be used, and the pre-registration makes the serving stack a human's
+    to set. What is refused is leaving the machine the row describes.
+    """
+    if model is None or model_family(model) != "local":
+        return
+    if not is_loopback_endpoint(endpoint):
+        raise ValueError(
+            f"run of {model!r} would be served from {endpoint!r}, which is not "
+            f"this machine (set via MODEL_EVAL_LOCAL_BASE_URL). Its registry row "
+            f"pins parallel, context_length and a measured 57-71 tok/s prefill "
+            f"band, all probed on the LOCAL LM Studio over loopback. None of "
+            f"them were measured on another host, and the results would be "
+            f"reported under them anyway. Point it back at loopback, or record a "
+            f"separate row for the machine you actually intend to serve from.")
 
 
 def invocation_provenance(model):
@@ -1907,6 +1955,12 @@ def main():
             # Same posture for the wall-clock cap: an undeclared tier is a config
             # bug, and the run it would spoil is the one that already cost money.
             resolve_timeout_s(r["task"], cfg.get("defaults", {}) or {})
+            # Finding 2 / issue #7: the row's numbers were measured on THIS
+            # machine, so a run served from another host is reported under
+            # measurements nobody took there. The serving gate cannot see this --
+            # the declared config still matches the row, because the endpoint is
+            # not a pinned field.
+            check_local_endpoint(r["model"], LOCAL_BASE_URL)
 
             row_model = serving_registry.serving_model_name(model_id)
             if row_model in gated_models:
