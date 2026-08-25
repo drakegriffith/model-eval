@@ -74,15 +74,69 @@ def paths_for_repo(repo_root):
 # --------------------------------------------------------------------------- #
 # Usage parsing -- single source of truth
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Parse-branch routing -- WHICH stdout shape a family emits.
+#
+# A declared table, not an if/else with a fallthrough. The output shape is a
+# property of the CLI BINARY, and two binaries produce the two shapes here:
+# `claude -p --output-format json` emits one cumulative `result` object, `codex
+# exec` emits a JSONL event stream. Every family rides one of them, so routing
+# is a lookup and an unrouted family is a lookup miss.
+#
+# It was an `if family in ("claude", "kimi") ... else <codex>` until 2026-08-25,
+# and the else was the defect: `local` -- the same claude binary pointed at an
+# LM Studio server (registry.py, run.py's local branch) -- fell into the codex
+# branch, found no `turn.completed` event in claude-shaped stdout, and returned
+# every counter zero. Nothing raised and nothing was logged, so a whole GLM
+# smoke test recorded tokens=0 turns=0 rows that read exactly like a model that
+# consumed nothing (studio-handoff findings.md blocker 1, model-eval issue #8).
+#
+# Fail-closed for the same reason UNAFFECTED_PARSE_BRANCHES is an allowlist: an
+# undeclared family means nobody checked which shape it emits, and the honest
+# answer to "which parser?" is a named failure, never whichever branch happens
+# to be written last. Adding a family is a deliberate edit here plus a fixture
+# test proving the shape -- that cost is the point.
+# --------------------------------------------------------------------------- #
+CLAUDE_JSON_BRANCH = "claude_json"
+CODEX_JSONL_BRANCH = "codex_jsonl"
+
+FAMILY_PARSE_BRANCH = {
+    "claude": CLAUDE_JSON_BRANCH,
+    "kimi": CLAUDE_JSON_BRANCH,
+    "local": CLAUDE_JSON_BRANCH,
+    "codex": CODEX_JSONL_BRANCH,
+}
+
+
+def parse_branch(family):
+    """Which stdout parser `family` needs. Raises on an undeclared family."""
+    branch = FAMILY_PARSE_BRANCH.get(family)
+    if branch is None:
+        raise ValueError(
+            f"usage_ledger: no parse branch declared for family {family!r}; "
+            f"declared families are {', '.join(sorted(FAMILY_PARSE_BRANCH))}. "
+            f"Add it to FAMILY_PARSE_BRANCH with a fixture test of its stdout "
+            f"shape -- guessing the branch silently records zero tokens.")
+    return branch
+
+
+def parses_claude_json(family):
+    """True when `family`'s stdout is the claude `result` shape. The one place
+    callers ask 'is there a transcript this module can re-parse?' -- retrofit
+    used to restate the family list inline and drifted from this one."""
+    return FAMILY_PARSE_BRANCH.get(family) == CLAUDE_JSON_BRANCH
+
+
 def parse_usage_detailed(family, out):
-    """Parse token usage from raw CLI stdout. `family` is 'claude'/'kimi'/'codex'
-    (already resolved by the caller -- this module never resolves a model id).
+    """Parse token usage from raw CLI stdout. `family` is a declared family in
+    FAMILY_PARSE_BRANCH (already resolved by the caller -- this module never
+    resolves a model id); an undeclared one raises ValueError.
 
     Returns {"tokens_in", "tokens_out", "cache_read_tokens",
     "cache_creation_tokens", "turns"}. tokens_in is always the cache-inclusive
     total tokens processed -- comparable across families:
 
-    - claude/kimi: `claude -p --output-format json`'s one "result" event holds
+    - claude/kimi/local: `claude -p --output-format json`'s one "result" event holds
       cumulative usage for the whole session. Each of the three fields is a sum
       over the session's model requests, so tokens_in = input_tokens +
       cache_creation_input_tokens + cache_read_input_tokens.
@@ -104,7 +158,7 @@ def parse_usage_detailed(family, out):
     the freshest turn's alone. Neither correction changes this formula.
     """
     ti = to = turns = cache_read = cache_creation = 0
-    if family in ("claude", "kimi"):
+    if parse_branch(family) == CLAUDE_JSON_BRANCH:
         obj = None
         for line in reversed([l for l in out.splitlines() if l.strip()]):
             try:
@@ -188,6 +242,11 @@ TOKENS_IN_STATUSES = ("measured", "recovered_in_ledger", "quarantined")
 FAMILY_INVOCATION_MODE = {
     "claude": "multi_turn",
     "kimi": "multi_turn",
+    # Same `claude -p` agentic session, pointed at an LM Studio server instead
+    # of the Anthropic endpoint (run.py's local branch). Undeclared here, every
+    # GLM row landed labelled "unknown" -- a known property of the invocation
+    # reported as unknowable, which is the same silence as blocker 1.
+    "local": "multi_turn",
     "codex": "single_shot",
 }
 
@@ -587,7 +646,7 @@ def retrofit(results_path, transcripts_dir, usage_path):
 
             usage_detail = None
             tpath = os.path.join(transcripts_dir, rid + ".txt")
-            if os.path.exists(tpath) and family in ("claude", "kimi"):
+            if os.path.exists(tpath) and parses_claude_json(family):
                 with open(tpath, encoding="utf-8") as tf:
                     usage_detail = parse_usage_detailed(family, tf.read())
 

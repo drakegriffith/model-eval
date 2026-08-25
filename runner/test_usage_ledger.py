@@ -34,6 +34,54 @@ def test_parse_usage_detailed_claude_sums_fresh_plus_both_cache_fields():
     assert d["turns"] == 11
 
 
+def test_parse_usage_detailed_local_family_reads_the_claude_result_event():
+    """The GLM smoke-test defect, reproduced on a fixture (studio-handoff
+    findings.md blocker 1).
+
+    The "local" family is the same `claude -p --output-format json` binary
+    pointed at an LM Studio server (registry.py:119, run.py's local branch), so
+    its stdout is the claude shape -- one `result` event carrying cumulative
+    session usage. Routing it into the codex JSONL branch finds no
+    `turn.completed` event and returns every field zero, which is not a parse
+    failure anyone can see: the row lands in results.jsonl reading tokens=0
+    turns=0, indistinguishable from a model that consumed nothing.
+    """
+    out = json.dumps({
+        "type": "result",
+        "num_turns": 4,
+        "usage": {
+            "input_tokens": 1204,
+            "cache_creation_input_tokens": 0,   # LM Studio reports no caching
+            "cache_read_input_tokens": 0,
+            "output_tokens": 863,
+        },
+    })
+
+    d = L.parse_usage_detailed("local", out)
+
+    assert d["tokens_in"] == 1204
+    assert d["tokens_out"] == 863
+    assert d["turns"] == 4
+
+
+def test_parse_usage_detailed_refuses_an_undeclared_family():
+    """Fail closed, the same shape as registry.check_effort and
+    UNAFFECTED_PARSE_BRANCHES: a family nobody routed must raise, not fall
+    through to whichever branch happens to be written as the `else`. Silently
+    returning zeros is what made blocker 1 invisible for a whole smoke test --
+    an unroutable family and a genuinely idle run produced identical rows.
+    """
+    out = json.dumps({"type": "result", "num_turns": 3,
+                      "usage": {"input_tokens": 10, "output_tokens": 5}})
+
+    try:
+        L.parse_usage_detailed("gemini", out)
+    except ValueError as exc:
+        assert "gemini" in str(exc)
+    else:
+        raise AssertionError("undeclared family parsed silently instead of raising")
+
+
 def test_parse_usage_detailed_codex_does_not_double_count_cache():
     line = json.dumps({
         "type": "turn.completed",
@@ -215,6 +263,37 @@ def test_retrofit_resolves_alias_only_rows_to_canonical_model_id(tmp_path):
         row = json.loads(f.readline())
     assert row["model_id"] == "gpt-5.6-sol"
     assert row["scaffold_overhead_tokens"] == L.SCAFFOLD_FLOOR_TOKENS["gpt-5.6-sol"]
+
+
+def test_retrofit_reparses_a_local_family_transcript(tmp_path):
+    """The other half of blocker 1: retrofit gates re-parsing on the family
+    list too, so a local-family row with a perfectly good transcript on disk
+    was ledgered from its (zero) stored value instead of the transcript."""
+    results_path = os.path.join(tmp_path, "results.jsonl")
+    transcripts_dir = os.path.join(tmp_path, "transcripts")
+    usage_path = os.path.join(tmp_path, "usage.jsonl")
+    os.makedirs(transcripts_dir)
+
+    rid = "glm-smoke--glm-4.7-local--high--bare--t1-py-a--r1"
+    with open(results_path, "w") as f:
+        f.write(json.dumps({
+            "run_id": rid, "model": "glm-4.7-local", "tokens_in": 0,
+            "tokens_out": 0, "exit_reason": "ok",
+        }) + "\n")
+    with open(os.path.join(transcripts_dir, rid + ".txt"), "w") as f:
+        f.write(json.dumps({
+            "type": "result", "num_turns": 4,
+            "usage": {"input_tokens": 1204, "output_tokens": 863},
+        }))
+
+    L.retrofit(results_path, transcripts_dir, usage_path)
+
+    with open(usage_path) as f:
+        row = json.loads(f.readline())
+    assert row["family"] == "local"
+    assert row["retrofit_status"] == "measured"
+    assert row["tokens_in"] == 1204
+    assert row["tokens_out"] == 863
 
 
 def test_retrofit_writes_one_row_per_result_and_is_idempotent(tmp_path):

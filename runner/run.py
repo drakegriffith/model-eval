@@ -122,6 +122,12 @@ from registry import (  # noqa: E402
     check_effort, is_metered, model_family, resolve_model,
 )
 
+# The run_id format, owned by one module and shared with its readers (judge.py)
+# rather than restated as an f-string here and a comment there -- blocker 3.
+# Imported under a name so the module object is what call sites use; `run_id` is
+# already the name of the local variable holding one all over this file.
+import run_id as run_id_mod  # noqa: E402
+
 
 DONE_GATE_SENTENCE = (
     "\n\n---\nYour work is judged solely by running `bash verify.sh` from the "
@@ -359,7 +365,14 @@ def build_runs(cfg):
                         model = conf["model"]
                         effort = resolve_effort(conf.get("effort", "high"), model, winning)
                         harness_tag = "harness" if harness else "bare"
-                        run_id = f"{name}--{model}--{effort}--{harness_tag}--{task}--r{rep}"
+                        # Built through run_id.build_run_id, never an f-string:
+                        # it is the only place that knows where a new segment
+                        # (agent, harness_level) goes, and it refuses a field
+                        # holding the delimiter. See run_id.py for why an
+                        # appended segment is silent damage (blocker 3).
+                        run_id = run_id_mod.build_run_id(
+                            sweep=name, model=model, effort=effort,
+                            harness=harness_tag, task=task, rep=rep)
                         sweep_runs.append({
                             "run_id": run_id,
                             "sweep": name,
@@ -509,6 +522,12 @@ def build_cli_cmd(model, effort, prompt):
 # sandbox_seal.cli_auth_read_paths(), or the symlink resolves onto a denied path.
 CODEX_AUTH_SOURCE = os.path.expanduser("~/.codex/auth.json")
 
+# The claude half of the same thing. Resolved at import, from the OPERATOR's
+# home -- deliberately, and this is the one place that reads it: scoped_claude_home
+# below moves $HOME out from under the model, so `~` inside a run no longer names
+# the directory this credential lives in.
+CLAUDE_AUTH_SOURCE = os.path.expanduser("~/.claude/.credentials.json")
+
 # Deliberately comments only: no `mcp_servers` table means codex starts with an
 # empty server list. An absent key is the seal here, so nothing may be added to
 # this text that declares one.
@@ -569,6 +588,69 @@ def scoped_codex_home():
 
 
 @contextlib.contextmanager
+def scoped_claude_home(home_dir=None):
+    """Yield the directory the model's claude binary will see as $HOME.
+
+    THE BARE ARM WAS NOT BARE. run_cli built its environment as
+    `dict(os.environ)` and never touched HOME or CLAUDE_CONFIG_DIR, so the
+    claude binary resolved its global config out of the operator's home:
+    ~/.claude/CLAUDE.md, settings.json, the skills tree, agents, plugins. On
+    this machine CLAUDE.md alone is roughly 25k tokens of personal harness that
+    no sweep configured and no row records. Every harness=False row therefore
+    measured a model carrying a large unregistered harness, and the
+    harness/bare contrast measured one harness against another (studio-handoff
+    findings.md blocker 2, issue #8).
+
+    ISOLATION IS NOT A SIDE EFFECT OF THE SEAL. sensitive_paths() does deny
+    ~/.claude, so a sealed run could not read CLAUDE.md -- but that is a
+    property of a filesystem profile with a documented opt-out
+    (GAUNTLET_NO_SANDBOX=1, which the local-family seats use) rather than a
+    property of the arm. The same denylist was [ROOT] alone until 2026-07-30,
+    and every row collected before then was open-book against the vault. So the
+    environment states it directly, where it holds whether or not a second
+    mechanism is switched on, and it is set for EVERY arm: the stage-1 autonomy
+    arms run the same binary reading the same global config, so "only the bare
+    arm needs this" was never true.
+
+    Per-run and torn down, like TMPDIR and CODEX_HOME: a shared scratch home
+    would carry one run's leftover config into the next run's model.
+
+    AUTH, ticket 04's lesson restated. Denying ~/.claude outright "does not
+    produce a sealed run, it produces a run that could not authenticate"
+    (sandbox_seal.cli_auth_read_paths) -- and moving $HOME has the identical
+    failure mode, since the credential is found under it. So .credentials.json
+    is symlinked into the scoped home, exactly as scoped_codex_home does for
+    codex: a link, never a copy, so the credential is not duplicated onto disk,
+    and a real file where the link was is copied back on teardown because a
+    refresh that lands in a directory about to be deleted breaks the operator's
+    login, not just the run.
+
+    `home_dir` is the seam a harness LEVEL uses: a level whose definition is
+    "this agent has these skills and this CLAUDE.md" hands over the directory
+    holding them, which is then a configured harness on a named path instead of
+    an inherited one. A caller's directory is the caller's -- it is used as-is,
+    nothing is written into it and it is not deleted.
+    """
+    if home_dir is not None:
+        yield home_dir
+        return
+    with tempfile.TemporaryDirectory(prefix="gauntlet-claudehome-") as home:
+        config_dir = os.path.join(home, ".claude")
+        os.makedirs(config_dir, exist_ok=True)
+        link = os.path.join(config_dir, ".credentials.json")
+        os.symlink(CLAUDE_AUTH_SOURCE, link)
+        try:
+            yield home
+        finally:
+            # exists() follows the link, so a dangling symlink (no credential
+            # file on this host, e.g. CI) is False here and nothing is written.
+            if os.path.exists(link) and not os.path.islink(link):
+                os.makedirs(os.path.dirname(CLAUDE_AUTH_SOURCE), exist_ok=True)
+                shutil.copyfile(link, CLAUDE_AUTH_SOURCE)
+                os.chmod(CLAUDE_AUTH_SOURCE, 0o600)
+
+
+@contextlib.contextmanager
 def staged_task_dir(task_dir, stage_acceptance=True):
     """Yield a sanitised mirror of task_dir for the model's GAUNTLET_TASK_DIR.
 
@@ -613,6 +695,66 @@ def seal_enabled():
     return os.environ.get("GAUNTLET_NO_SANDBOX") != "1"
 
 
+# --------------------------------------------------------------------------- #
+# Auth availability -- an instrument that cannot log in is not a model that
+# cannot code.
+#
+# `claude -p` exits 1 when it has no usable credential, and every nonzero exit
+# used to be "cli_error", which the pre-registration scores as a failed task.
+# That was survivable while the CLI read the operator's own home; it stopped
+# being survivable the moment run_cli started handing the binary a scoped
+# CLAUDE_CONFIG_DIR, because on macOS the subscription credential lives in the
+# login Keychain under a service name keyed per config dir
+# ("Claude Code-credentials-<hash>"), so a scoped dir maps to an entry that does
+# not exist. An unprovisioned host would then write a whole sweep of pass=false
+# rows for a CLI that never sent one request.
+#
+# The phrase alone is not the test. A model writing about authentication can
+# print those words in a run that worked, so the detector requires the CLI's own
+# `result` envelope with is_error true -- a field the CLI sets, not the model.
+# --------------------------------------------------------------------------- #
+AUTH_FAILURE_MARKERS = ("not logged in", "please run /login",
+                        "invalid api key", "oauth token has expired")
+
+
+def cli_auth_failed(out):
+    """True when the CLI's own result envelope says it had no usable credential.
+
+    Reads the LAST `type == "result"` object, the same event
+    usage_ledger.parse_usage_detailed reads, so both answer from the same bytes.
+    Absent or unparseable output is False: a CLI killed before it printed
+    anything is a timeout or a crash, and naming that an auth failure would be a
+    guess wearing a label.
+    """
+    obj = None
+    for line in reversed([l for l in (out or "").splitlines() if l.strip()]):
+        try:
+            cand = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(cand, dict) and cand.get("type") == "result":
+            obj = cand
+            break
+    if not isinstance(obj, dict) or not obj.get("is_error"):
+        return False
+    text = str(obj.get("result") or "").lower()
+    return any(m in text for m in AUTH_FAILURE_MARKERS)
+
+
+def home_isolation_enabled():
+    """False only when a run explicitly opts out via GAUNTLET_INHERIT_HOME=1.
+
+    Same shape as seal_enabled and broker_enabled, and for the same two
+    reasons: the opt-out has to EXIST, because it is the only way to reproduce
+    the pre-2026-08-25 condition (and, on a host whose scoped home has no
+    credential provisioned, the only way to run a claude-family arm at all),
+    and it has to be LOUD and RECORDED, because a row produced with the
+    operator's global harness attached is not comparable with one produced
+    without it. See scoped_claude_home for what is being isolated and why.
+    """
+    return os.environ.get("GAUNTLET_INHERIT_HOME") != "1"
+
+
 def broker_enabled():
     """False only when a run explicitly opts out via GAUNTLET_NO_BROKER=1.
 
@@ -624,7 +766,7 @@ def broker_enabled():
     return os.environ.get("GAUNTLET_NO_BROKER") != "1"
 
 
-def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
+def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=None):
     """Run headlessly, killing the process group on timeout. Returns (out, reason, wall).
 
     The command runs sealed (ticket 16): reads of this repo are denied except
@@ -644,6 +786,11 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
     The seal is fail-closed: no sandbox-exec means no run, rather than a run
     that silently measures an open-book attempt. GAUNTLET_NO_SANDBOX=1 is the
     documented, loudly-warned opt-out, and it is recorded on the results row.
+
+    The model's HOME and CLAUDE_CONFIG_DIR are this run's alone, never the
+    operator's -- see scoped_claude_home for why that is stated in the
+    environment rather than left to the filesystem seal. `home_dir` overrides
+    it with a directory a harness level supplies on purpose.
 
     `bk` is a live broker.Broker (ticket 17). Its socket is the model's only
     route to acceptance feedback; the seal is widened by exactly that one
@@ -708,6 +855,24 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
         codex_home = stack.enter_context(scoped_codex_home())
         env["CODEX_HOME"] = codex_home
 
+        # blocker 2: the claude half of the same rule, and unconditional across
+        # families for the same reason -- a family branch is one more place the
+        # isolation can be absent without anything failing. Both variables are
+        # set: HOME is what the binary joins ".claude" onto, CLAUDE_CONFIG_DIR
+        # is the override that wins over that join, so setting only one leaves
+        # the other pointing at the operator's home.
+        claude_home = None
+        if home_isolation_enabled() or home_dir is not None:
+            claude_home = stack.enter_context(scoped_claude_home(home_dir))
+            env["HOME"] = claude_home
+            env["CLAUDE_CONFIG_DIR"] = os.path.join(claude_home, ".claude")
+        else:
+            print("WARNING: GAUNTLET_INHERIT_HOME=1 -- the model under test "
+                  "loads the operator's global CLAUDE.md, settings, skills and "
+                  "agents from $HOME, so a harness=False row is NOT a bare "
+                  "arm; this row is marked home_isolated=false",
+                  file=sys.stderr)
+
         if seal_enabled():
             # ROOT is ticket 16's deny (the benchmark's own answer key).
             # sensitive_paths() is ticket 04's: the vault, the global Claude and
@@ -730,7 +895,8 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
             prefix = stack.enter_context(sandbox_seal.sandbox_prefix(
                 deny_paths=[ROOT] + list(sandbox_seal.sensitive_paths().values()),
                 allow_paths=allow + sandbox_seal.cli_auth_read_paths(),
-                write_allow_paths=allow + [run_tmp, codex_home]))
+                write_allow_paths=(allow + [run_tmp, codex_home]
+                                   + ([claude_home] if claude_home else []))))
             cmd = prefix + list(cmd)
         else:
             print("WARNING: GAUNTLET_NO_SANDBOX=1 -- model can read its own "
@@ -755,6 +921,14 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None):
         try:
             out, _err = proc.communicate(timeout=timeout_s)
             reason = "ok" if proc.returncode == 0 else "cli_error"
+            # Exactly one failure mode moves out of cli_error, and only from a
+            # nonzero exit: an instrument that never authenticated produced no
+            # measurement of the model at all. It is still not "ok", so the
+            # general gate in execute_run keeps `pass` False and existing_ids
+            # keeps the run pending for a resumed sweep -- what changes is that
+            # the row names the instrument instead of implicating the model.
+            if reason == "cli_error" and cli_auth_failed(out):
+                reason = "auth_unavailable"
         except subprocess.TimeoutExpired:
             kill_group()
             try:
@@ -1211,6 +1385,14 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     # Absent-or-false means "not contained" for any corpus consumer; the
     # admissibility argument for those rows is in ticket 26.
     write_contained = None
+    # blocker 2: whether the model ran with its own HOME/CLAUDE_CONFIG_DIR
+    # instead of the operator's. A separate property from `sealed` for the same
+    # reason write_contained is: the seal is a filesystem profile with an
+    # opt-out, this is the environment the binary reads its global config from,
+    # and the two can disagree. Every row written before 2026-08-25 lacks the
+    # field entirely -- absent means NOT isolated, i.e. a harness=False row
+    # that carried whatever global harness lived in the operator's home.
+    home_isolated = None
     # ticket 17: the same three questions for the acceptance cap. brokered=false
     # is a protocol-v1 row and the pre-registration forbids pooling it with v2,
     # so it is a field rather than an assumption about commit dates.
@@ -1258,6 +1440,10 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
             # sandbox_seal, the corpus says so instead of carrying rows that
             # claim a guarantee nothing is enforcing.
             write_contained = sealed and sandbox_seal.WRITE_CONTAINMENT
+            # Read off the same predicate run_cli consults, never restated as a
+            # literal here: a row asserting its own isolation is exactly what
+            # the pre-2026-08-25 rows could not be trusted about.
+            home_isolated = home_isolation_enabled()
             out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir,
                                                run["model"], bk=bk)
             usage_detail = usage_ledger.parse_usage_detailed(model_family(run["model"]), out)
@@ -1349,6 +1535,8 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
             model_family(run["model"]), usage_ledger.USAGE_PARSER_VERSION),
         "turns": turns, "loc_changed": loc, "exit_reason": exit_reason,
         "sealed": sealed, "write_contained": write_contained,
+        # blocker 2: whether the "bare" arm was actually bare.
+        "home_isolated": home_isolated,
         # ticket 32: which instrument produced this row's session shape.
         "invocation_mode": invocation_mode,
         # ticket 17. acceptance_requests is the design parameter K governs, and
