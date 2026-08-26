@@ -334,6 +334,7 @@ def table3_harness_delta(rows):
     rows = [dict(r, model=model_key(r, mixed)) for r in rows]
     models = sorted({r["model"] for r in rows})
     data = []
+    token_notes = []
     for model in models:
         cell = {}
         for tag, hv in (("bare", False), ("harness", True)):
@@ -341,7 +342,11 @@ def table3_harness_delta(rows):
             scored, _excl = run_status.partition_for_rate(rs)
             n = len(scored)
             passes = sum(1 for r in scored if r.get("pass"))
-            toks = mean([out_tokens(r) for r in token_rows(rs)[0]])
+            spend, dropped = token_rows(rs)
+            if dropped:
+                token_notes.append(
+                    token_axis_drop_note(f"{model}/{tag}", rs, dropped))
+            toks = mean([out_tokens(r) for r in spend])
             cell[tag] = (n, passes, (100.0 * passes / n if n else None), toks)
         b, h = cell["bare"], cell["harness"]
         if b[0] == 0 and h[0] == 0:
@@ -357,7 +362,7 @@ def table3_harness_delta(rows):
         ])
     return md_table(
         ["model", "bare pass%", "bare tok_out", "harness pass%", "harness tok_out",
-         "delta pass", "delta tok_out"], data)
+         "delta pass", "delta tok_out"], data) + token_axis_note(token_notes)
 
 
 def table4_hybrid_vs_solo(rows):
@@ -372,14 +377,20 @@ def table4_hybrid_vs_solo(rows):
     mixed = multi_driver_models(t3)
     g = group(t3, lambda r: model_key(r, mixed))
     data = []
+    token_notes = []
     for model, rs in sorted(g.items()):
         scored, _excl = run_status.partition_for_rate(rs)
         n = len(scored)
         passes = sum(1 for r in scored if r.get("pass"))
-        toks = mean([out_tokens(r) for r in token_rows(rs)[0]])
+        spend, dropped = token_rows(rs)
+        if dropped:
+            token_notes.append(token_axis_drop_note(model, rs, dropped))
+        toks = mean([out_tokens(r) for r in spend])
         kind = "hybrid" if model == "hybrid" else "solo"
         data.append([model, kind, n, pct(passes, n), fnum(toks)])
-    return md_table(["model", "kind", "n", "pass_rate", "mean_tokens_out"], data)
+    return md_table(
+        ["model", "kind", "n", "pass_rate", "mean_tokens_out"], data
+    ) + token_axis_note(token_notes)
 
 
 def table5_variance(rows):

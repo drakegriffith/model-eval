@@ -81,3 +81,45 @@ def test_table2_names_no_drop_when_the_cell_is_clean():
 
     assert "excluded from the token axis" not in out, (
         f"a clean cell must not print a drop footnote:\n{out}")
+
+
+# --------------------------------------------------------------------------- #
+# (b) table3_harness_delta / table4_hybrid_vs_solo: same shape
+# --------------------------------------------------------------------------- #
+def test_table3_discloses_rows_it_drops_from_the_token_axis():
+    """The `bare` cell has 1 clean + 1 cap_exhausted row; `harness` is clean.
+    Both cells keep 2 rows in the pass denominator; `bare`'s token mean must
+    drop the capped row's runaway tokens_out and say so."""
+    rows = [
+        row(0, "ok", pass_=True, tok=100, harness=False),
+        row(1, "cap_exhausted", pass_=False, tok=999999, harness=False),
+        row(2, "ok", pass_=True, tok=150, harness=True),
+        row(3, "ok", pass_=False, tok=175, harness=True),
+    ]
+
+    out = tables.table3_harness_delta(rows)
+
+    assert "glm-4.7-local/bare" in out and "1 of 2 row(s) excluded from the token axis" in out, (
+        f"table3 does not name its dropped bare-cell row:\n{out}")
+    assert "cap_exhausted=1" in out, f"the drop's cause is not named:\n{out}"
+    assert "999999" not in out.split("\n> ")[0], (
+        f"the dropped row's tokens_out leaked into the rendered mean:\n{out}")
+
+
+def test_table4_discloses_rows_it_drops_from_the_token_axis():
+    """T3 task, one model, 2 clean rows + 1 cap_exhausted. cap_exhausted is
+    SCORED for the pass axis but still excluded from the token mean, which is
+    the case table4 threw away before this fix."""
+    rows = [
+        row(0, "ok", pass_=True, tok=100, task="t3-hybrid-a"),
+        row(1, "ok", pass_=True, tok=120, task="t3-hybrid-a"),
+        row(2, "cap_exhausted", pass_=False, tok=999999, task="t3-hybrid-a"),
+    ]
+
+    out = tables.table4_hybrid_vs_solo(rows)
+
+    assert "1 of 3 row(s) excluded from the token axis" in out, (
+        f"table4 does not name its dropped token-axis row:\n{out}")
+    assert "cap_exhausted=1" in out, f"the drop's cause is not named:\n{out}"
+    assert "999999" not in out.split("\n> ")[0], (
+        f"the dropped row's tokens_out leaked into the rendered mean:\n{out}")
