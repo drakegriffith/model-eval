@@ -40,14 +40,26 @@ serving:
 defaults:
   # Wall-clock caps are a backstop, not the estimand. Issue #8's surviving design
   # caps TURNS; a wall-clock expiry logs exit_reason "timeout", which is excluded
-  # from the pass-rate denominator and reported separately (issue #12 d). These
-  # are sized off the row's measured prefill band via
-  # serving_registry.derive_turn_cap_s, deliberately from the SLOW end (57 tok/s).
+  # from the pass-rate denominator and reported separately (issue #12 d). The
+  # constants below are that backstop BEFORE turn_cap_n is registered. Once it
+  # is, run.py's resolve_timeout_s ignores these entirely and derives the wall
+  # clock from N instead (A3: serving_registry.derive_wall_clock_s(N) = N x
+  # 157 s x 1.5, rounded up to the next 600 s) -- see turn_cap_n below.
   timeout_t1_t2_s: 3600
   timeout_t3_s: 7200
   timeout_t4_s: 7200
   timeout_t5_s: 7200
   seed: 1337
+  # registered after stage 0 by the conductor from 3 x max(turns) rounded up
+  # to the next multiple of 10 (A3, A6); null = no turn cap classification.
+  #
+  # Positive control while null: every reader (run_status.apply_turn_cap,
+  # run.py's resolve_timeout_s) behaves exactly as it did before this key
+  # existed. Once set, any row whose turns exceed N is re-classed exit_reason
+  # turn_cap at READ time (never rewritten on disk) -- EXCLUDED from the pass
+  # denominator and the token axis, reported separately -- and the wall clock
+  # above stops applying (see the comment on timeout_t*_s).
+  turn_cap_n: null
   # ACCEPTANCE CAP -- read this before changing it, because both directions bias
   # the headline number and the bundle registers neither.
   #
