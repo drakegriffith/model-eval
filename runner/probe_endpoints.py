@@ -391,7 +391,9 @@ def main():
         for mid in LOCAL_CANDIDATES:
             # Same open question as Kimi's tiers, minus the metering: whether
             # --effort moves anything through LM Studio's Anthropic-compatible
-            # endpoint is unverified (registry.py: efforts_verified=False).
+            # endpoint is unverified. This ladder run is what effort_verdict.py
+            # later classifies as credited or not-yet-credited -- there is no
+            # hand-set flag on the registry row to answer it instead.
             efforts = CLAUDE_EFFORTS if args.phase == "ladder" else ["low"]
             for e in efforts:
                 cells.append(("local", mid, e))

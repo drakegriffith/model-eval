@@ -572,11 +572,12 @@ def build_cli_cmd(model, effort, prompt, driver=None):
     does (base_url + placeholder token injected by run_cli), so it takes the
     identical invocation shape including --effort. --effort is passed through
     rather than suppressed: the flag is harmless to include even if LM Studio's
-    server ignores it server-side (registry.py's `efforts_verified: False` is
-    where that open question is recorded), and suppressing it here would make
-    the argv depend on a fact -- whether the knob works -- that isn't known yet.
-    Whether it moves spend at all is exactly what probe_endpoints.py's ladder
-    phase is for, same as every other family.
+    server ignores it server-side (whether it does is exactly what
+    effort_verdict.py's credited / not-yet-credited classification answers, from
+    probe_endpoints.py's ladder data, not a hand-set flag on the registry row),
+    and suppressing it here would make the argv depend on a fact -- whether the
+    knob works -- that isn't known yet. Whether it moves spend at all is exactly
+    what probe_endpoints.py's ladder phase is for, same as every other family.
 
     `driver` (issue #25). Trailing and optional, defaulting to None, so every
     caller that predates it (8+ test files call this positionally with three
