@@ -305,22 +305,32 @@ def test_mock_with_both_paths_redirected_writes_exactly_one_row_only_to_scratch(
 # directory while results.jsonl/usage.jsonl were reported untouched.
 # --------------------------------------------------------------------------- #
 def test_relative_scratch_from_runner_cwd_into_results_is_refused_and_creates_no_checkout(
-        corpus_untouched):
+        corpus_untouched, tmp_path):
     """Issue #28's own reproduction, verbatim: cwd=runner/, `--scratch
-    results/work` (relative, no other redirect). Absence is asserted, not
-    assumed -- a directory that was never going to be created either way
-    would make this assertion pass for the wrong reason; the companion
-    control test below proves the same checkout DOES appear when --scratch
-    is left outside results/, so this absence assertion is capable of
-    catching a regression, not vacuously true."""
+    results/work` (relative). --results is redirected to a /tmp path so the
+    pre-existing #23 guard (default --results resolving to the live corpus)
+    cannot fire first and mask which guard actually refused -- round 1's
+    verifier caught exactly this gap: this test (and the symlink test
+    below) passed on a tree carrying no #28 guard at all, because #23's own
+    "refusing: a mock/demo/dry-run invocation would write to the live
+    results corpus" message fired first on the unredirected default.
+    Absence is asserted, not assumed -- a directory that was never going to
+    be created either way would make this assertion pass for the wrong
+    reason; the companion control test below proves the same checkout DOES
+    appear when --scratch is left outside results/, so this absence
+    assertion is capable of catching a regression, not vacuously true."""
     checkout_root = os.path.join(RUNNER_DIR, "results", "work")
     assert not os.path.exists(checkout_root), "stale checkout from a prior failed run"
     try:
         proc = run_cli_subprocess([
             "--mock", "--only", "no-such-run-id-xyz", "--scratch", "results/work",
+            "--results", str(tmp_path / "results.jsonl"),
         ])
         assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
         assert "refus" in proc.stderr.lower()
+        assert "--scratch" in proc.stderr, (
+            "refusal message must name --scratch -- otherwise this could "
+            "be the #23 --results/--usage guard firing instead of #28's")
         assert not os.path.exists(checkout_root), (
             "run.py created a checkout inside the live results directory")
     finally:
@@ -361,15 +371,62 @@ def test_symlinked_scratch_pointing_into_results_dir_is_refused(
     an unresolved-path or string-prefix compare. The symlink target is a
     path nested one level inside results/ (not results/ itself), so this
     exercises the containment branch (os.path.commonpath), not just the
-    equality branch."""
+    equality branch. --results is redirected to a /tmp path for the same
+    reason as the reproduction test above -- round 1's verifier caught
+    this test passing with no #28 guard present at all, because the
+    unredirected default --results tripped the pre-existing #23 guard
+    first."""
     link = tmp_path / "scratch-into-results"
     link.symlink_to(os.path.join(RUNNER_DIR, "results", "nested-via-symlink"),
                     target_is_directory=True)
     proc = run_cli_subprocess([
         "--mock", "--only", "no-such-run-id-xyz", "--scratch", str(link),
+        "--results", str(tmp_path / "results.jsonl"),
     ])
     assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
     assert "refus" in proc.stderr.lower()
+    assert "--scratch" in proc.stderr, (
+        "refusal message must name --scratch -- otherwise this could be "
+        "the #23 --results/--usage guard firing instead of #28's")
+
+
+def _fs_is_case_insensitive(tmp_path):
+    """Detect case-(in)sensitivity the way the coordinator's brief asks:
+    create a file, then stat its case-flipped variant. True on this
+    machine's default APFS volume; a caller must SKIP (not xfail) the
+    case-variant tests below on a case-sensitive filesystem, where the
+    bypass this guards against cannot even be constructed."""
+    marker = tmp_path / "case-fs-marker.txt"
+    marker.write_text("x", encoding="utf-8")
+    return os.path.exists(str(marker).upper())
+
+
+def test_case_variant_scratch_dir_name_from_runner_cwd_is_refused(
+        corpus_untouched, tmp_path):
+    """A verifier's reproduction (round 2): `is_inside_or_same`'s first cut
+    carried only the resolved-string/commonpath check, which is a no-op
+    fold on POSIX (see corpus_guard's module docstring) -- so
+    `--scratch Results/work` or `--scratch RESULTS/WORK` from cwd runner/
+    resolved to a string that shared neither identity nor path components
+    with 'results', even though APFS's own directory lookup treats
+    'RESULTS' and 'results' as the same inode.  --results is redirected so
+    only the #28 guard can produce the refusal."""
+    if not _fs_is_case_insensitive(tmp_path):
+        pytest.skip("filesystem is case-sensitive; this bypass does not apply")
+
+    for variant in ("Results/work", "RESULTS/WORK"):
+        checkout_root = os.path.join(RUNNER_DIR, variant.split("/")[0])
+        stray = os.path.join(RUNNER_DIR, variant)
+        assert not os.path.exists(stray), f"stale checkout at {stray}"
+        proc = run_cli_subprocess([
+            "--mock", "--only", "no-such-run-id-xyz", "--scratch", variant,
+            "--results", str(tmp_path / f"results-{variant.replace('/', '-')}.jsonl"),
+        ])
+        assert proc.returncode == corpus_guard.REFUSE_EXIT, (variant, proc.stderr)
+        assert "refus" in proc.stderr.lower(), variant
+        assert "--scratch" in proc.stderr, variant
+        assert not os.path.exists(stray), (
+            f"run.py created a checkout at the case-variant path {stray!r}")
 
 
 def test_scratch_resolving_to_a_results_sibling_directory_is_not_refused(

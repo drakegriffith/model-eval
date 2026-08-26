@@ -575,9 +575,63 @@ def test_scratch_inside_results_dir_is_refused_before_run_py_is_invoked(
 
     assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
     assert "refus" in proc.stderr.lower()
+    assert "--scratch" in proc.stderr, (
+        "refusal message must name --scratch -- otherwise this could be "
+        "the --registry-path guard firing instead of #28's")
     assert not results.exists(), "run.py must never have been invoked"
     assert not os.path.exists(checkout_root), (
         "stage0_probe created a checkout inside the live results directory")
+
+
+def _fs_is_case_insensitive(tmp_path):
+    """Same detection the coordinator's brief asks for in
+    test_corpus_pinning.py: create a file, stat its case-flipped variant.
+    Duplicated here (not shared via a conftest) because this repo's test
+    files are each self-contained -- see test_corpus_pinning.py's own copy
+    for the identical rationale."""
+    marker = tmp_path / "case-fs-marker.txt"
+    marker.write_text("x", encoding="utf-8")
+    return os.path.exists(str(marker).upper())
+
+
+def test_case_variant_scratch_dir_name_is_refused_before_run_py_is_invoked(
+        live_files_untouched, stage0_fixture_matrix, tmp_path, monkeypatch):
+    """Round 2's verifier reproduction, this module's own version of the
+    run.py case-variant test: `--scratch` forwarded unchanged to run.py
+    resolves to a case-flipped variant of a directory nested inside the
+    live results directory ('results/STAGE0-WORK' vs. an already-existing
+    'results/stage0-work'). Skipped on a case-sensitive filesystem, where
+    the bypass this guards against cannot even be constructed."""
+    if not _fs_is_case_insensitive(tmp_path):
+        pytest.skip("filesystem is case-sensitive; this bypass does not apply")
+
+    results = tmp_path / "results.jsonl"
+    registry_copy = tmp_path / "models.yaml"
+    shutil.copy2(REAL_REGISTRY, registry_copy)
+
+    lower_dir = os.path.join(RUNNER_DIR, "results", "stage0-work")
+    os.makedirs(lower_dir, exist_ok=True)
+    variant = os.path.join(RUNNER_DIR, "results", "STAGE0-WORK", "checkout")
+    try:
+        monkeypatch.chdir(RUNNER_DIR)
+        proc = subprocess.run(
+            [sys.executable, "stage0_probe.py",
+             "--config", stage0_fixture_matrix["config"],
+             "--tasks-dir", stage0_fixture_matrix["tasks_dir"],
+             "--scratch", variant,
+             "--results", str(results),
+             "--registry-path", str(registry_copy),
+             "--mock"],
+            cwd=RUNNER_DIR, capture_output=True, text=True)
+
+        assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+        assert "refus" in proc.stderr.lower()
+        assert "--scratch" in proc.stderr
+        assert not results.exists(), "run.py must never have been invoked"
+        assert not os.path.exists(variant), (
+            "stage0_probe created a checkout at the case-variant path")
+    finally:
+        shutil.rmtree(lower_dir, ignore_errors=True)
 
 
 def test_non_mock_preflight_mismatch_refuses_before_run_py_is_invoked(

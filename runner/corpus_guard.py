@@ -67,30 +67,93 @@ def is_live_path(candidate, live_path):
     return False
 
 
+def _nearest_existing_ancestor(path):
+    """The deepest directory in `path`'s own ancestor chain (including
+    `path` itself) that actually exists on disk.
+
+    A scratch path's leaf need not exist yet -- `is_inside_or_same` runs
+    BEFORE the first checkout is created -- but some ancestor always does
+    (the filesystem root, at worst). os.path.exists's own directory-entry
+    lookup is case-insensitive on a case-insensitive filesystem (APFS):
+    walking up with it, rather than string-splitting `path`, is what lets
+    the caller find 'RESULTS' exists when only 'results' was ever created.
+    """
+    cur = os.path.abspath(path)
+    while not os.path.exists(cur):
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return cur
+
+
+def _case_insensitive_ancestor_match(candidate, container):
+    """True if `container` names the same file as `candidate`'s nearest
+    existing ancestor, or as any of THAT ancestor's own ancestors up to the
+    filesystem root -- checked with os.path.samefile at every step, never a
+    string compare.
+
+    Why the whole chain, not just one comparison: `candidate`'s nonexistent
+    leaf (if any) sits below its nearest existing ancestor, and containment
+    only requires SOME directory on the way up from `candidate` to be (or
+    be inside) `container` -- checked by climbing from that ancestor toward
+    the root and asking the filesystem, at each step, "is this container".
+    False (never raises) if `container` does not exist -- this guard's own
+    callers always pass an existing live results directory, but a helper
+    that stats an argument no caller can guarantee stays defensive anyway.
+    """
+    if not os.path.exists(container):
+        return False
+    cur = _nearest_existing_ancestor(candidate)
+    while True:
+        try:
+            if os.path.samefile(cur, container):
+                return True
+        except OSError:
+            pass
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return False
+        cur = parent
+
+
 def is_inside_or_same(candidate, container):
     """True if `candidate` resolves to `container` itself or to a path
     nested inside it.
 
-    Compared by resolved PATH COMPONENTS (os.path.commonpath), never by
-    string prefix. A string-prefix test was considered and rejected: it
-    wrongly refuses a sibling directory that merely shares a prefix --
+    Two independent checks, either sufficient -- same posture as
+    `is_live_path` above, extended from a single pair to a whole ancestor
+    chain. First, resolved PATH COMPONENTS (os.path.commonpath) over both
+    sides run through `_norm` (realpath + normcase): this resolves a
+    symlink hop, a doubled slash, or a relative path resolved against a
+    different cwd, and is deliberately NOT a string-prefix test --
     "/a/results2".startswith("/a/results") is True, but results2 does not
     live inside results, and a caller must still be able to name a scratch
-    dir next to the live results directory. Both sides go through `_norm`
-    first (realpath + normcase, see module docstring) so a symlink hop, a
-    doubled slash, or a relative path resolved against a different cwd all
-    land on the same identity before containment is tested.
+    dir next to the live results directory. Second,
+    `_case_insensitive_ancestor_match`: normcase is a no-op on POSIX (see
+    module docstring), so on a case-insensitive filesystem (APFS) a
+    candidate like 'RESULTS/WORK' shares no resolved string and no path
+    component with 'results' even though the filesystem itself treats
+    'RESULTS' as the very same directory -- a verifier reproduced exactly
+    this as a live bypass of the first cut of this function, which carried
+    only the commonpath check. The candidate's leaf need not exist for
+    this to fire (it runs before the scratch dir is created); the ancestor
+    check climbs to whatever nearest directory does exist and asks the
+    filesystem, via samefile, rather than the string compare the first
+    check already is.
     """
     cand = _norm(candidate)
     cont = _norm(container)
     if cand == cont:
         return True
     try:
-        common = os.path.commonpath([cand, cont])
+        if os.path.commonpath([cand, cont]) == cont:
+            return True
     except ValueError:
-        # No common root (e.g. different drives on Windows) -- never nested.
-        return False
-    return common == cont
+        # No common root (e.g. different drives on Windows) -- never nested
+        # by this check; the case-insensitive check below still runs.
+        pass
+    return _case_insensitive_ancestor_match(candidate, container)
 
 
 def refuse_scratch_inside_results(scratch, results_dir):
