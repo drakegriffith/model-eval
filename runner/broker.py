@@ -109,8 +109,7 @@ def resolve_k(value):
             f"K={k} exceeds the pre-registered ceiling of {K_CEILING} "
             f"(pre-registration amendment A1, docs/studio-handoff/"
             f"prompt-2-run-experiment.md at a0cef36, registered 2026-08-25: "
-            f"K=20, cap_exhausted SCORED, stage-0 flip at >= 10 requests; "
-            f"ceiling carried from ticket 17 section 6)")
+            f"K=20, cap_exhausted SCORED, stage-0 flip at >= 10 requests)")
     return k
 
 

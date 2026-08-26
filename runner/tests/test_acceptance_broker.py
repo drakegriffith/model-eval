@@ -482,9 +482,10 @@ def test_replacing_verify_sh_with_the_shim_is_not_a_tamper_finding(repo):
 # K itself. Unit-level, because the number is pre-registered.
 # --------------------------------------------------------------------------- #
 def test_k_defaults_to_ten_and_cannot_exceed_the_pre_registered_ceiling():
-    """K = 10 (ticket 17 section 6), revisable once to K' = min(20, 2M). A
-    config above 20 is not a tuning choice, it is a protocol violation, and
-    finding it at analysis time is finding it too late."""
+    """K = 10 by default; K may be set to 20 per amendment A1
+    (docs/studio-handoff/prompt-2-run-experiment.md at a0cef36, registered
+    2026-08-25). A config above 20 is not a tuning choice, it is a protocol
+    violation, and finding it at analysis time is finding it too late."""
     assert broker.resolve_k(None) == 10
     assert broker.resolve_k(20) == 20
     with pytest.raises(ValueError):
