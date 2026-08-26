@@ -39,10 +39,12 @@ high-harness arms carry the largest prompts, so it manufactures exactly the "L5
 looks worse" result the harness-dose experiment exists to measure.
 
 WHAT DELIBERATELY STAYS SCORED. `cap_exhausted` -- the BROKER's K acceptance cap.
-Pre-registration section 7 scores it a failure on purpose: the model spent its K
-revisions and did not converge, which is a fact about the model. It is a
-different cap from the wall clock, and folding the two together would smuggle a
-protocol treatment out of the denominator.
+Pre-registration amendment A1 (docs/studio-handoff/prompt-2-run-experiment.md at
+a0cef36, registered 2026-08-25: K=20, cap_exhausted SCORED, stage-0 flip at >= 10
+requests) scores it a failure on purpose: the model spent its K revisions and did
+not converge, which is a fact about the model. It is a different cap from the
+wall clock, and folding the two together would smuggle a protocol treatment out
+of the denominator.
 
 Stdlib only. No file I/O, no imports of the instrument.
 """
@@ -80,7 +82,10 @@ EXIT_REASON_CLASS = {
     # Complete runs. The grade is the model's.
     "ok": SCORED,
     # The broker's K acceptance cap. A protocol treatment with a pre-registered
-    # scoring rule (section 7), not an instrument fault. See the module note.
+    # scoring rule (pre-registration amendment A1, docs/studio-handoff/
+    # prompt-2-run-experiment.md at a0cef36, registered 2026-08-25: K=20,
+    # cap_exhausted SCORED, stage-0 flip at >= 10 requests), not an instrument
+    # fault. See the module note.
     "cap_exhausted": SCORED,
 
     # The wall clock ran out. This says the cap was too small, or the server was

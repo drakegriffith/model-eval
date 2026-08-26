@@ -72,10 +72,14 @@ defaults:
   # rate -- a far larger bias than an over-generous cap, and in the opposite,
   # flattering direction. Broker on, cap loose.
   #
-  # The open question -- is a broker termination a GLM autonomy failure at all? --
-  # is filed, because it depends on a `pre-registration section 7` citation in
-  # run.py that predates this bundle. If that resolves to "no", cap_exhausted
-  # becomes an excluded status and K stops being a treatment at all.
+  # The open question -- is a broker termination a GLM autonomy failure at
+  # all? -- is resolved by pre-registration amendment A1
+  # (docs/studio-handoff/prompt-2-run-experiment.md at a0cef36, registered
+  # 2026-08-25: K=20, cap_exhausted SCORED, stage-0 flip at >= 10 requests):
+  # cap_exhausted is SCORED as a failure, not excluded, and K=20 is now the
+  # registered value unless a stage-0 rep reaches >= 10 acceptance requests,
+  # in which case K is re-registered from GLM's own distribution before
+  # stage 1 starts.
   k_acceptance: 20
 
 sweeps:
