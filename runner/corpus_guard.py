@@ -67,6 +67,148 @@ def is_live_path(candidate, live_path):
     return False
 
 
+def _nearest_existing_ancestor(start):
+    """The deepest directory in `start`'s own ancestor chain (including
+    `start` itself) that actually exists on disk. `start` must already be
+    absolute -- callers pass either os.path.abspath or os.path.realpath of
+    the real candidate, deliberately not computed here (see
+    `_case_insensitive_ancestor_match`, which needs both).
+
+    A scratch path's leaf need not exist yet -- `is_inside_or_same` runs
+    BEFORE the first checkout is created -- but some ancestor always does
+    (the filesystem root, at worst). os.path.exists's own directory-entry
+    lookup is case-insensitive on a case-insensitive filesystem (APFS):
+    walking up with it, rather than string-splitting `start`, is what lets
+    the caller find 'RESULTS' exists when only 'results' was ever created.
+    """
+    cur = start
+    while not os.path.exists(cur):
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return cur
+
+
+def _walk_to_root_for_match(start, container):
+    """True if `container` names the same file as `start`'s nearest
+    existing ancestor, or as any of THAT ancestor's own ancestors up to the
+    filesystem root -- checked with os.path.samefile at every step, never a
+    string compare. `container` is assumed to already exist (checked once
+    by the caller)."""
+    cur = _nearest_existing_ancestor(start)
+    while True:
+        try:
+            if os.path.samefile(cur, container):
+                return True
+        except OSError:
+            pass
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return False
+        cur = parent
+
+
+def _case_insensitive_ancestor_match(candidate, container):
+    """True if `container` contains, or is, `candidate` by filesystem
+    identity rather than by string -- checked along TWO independent
+    starting points, either sufficient: os.path.abspath(candidate) (never
+    dereferences a symlink `candidate` itself might be) and
+    os.path.realpath(candidate) (dereferences every symlink hop, however
+    many, but never folds case -- see module docstring). A verifier
+    reproduced a bypass composed of both gaps at once: `candidate` a
+    symlink whose target names an existing results subdirectory by a case
+    variant (e.g. a symlink to '.../RESULTS/stage0-work' when only
+    '.../results/stage0-work' was ever created). The abspath walk never
+    resolves the symlink, so it starts from the symlink's own path (which
+    "exists" by following the link, but names it, not its target's real
+    ancestors) and never reaches the results directory while climbing. The
+    realpath walk starts from the dereferenced target -- still
+    case-variant, but now walkable by os.path.exists's own case-insensitive
+    lookup -- and finds the live results directory partway up. Neither walk
+    alone is redundant: the realpath walk is what a plain (non-symlink)
+    case-variant path already passed through unchanged, so dropping the
+    abspath walk in favor of realpath-only was considered and rejected --
+    it would just move the blind spot rather than close it.
+
+    False (never raises) if `container` does not exist -- this guard's own
+    callers always pass an existing live results directory, but a helper
+    that stats an argument no caller can guarantee stays defensive anyway.
+    """
+    if not os.path.exists(container):
+        return False
+    return (_walk_to_root_for_match(os.path.abspath(candidate), container)
+            or _walk_to_root_for_match(os.path.realpath(candidate), container))
+
+
+def is_inside_or_same(candidate, container):
+    """True if `candidate` resolves to `container` itself or to a path
+    nested inside it.
+
+    Two independent checks, either sufficient -- same posture as
+    `is_live_path` above, extended from a single pair to a whole ancestor
+    chain. First, resolved PATH COMPONENTS (os.path.commonpath) over both
+    sides run through `_norm` (realpath + normcase): this resolves a
+    symlink hop, a doubled slash, or a relative path resolved against a
+    different cwd, and is deliberately NOT a string-prefix test --
+    "/a/results2".startswith("/a/results") is True, but results2 does not
+    live inside results, and a caller must still be able to name a scratch
+    dir next to the live results directory. Second,
+    `_case_insensitive_ancestor_match`: normcase is a no-op on POSIX (see
+    module docstring), so on a case-insensitive filesystem (APFS) a
+    candidate like 'RESULTS/WORK' shares no resolved string and no path
+    component with 'results' even though the filesystem itself treats
+    'RESULTS' as the very same directory -- a verifier reproduced exactly
+    this as a live bypass of the first cut of this function, which carried
+    only the commonpath check. The candidate's leaf need not exist for
+    this to fire (it runs before the scratch dir is created); the ancestor
+    check climbs to whatever nearest directory does exist and asks the
+    filesystem, via samefile, rather than the string compare the first
+    check already is -- and itself climbs from two independent starting
+    points (abspath and realpath of `candidate`) because a SECOND verifier
+    pass composed both gaps: a candidate that is itself a symlink to a
+    case-variant path is caught by neither commonpath (case) nor an
+    abspath-only ancestor walk (symlink) alone (see
+    `_case_insensitive_ancestor_match`'s own docstring).
+    """
+    cand = _norm(candidate)
+    cont = _norm(container)
+    if cand == cont:
+        return True
+    try:
+        if os.path.commonpath([cand, cont]) == cont:
+            return True
+    except ValueError:
+        # No common root (e.g. different drives on Windows) -- never nested
+        # by this check; the case-insensitive check below still runs.
+        pass
+    return _case_insensitive_ancestor_match(candidate, container)
+
+
+def refuse_scratch_inside_results(scratch, results_dir):
+    """None if `scratch` resolves outside `results_dir`; otherwise a
+    ready-to-print refusal string naming both resolved paths (issue #28).
+
+    Distinct from `refusal_message` above: that guard catches a --results/
+    --usage/--registry-path argument that resolves TO a live corpus file.
+    This one catches a --scratch argument that resolves INTO the live
+    results directory -- a run checkout left there pollutes the corpus
+    directory even though it is not itself a corpus write, so those row-
+    level guards report the corpus untouched while runner/results/ fills up
+    with git checkouts. Must be called, and must refuse, before the first
+    scratch directory is created; it does not depend on --mock/--dry-run,
+    because a live dispatch with a bad --scratch pollutes the same
+    directory just as surely as a mock one does.
+    """
+    if is_inside_or_same(scratch, results_dir):
+        return (
+            f"refusing: --scratch {os.path.realpath(scratch)!r} resolves "
+            f"inside the live results directory "
+            f"{os.path.realpath(results_dir)!r}. Pass --scratch a path "
+            f"outside the results directory, e.g. --scratch /tmp/scratch/work.")
+    return None
+
+
 def refusal_message(live_pairs, flag_hint):
     """None if no (candidate, live_path) pair in `live_pairs` collides;
     otherwise a ready-to-print refusal string naming the live path it found.
