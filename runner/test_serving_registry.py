@@ -279,6 +279,37 @@ def test_turn_cap_is_derived_from_the_slowest_measured_prefill():
 
 
 # --------------------------------------------------------------------------- #
+# Amendment A3 -- the wall-clock backstop derived from the registered turn cap N
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("n,expected", [
+    (10, 2400),   # 10 * 157 * 1.5 = 2355 -> next 600s multiple
+    (30, 7200),   # 30 * 157 * 1.5 = 7065 -> next 600s multiple
+    (40, 9600),   # 40 * 157 * 1.5 = 9420 -> next 600s multiple
+])
+def test_derive_wall_clock_s_rounds_up_to_the_next_600s(n, expected):
+    """A3's hang backstop once N is registered, NOT derive_turn_cap_s's
+    prefill-only model -- that model was not taken (A3: 24 s predicted vs
+    314 s measured for a 2-turn run), because it prices only prefill and
+    this stack's per-turn wall clock also pays decode, tool calls and
+    verify.sh. 157 s/turn is the registered flat per-turn estimate; 1.5x is
+    the same safety factor derive_turn_cap_s uses; the 600 s grid matches the
+    timeout_t*_s constants this replaces once N is set."""
+    assert sr.derive_wall_clock_s(n) == expected
+
+
+def test_derive_wall_clock_s_refuses_a_non_positive_n():
+    """N is a registered count of turns; zero or negative is not a cap, it is
+    a config bug, and this must fail closed rather than compute a backstop of
+    zero seconds that would kill every run instantly."""
+    with pytest.raises(sr.RegistryError):
+        sr.derive_wall_clock_s(0)
+    with pytest.raises(sr.RegistryError):
+        sr.derive_wall_clock_s(-5)
+    with pytest.raises(sr.RegistryError):
+        sr.derive_wall_clock_s(None)
+
+
+# --------------------------------------------------------------------------- #
 # Seam 3 -- the pre-dispatch gate, all three refusal cases
 # --------------------------------------------------------------------------- #
 def _row(driver="claude-code", **over):

@@ -1698,10 +1698,20 @@ _LEGACY_TIMEOUT_KEYS = {1: "timeout_t1_t2_s", 2: "timeout_t1_t2_s", 3: "timeout_
 def resolve_timeout_s(task, defaults):
     """The wall-clock cap `task` runs under, or ValueError naming what to declare.
 
-    Resolution order for a tier-N task: `timeout_t{N}_s`, then the legacy key
-    covering that tier (t1/t2 -> timeout_t1_t2_s, t3 -> timeout_t3_s), then an
-    explicit `timeout_default_s`. Nothing after that -- a tier with no cap
-    declared for it is a config bug and is raised as one.
+    Amendment A3: once `defaults.turn_cap_n` is registered (not null), it
+    supersedes everything below -- the wall clock becomes a pure hang backstop
+    derived from N via serving_registry.derive_wall_clock_s(N)
+    (N x 157 s x 1.5, rounded up to the next 600 s), the same value for every
+    task in the config, because N is a single registered number and the tiered
+    timeout_t*_s constants are what it replaces. `turn_cap_n` absent or null
+    (its state until the conductor fills it after stage 0, and permanently in
+    runs-glm-stage0.yaml, which carries no turn cap by design) leaves this
+    function's behaviour exactly as it was before A3.
+
+    Resolution order for a tier-N task otherwise: `timeout_t{N}_s`, then the
+    legacy key covering that tier (t1/t2 -> timeout_t1_t2_s, t3 ->
+    timeout_t3_s), then an explicit `timeout_default_s`. Nothing after that --
+    a tier with no cap declared for it is a config bug and is raised as one.
 
     Fail-closed for the same reason check_effort() is (ticket 22 defect 2). The
     old expression keyed on the literal "t3" and sent everything else to the
@@ -1725,6 +1735,9 @@ def resolve_timeout_s(task, defaults):
     the accuracy column.
     """
     defaults = defaults or {}
+    turn_cap_n = defaults.get("turn_cap_n")
+    if turn_cap_n is not None:
+        return serving_registry.derive_wall_clock_s(turn_cap_n)
     tried = []
     m = _TIER_RE.match(task or "")
     if m:
@@ -1740,6 +1753,78 @@ def resolve_timeout_s(task, defaults):
     raise ValueError(
         f"no wall-clock cap declared for task {task}; "
         f"add one of {', '.join(tried)} to the config's defaults")
+
+
+# Amendment A3, round 2 (issue #19). ladder_from_results.py, tables.py and
+# stats.py each compute a rate but load no sweep config of their own, so N
+# used to arrive ONLY via a --turn-cap-n flag -- a second source of truth
+# that silently diverged from this file's own defaults.turn_cap_n the moment
+# an operator forgot the flag: a config carrying turn_cap_n: 20 and an
+# unflagged reader printed a rate as if turn caps did not exist, with no
+# warning that the two had disagreed. These two functions are the one place
+# that precedence is decided, so every reader states it the same way.
+#
+# ladder_from_results.py and tables.py import this module and call
+# turn_cap_n_from_config/resolve_turn_cap_n directly, reusing parse_yaml
+# rather than inventing a third YAML reader. stats.py cannot: it is
+# CORE_MODULE (runner/import_gate.py rule A: a core module may import only
+# the stdlib and other core modules), and this module is neither, so it
+# carries its own minimal, duplicated scalar reader instead -- same posture
+# as stats.py's own multi_driver_models/model_key, kept in lockstep with
+# tables.py by intent rather than DRY'd across the core boundary.
+DEFAULT_TURN_CAP_CONFIG = os.path.join(RUNNER_DIR, "runs-glm-stage1.yaml")
+
+
+def turn_cap_n_from_config(config_path):
+    """`defaults.turn_cap_n` out of a sweep config, for a caller that has no
+    config of its own already open.
+
+    Tolerant the way a reader-side default has to be about ABSENCE: a
+    missing file, a file with no `defaults:` block, and `turn_cap_n` absent
+    or explicitly `null` all return None ("unset"), never an error.
+
+    NOT tolerant about TYPE (round 3, issue #19). `turn_cap_n: "20"`,
+    `20.0`, `"twenty"` and `true` all parse without error under parse_yaml --
+    a quoted string, a float, an unparseable string, and a bool are all
+    valid YAML scalars -- so a value check has to happen here, not rely on
+    the parser to have refused them. Left unchecked, a quoted "20" reaches
+    apply_turn_cap's `turns > n` and raises TypeError deep inside the
+    classification loop instead of at the config boundary where the bad
+    value actually lives, and stats.py's independent reader used to swallow
+    the same bad value as a caught ValueError and print turn_cap_n=unset --
+    publishing an UNCAPPED table with no warning that the config's N was
+    ignored. `bool` is explicitly excluded even though it subclasses `int` in
+    Python (`isinstance(True, int)` is True), because a stray `turn_cap_n:
+    true` must not silently register a cap of N=1.
+    """
+    if not config_path or not os.path.exists(config_path):
+        return None
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = parse_yaml(f.read()) or {}
+    n = (cfg.get("defaults") or {}).get("turn_cap_n")
+    if n is None:
+        return None
+    if isinstance(n, bool) or not isinstance(n, int):
+        raise ValueError(
+            f"{config_path}: defaults.turn_cap_n must be an int or null, "
+            f"got {n!r}")
+    return n
+
+
+def resolve_turn_cap_n(config_path, flag_value):
+    """N with an explicit --turn-cap-n beating the config, always -- exactly
+    one of the two sources of truth wins, and the caller learns which.
+
+    Returns (n, source) where source is "flag", "yaml", or "unset". Every
+    reader prints both, in the same line, so a published table never has to
+    be reverse-engineered to learn what N it was rendered under.
+    """
+    if flag_value is not None:
+        return flag_value, "flag"
+    n = turn_cap_n_from_config(config_path)
+    if n is not None:
+        return n, "yaml"
+    return None, "unset"
 
 
 # --------------------------------------------------------------------------- #

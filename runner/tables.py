@@ -48,6 +48,10 @@ sys.path.insert(0, RUNNER_DIR)
 import corpus_gates  # noqa: E402
 import run_status  # noqa: E402
 import usage_ledger  # noqa: E402
+# issue #19 round 2: reuse run.py's parse_yaml (via turn_cap_n_from_config /
+# resolve_turn_cap_n) for this reader's --config default. run.py does not
+# import this module back, so this is a new edge, not a cycle.
+import run as runner_mod  # noqa: E402
 
 EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
 
@@ -475,7 +479,28 @@ def table6_decision_matrix(rows, qual, ledger=None):
          "input tokens/task (true)", "when to use"], data) + note
 
 
-def build_report(results, judgments, ledger=None):
+def build_report(results, judgments, ledger=None, turn_cap_n=None,
+                 turn_cap_n_source="flag"):
+    # Amendment A3, applied ONCE, here, before any table sees a row -- same
+    # posture as corpus_gates/run_status below: one call site, not one per
+    # table. This module takes no config, so N (the registered turn cap)
+    # arrives as `turn_cap_n`, and main() resolves it from --turn-cap-n or,
+    # falling back, from --config's defaults.turn_cap_n (issue #19 round 2:
+    # one source of truth, not two that can silently disagree) --
+    # `turn_cap_n_source` names which one won, "flag" by default for a
+    # direct-argument caller that never went through that resolution (e.g. a
+    # test). turn_cap_n=None (the default, and the only state before the
+    # conductor registers N) makes apply_turn_cap a no-op -- the positive
+    # control: every table below sees exit_reason exactly as `results`
+    # already carried it.
+    # Reclassifying `exit_reason` itself (rather than threading a second
+    # predicate through every table) is what makes this ONE call site correct
+    # for both axes without touching table1-6's bodies: corpus_gates.summarizable
+    # and run_status.status_class both key off row["exit_reason"], so a row
+    # turn_cap re-classes out of the token axis (§2,3,5,6) the same way it
+    # re-classes out of the pass axis (§1) and every other table.
+    turns_missing = sum(1 for r in results if r.get("turns") is None)
+    results = run_status.apply_turn_cap(results, turn_cap_n)
     qual = quality_by_run(judgments)
     # The headline count is the ESTIMAND's, not every row's. It used to read
     # "N run row(s), P passing" with P taken over the whole corpus, so the
@@ -513,6 +538,13 @@ def build_report(results, judgments, ledger=None):
         + (run_status.format_excluded(excl_status) or "nothing excluded")
         + f" (scored={len(scored)} of {len(results)}).",
         "",
+        "> **turn cap** (amendment A3, issue #19) — turn_cap_n="
+        + (f"{turn_cap_n} (source={turn_cap_n_source})" if turn_cap_n is not None
+           else "unset")
+        + (f", turns_missing={turns_missing} (no `turns` field, not capped)"
+           if turn_cap_n is not None else "")
+        + ".",
+        "",
         "> **dispositions** (ticket 31 AC#4 / ticket 34) — "
         + corpus_gates.format_exclusions(
             "quality means", len(results), kept_s, excl_s)
@@ -546,6 +578,17 @@ def main():
     ap.add_argument("--usage", default=os.path.join(RUNNER_DIR, "results", "usage.jsonl"),
                     help="ledger joined by run_id for recovered input tokens")
     ap.add_argument("--out", default=None, help="write markdown here (default: stdout)")
+    ap.add_argument("--turn-cap-n", type=int, default=None,
+                    help="amendment A3's registered turn cap N, overriding "
+                         "--config's defaults.turn_cap_n; rows with turns > N "
+                         "are excluded as exit_reason turn_cap. Neither this "
+                         "nor the config set (the default) is the positive "
+                         "control: behaviour is unchanged from before A3.")
+    ap.add_argument("--config", default=runner_mod.DEFAULT_TURN_CAP_CONFIG,
+                    help="sweep config this reader falls back to for "
+                         "defaults.turn_cap_n when --turn-cap-n is not given "
+                         "(issue #19 round 2: one source of truth for N, not "
+                         "two that can silently disagree)")
     args = ap.parse_args()
 
     results = load_jsonl(args.results)
@@ -553,7 +596,8 @@ def main():
     ledger = usage_ledger.recovered_tokens_in(args.usage)
     if not results:
         print(f"no results found at {args.results}", file=sys.stderr)
-    report = build_report(results, judgments, ledger)
+    n, n_source = runner_mod.resolve_turn_cap_n(args.config, args.turn_cap_n)
+    report = build_report(results, judgments, ledger, n, n_source)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(report + "\n")
