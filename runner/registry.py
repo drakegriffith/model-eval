@@ -112,14 +112,14 @@ MODELS = {
     # loopback (studio/local-family), no key, no spend. `efforts` here is
     # CLAUDE_TIERS by inheritance of the same --effort flag the claude binary
     # takes for every family riding it, NOT because anyone has confirmed LM
-    # Studio's Anthropic-compatible endpoint does anything with the tier --
-    # `efforts_verified: False` says so explicitly so a reader doesn't mistake
-    # "declared" for "measured" (see registry.py's own Limitations section).
-    # That verification is probe_endpoints.py's job, same as every other family.
-    "glm-4.7-local":             {"family": "local", "efforts": CLAUDE_TIERS,
-                                  "efforts_verified": False},
-    "qwen3-coder-next-local":    {"family": "local", "efforts": CLAUDE_TIERS,
-                                  "efforts_verified": False},
+    # Studio's Anthropic-compatible endpoint does anything with the tier.
+    # Whether a tier moves anything is a measured question, not a hand-set
+    # one: effort_verdict.py classifies each model's ladder as credited (REAL,
+    # spread exceeds same-tier noise) or not-yet-credited from the actual
+    # probe_endpoints.py data, so there is no separate flag here to drift out
+    # of sync with that measurement.
+    "glm-4.7-local":             {"family": "local", "efforts": CLAUDE_TIERS},
+    "qwen3-coder-next-local":    {"family": "local", "efforts": CLAUDE_TIERS},
 }
 
 # Short names used by the existing runs.yaml files and already written into
