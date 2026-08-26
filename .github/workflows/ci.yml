@@ -22,11 +22,13 @@ jobs:
       - name: Offline test suite (excludes test_live_*)
         run: |
           set -uo pipefail
+          set +e
           OUTPUT=$(python3 -m pytest -q runner --ignore=runner/fixtures \
             --ignore=runner/tests/test_live_mcp_seal.py \
             --ignore=runner/tests/test_live_vault_seal.py \
             --ignore=runner/tests/test_live_codex_seal.py)
           STATUS=$?
+          set -e
           echo "$OUTPUT"
           COUNT=$(echo "$OUTPUT" | grep -oE '[0-9]+ passed' | tail -1 | grep -oE '[0-9]+')
           echo "passed count: ${COUNT:-0}"
