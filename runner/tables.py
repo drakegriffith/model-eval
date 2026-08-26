@@ -399,6 +399,7 @@ def table5_variance(rows):
                                "harness" if r.get("harness") else "bare", r["task"]))
     data = []
     dropped_note = []
+    token_notes = []
     for (model, effort, htag, task), rs in sorted(g.items()):
         # Variance is measured over the runs that produced a measurement. A
         # timeout's loc_changed and tokens_out describe where it was cut off, so
@@ -419,7 +420,23 @@ def table5_variance(rows):
                 f"run(s), below the minimum of 2 needed for variance ({why})")
             continue
         passes = sum(1 for r in rs if r.get("pass"))
-        spend, _dropped = token_rows(rs)
+        spend, dropped = token_rows(rs)
+        if not spend:
+            # issue #41. A cell can clear the >=2-scored-runs minimum just
+            # above and still have EVERY scored row excluded from the token
+            # axis -- e.g. all cap_exhausted, SCORED under amendment A1, but a
+            # capped run's tokens_out measures where the broker's K-request
+            # cap cut it off, not what the tier spent. `min()`/`max()` on that
+            # empty `spend` crashed the whole report (issue #41). There is
+            # nothing to put in the loc/tokens columns -- the same
+            # un-renderable shape as the <2-scored-runs case above -- so this
+            # is named through the token-axis footnote helper PR #39 added
+            # (`token_axis_drop_note`), since the cause is a token-axis
+            # exclusion, not a variance-minimum one; the two footnotes stay
+            # separate so a reader is not left guessing which rule fired.
+            token_notes.append(token_axis_drop_note(
+                f"{model}/{effort}/{htag} / {task}", rs, dropped))
+            continue
         locs = [r.get("loc_changed", 0) for r in spend]
         toks = [out_tokens(r) for r in spend]
         data.append([
@@ -433,6 +450,7 @@ def table5_variance(rows):
     if dropped_note:
         out += ("\n> **cells excluded from variance** (issue #21, below the "
                 "2-run minimum): " + "; ".join(dropped_note) + ".\n")
+    out += token_axis_note(token_notes)
     return out
 
 
@@ -458,8 +476,25 @@ def table6_decision_matrix(rows, qual, ledger=None):
             passes = sum(1 for r in rs if r.get("pass"))
             if n:
                 rate = passes / n
-                toks = mean([out_tokens(r) for r in token_rows(rs)[0]]) or 0
-                score = (rate, -toks)
+                spend, _spend_dropped = token_rows(rs)
+                if spend:
+                    toks = mean([out_tokens(r) for r in spend])
+                    score = (rate, -toks)
+                else:
+                    # issue #41 (2), the or-0 sibling of the n=0 fix below.
+                    # A cell can have real SCORED rows (n>0, a genuine rate)
+                    # and still have every one of them excluded from the
+                    # token axis -- e.g. all cap_exhausted. `mean([]) or 0`
+                    # used to score that absent evidence as `toks=0`, which
+                    # reads as "free" in the `-toks` tiebreak: between two
+                    # 0%-pass configs, the one with NO token evidence at all
+                    # could out-rank one with a real (if nonzero) measured
+                    # spend. `-inf` loses every tie against a real spend
+                    # number; it still beats no rate at all (the n=0 branch's
+                    # -1 sentinel), because a real 0%-pass measurement is
+                    # still more than an unmeasured config has.
+                    toks = None
+                    score = (rate, float("-inf"))
             else:
                 # issue #31. `rate = passes / n if n else 0` used to score an
                 # unmeasured config (0 scored rows) identically to a REAL
