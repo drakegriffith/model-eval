@@ -152,8 +152,10 @@ def test_the_report_discloses_the_truncated_rows_dropped_from_spend():
 # --------------------------------------------------------------------------- #
 def test_the_pass_rate_still_counts_the_capped_run():
     """The control that keeps this from becoming the opposite bug. cap_exhausted
-    is a scored failure -- pre-registration section 7 -- so the pass denominator
-    is 4, not 3, even though the token mean is over 3."""
+    is a scored failure -- pre-registration amendment A1
+    (docs/studio-handoff/prompt-2-run-experiment.md at a0cef36, registered
+    2026-08-25: K=20, cap_exhausted SCORED, stage-0 flip at >= 10 requests) --
+    so the pass denominator is 4, not 3, even though the token mean is over 3."""
     out = tables.table1_effort_ladder(probe_rows(), {})
 
     assert "| 4 |" in out, f"the capped run left the pass denominator:\n{out}"

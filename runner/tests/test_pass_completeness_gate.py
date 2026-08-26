@@ -159,8 +159,11 @@ def test_an_unheard_of_exit_reason_is_gated_without_being_enlisted(repo, monkeyp
 
 def test_the_cap_case_keeps_its_own_field_and_its_own_name(repo, monkeypatch):
     """Generalizing the rule must not quietly retire `pass_at_cap`: every row
-    written before this ticket carries it and pre-registration section 7 names
-    it. On a cap row it now equals pass_raw; everywhere else it stays None, so
+    written before this ticket carries it -- the field is this runner's,
+    introduced at ticket 34, not named by pre-registration amendment A1
+    (docs/studio-handoff/prompt-2-run-experiment.md at a0cef36, registered
+    2026-08-25), which says only that cap_exhausted is SCORED and K=20. On a
+    cap row it now equals pass_raw; everywhere else it stays None, so
     nothing that reads it starts seeing cap semantics on non-cap rows."""
     capped = execute(repo, monkeypatch, solve=True, rc=0,
                      force_reason="cap_exhausted")

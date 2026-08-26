@@ -22,10 +22,12 @@ is what makes this confusing:
                                   -> "is this a truncated session"
 
 They disagree on exactly one status, and the disagreement is correct.
-`cap_exhausted` is a model measurement -- the model spent its K revisions and did
-not converge, which pre-registration section 7 scores as a failure -- whose token
-counts describe a truncated session. So it is IN the pass denominator and OUT of
-the token means. Any test that only exercises ok/timeout/cli_error cannot tell
+`cap_exhausted` is a model measurement -- the model spent its K acceptance
+requests and did not converge, which pre-registration amendment A1
+(docs/studio-handoff/prompt-2-run-experiment.md at a0cef36, registered
+2026-08-25: K=20, cap_exhausted SCORED, stage-0 flip at >= 10 requests) scores
+as a failure -- whose token counts describe a truncated session. So it is IN
+the pass denominator and OUT of the token means. Any test that only exercises ok/timeout/cli_error cannot tell
 the two rules apart, because those three agree under both; the corpus below
 includes cap_exhausted and structurally_impossible precisely so it can.
 

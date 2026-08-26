@@ -115,7 +115,9 @@ def report_block(label, rows):
     #
     # It is the WRONG gate for a pass rate, because it also drops cap_exhausted:
     # a run the model got a full attempt at and did not converge on, which
-    # pre-registration section 7 scores as a failure. Excluding it removes real
+    # pre-registration amendment A1 (docs/studio-handoff/prompt-2-run-experiment.md
+    # at a0cef36, registered 2026-08-25: K=20, cap_exhausted SCORED, stage-0
+    # flip at >= 10 requests) scores as a failure. Excluding it removes real
     # failures and inflates the rate. So the pass axis goes through the one
     # shared predicate, and both denominators are reported rather than one being
     # silently reused for the other.

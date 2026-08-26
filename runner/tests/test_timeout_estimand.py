@@ -26,10 +26,12 @@ carry the largest prompts, so it manufactures exactly the "L5 looks worse" resul
 the experiment is trying to measure.
 
 WHAT IS NOT CHANGED, deliberately: `cap_exhausted`. That is the BROKER's K
-acceptance cap, and pre-registration section 7 scores it a failure on purpose --
-the model spent its revisions and did not converge, which is a fact about the
-model. It is a different cap from the wall clock, and merging the two would
-smuggle a protocol treatment out of the denominator.
+acceptance cap, and pre-registration amendment A1
+(docs/studio-handoff/prompt-2-run-experiment.md at a0cef36, registered
+2026-08-25: K=20, cap_exhausted SCORED, stage-0 flip at >= 10 requests) scores
+it a failure on purpose -- the model spent its acceptance requests and did not
+converge, which is a fact about the model. It is a different cap from the wall clock,
+and merging the two would smuggle a protocol treatment out of the denominator.
 """
 import json
 import os
@@ -48,7 +50,10 @@ import tables  # noqa: E402
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("exit_reason,expected", [
     ("ok", run_status.SCORED),
-    # The broker's K cap: a protocol treatment, scored, per pre-registration s7.
+    # The broker's K cap: a protocol treatment, scored, per pre-registration
+    # amendment A1 (docs/studio-handoff/prompt-2-run-experiment.md at
+    # a0cef36, registered 2026-08-25: K=20, cap_exhausted SCORED, stage-0
+    # flip at >= 10 requests).
     ("cap_exhausted", run_status.SCORED),
     # The wall clock: the instrument ran out of patience, not the model.
     ("timeout", run_status.TIMEOUT),
@@ -150,9 +155,11 @@ def test_a_cell_whose_every_run_timed_out_reports_no_rate_rather_than_zero():
 
 def test_the_broker_cap_stays_in_the_denominator():
     """The control. cap_exhausted is the K acceptance cap, which pre-registration
-    section 7 scores as a failure -- the model spent its revisions and did not
-    converge. If the fix swept that out too, a real model failure would have been
-    laundered into an infra note."""
+    amendment A1 (docs/studio-handoff/prompt-2-run-experiment.md at a0cef36,
+    registered 2026-08-25: K=20, cap_exhausted SCORED, stage-0 flip at >= 10
+    requests) scores as a failure -- the model spent its acceptance requests
+    and did not converge. If the fix swept that out too, a real model failure
+    would have been laundered into an infra note."""
     rows = rows_for([("ok", True), ("cap_exhausted", False)])
 
     out = tables.table1_effort_ladder(rows, {})

@@ -63,8 +63,15 @@ import threading
 # surviving defence -- twice the observed maximum of 5 (n=60). The three other
 # defences offered during that session (distribution-free tolerance bound,
 # geometric fit, effort headroom) are struck and recorded as struck; do not
-# revive them here. K is revisable exactly once, before the main sweep, under
-# the pre-registration's one-shot rule (section 7), to K' = min(20, 2M).
+# revive them here. Ticket 17's one-shot revision-by-formula (K' = min(20, 2M))
+# is retired by this commit, not by A1 -- pre-registration amendment A1
+# (docs/studio-handoff/prompt-2-run-experiment.md at a0cef36, registered
+# 2026-08-25) never mentions ticket 17 or that formula; it fixes K=20 for
+# stage 0/1 outright, and its only revision path is the >= 10-request flip.
+# K_DEFAULT stays 10 as resolve_k(None)'s value
+# (tests/test_acceptance_broker.py:488); runs-glm-stage0.yaml:60 and
+# runs-glm-stage1.yaml:83 set k_acceptance: 20 explicitly, so stage 0/1
+# never actually run at this default.
 K_DEFAULT = 10
 # The revision ceiling, enforced here so a config typo cannot quietly exceed the
 # pre-registered bound. "The ceiling of 20 exists so the revision cannot eat the
@@ -100,7 +107,10 @@ def resolve_k(value):
     if k > K_CEILING:
         raise ValueError(
             f"K={k} exceeds the pre-registered ceiling of {K_CEILING} "
-            f"(pre-registration section 7, carried from ticket 17 section 6)")
+            f"(pre-registration amendment A1, docs/studio-handoff/"
+            f"prompt-2-run-experiment.md at a0cef36, registered 2026-08-25: "
+            f"K=20, cap_exhausted SCORED, stage-0 flip at >= 10 requests; "
+            f"ceiling carried from ticket 17 section 6)")
     return k
 
 

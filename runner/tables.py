@@ -155,11 +155,14 @@ def group(rows, keyfn):
 # THE TOKEN AXIS. Separate from the pass axis on purpose, and this is the one
 # place that says which rows a spend number may average.
 #
-# `run_status.in_denominator` counts cap_exhausted as SCORED -- correctly: a
-# model that spent its K revisions and did not converge DID get a fair attempt,
-# so it belongs in the pass denominator as a failure. But its tokens_out records
-# where the BROKER cut generation off, not what the tier chose to spend, so it
-# must not enter a spend mean.
+# `run_status.in_denominator` counts cap_exhausted as SCORED -- correctly per
+# pre-registration amendment A1 (docs/studio-handoff/prompt-2-run-experiment.md
+# at a0cef36, registered 2026-08-25: K=20, cap_exhausted SCORED, stage-0 flip
+# at >= 10 requests), not an inherited section: a model that spent its K
+# acceptance requests and did not converge -- this table's reading: DID get
+# a fair attempt, so it belongs in the pass denominator as a failure. But
+# its tokens_out records where the BROKER cut generation off, not what the
+# tier chose to spend, so it must not enter a spend mean.
 #
 # `ladder_from_results.tiers_for` and `stats.section_cost_matched` already draw
 # the line here. Until this commit tables 2-6 drew it at in_denominator instead,
