@@ -201,3 +201,36 @@ def test_table5_survives_a_cell_whose_scored_rows_are_all_capped():
         f"the all-capped cell is not named:\n{out}")
     assert "cap_exhausted=2" in out, f"the drop's cause is not named:\n{out}"
 
+
+# --------------------------------------------------------------------------- #
+# issue #41 (2): table6's or-0 tiebreak sibling -- an all-capped 0%-pass cell
+# must not out-rank a real 0%-pass cell that has measured spend
+# --------------------------------------------------------------------------- #
+def test_table6_prefers_real_spend_over_an_all_capped_cell_at_a_rate_tie():
+    """Two 0%-pass configs for the same model:
+      (effort=high, bare): 2 cap_exhausted rows -> SCORED (rate=0.0), but
+                           EVERY scored row is excluded from the token axis,
+                           so there is no real spend evidence at all.
+      (effort=low,  bare): 2 ok-but-failing rows -> SCORED (rate=0.0), with
+                           real measured spend (500/520 tokens_out).
+
+    Both tie on rate=0.0. `mean([...]) or 0` used to score the all-capped
+    cell's absent evidence as `toks=0` -- read as "free" -- which beat the
+    real cell's actual (nonzero) spend in the `-toks` tiebreak, so the
+    config with NO token evidence won "best config" over the one with real,
+    if unflattering, evidence. A cell with a real measured spend must win a
+    rate tie against one with none."""
+    rows = [
+        row(0, "cap_exhausted", pass_=False, tok=1, effort="high", harness=False),
+        row(1, "cap_exhausted", pass_=False, tok=1, effort="high", harness=False),
+        row(2, "ok", pass_=False, tok=500, effort="low", harness=False),
+        row(3, "ok", pass_=False, tok=520, effort="low", harness=False),
+    ]
+
+    out = tables.table6_decision_matrix(rows, {})
+
+    assert "low/bare" in out, (
+        f"the real-spend config (effort=low) must win the rate tie:\n{out}")
+    assert "high/bare" not in out, (
+        f"the no-evidence config (effort=high) must not win over a real "
+        f"measurement:\n{out}")

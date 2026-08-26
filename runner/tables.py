@@ -476,8 +476,25 @@ def table6_decision_matrix(rows, qual, ledger=None):
             passes = sum(1 for r in rs if r.get("pass"))
             if n:
                 rate = passes / n
-                toks = mean([out_tokens(r) for r in token_rows(rs)[0]]) or 0
-                score = (rate, -toks)
+                spend, _spend_dropped = token_rows(rs)
+                if spend:
+                    toks = mean([out_tokens(r) for r in spend])
+                    score = (rate, -toks)
+                else:
+                    # issue #41 (2), the or-0 sibling of the n=0 fix below.
+                    # A cell can have real SCORED rows (n>0, a genuine rate)
+                    # and still have every one of them excluded from the
+                    # token axis -- e.g. all cap_exhausted. `mean([]) or 0`
+                    # used to score that absent evidence as `toks=0`, which
+                    # reads as "free" in the `-toks` tiebreak: between two
+                    # 0%-pass configs, the one with NO token evidence at all
+                    # could out-rank one with a real (if nonzero) measured
+                    # spend. `-inf` loses every tie against a real spend
+                    # number; it still beats no rate at all (the n=0 branch's
+                    # -1 sentinel), because a real 0%-pass measurement is
+                    # still more than an unmeasured config has.
+                    toks = None
+                    score = (rate, float("-inf"))
             else:
                 # issue #31. `rate = passes / n if n else 0` used to score an
                 # unmeasured config (0 scored rows) identically to a REAL
