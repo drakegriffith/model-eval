@@ -119,6 +119,7 @@ Limitations
       runner/import_gate.py forbids.
 """
 import argparse
+import math
 import os
 import re
 import subprocess
@@ -627,6 +628,28 @@ def derive_turn_cap_s(row, prompt_tokens, turns=1, safety_factor=1.5):
     if not slow:
         raise RegistryError(f"row {row_key(row)} has no measured prefill rate")
     return (prompt_tokens / float(slow)) * turns * safety_factor
+
+
+def derive_wall_clock_s(n):
+    """Amendment A3's hang backstop, once N is registered: N x 157 s x 1.5,
+    rounded up to the next 600 s.
+
+    Deliberately NOT derive_turn_cap_s. A3's ruling rejected wiring that
+    prefill-only model into the subprocess timeout: it predicted 24 s for a
+    measured 314 s 2-turn run, because it prices only the prefill and this
+    stack's per-turn wall clock also pays decode, tool calls and (with the
+    acceptance broker on) verify.sh. 157 s/turn is the registered flat
+    per-turn estimate instead; 1.5x is the same safety factor
+    derive_turn_cap_s uses; rounding to the next 600 s keeps this on the same
+    coarse grid as the timeout_t*_s constants it replaces once N is set.
+
+    N=10 -> 2355 -> 2400; N=30 -> 7065 -> 7200; N=40 -> 9420 -> 9600.
+    """
+    if not n or n <= 0:
+        raise RegistryError(
+            f"derive_wall_clock_s requires a positive turn cap N, got {n!r}")
+    raw_s = n * 157 * 1.5
+    return int(math.ceil(raw_s / 600.0) * 600)
 
 
 # --------------------------------------------------------------------------- #

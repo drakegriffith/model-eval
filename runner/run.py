@@ -1698,10 +1698,20 @@ _LEGACY_TIMEOUT_KEYS = {1: "timeout_t1_t2_s", 2: "timeout_t1_t2_s", 3: "timeout_
 def resolve_timeout_s(task, defaults):
     """The wall-clock cap `task` runs under, or ValueError naming what to declare.
 
-    Resolution order for a tier-N task: `timeout_t{N}_s`, then the legacy key
-    covering that tier (t1/t2 -> timeout_t1_t2_s, t3 -> timeout_t3_s), then an
-    explicit `timeout_default_s`. Nothing after that -- a tier with no cap
-    declared for it is a config bug and is raised as one.
+    Amendment A3: once `defaults.turn_cap_n` is registered (not null), it
+    supersedes everything below -- the wall clock becomes a pure hang backstop
+    derived from N via serving_registry.derive_wall_clock_s(N)
+    (N x 157 s x 1.5, rounded up to the next 600 s), the same value for every
+    task in the config, because N is a single registered number and the tiered
+    timeout_t*_s constants are what it replaces. `turn_cap_n` absent or null
+    (its state until the conductor fills it after stage 0, and permanently in
+    runs-glm-stage0.yaml, which carries no turn cap by design) leaves this
+    function's behaviour exactly as it was before A3.
+
+    Resolution order for a tier-N task otherwise: `timeout_t{N}_s`, then the
+    legacy key covering that tier (t1/t2 -> timeout_t1_t2_s, t3 ->
+    timeout_t3_s), then an explicit `timeout_default_s`. Nothing after that --
+    a tier with no cap declared for it is a config bug and is raised as one.
 
     Fail-closed for the same reason check_effort() is (ticket 22 defect 2). The
     old expression keyed on the literal "t3" and sent everything else to the
@@ -1725,6 +1735,9 @@ def resolve_timeout_s(task, defaults):
     the accuracy column.
     """
     defaults = defaults or {}
+    turn_cap_n = defaults.get("turn_cap_n")
+    if turn_cap_n is not None:
+        return serving_registry.derive_wall_clock_s(turn_cap_n)
     tried = []
     m = _TIER_RE.match(task or "")
     if m:
