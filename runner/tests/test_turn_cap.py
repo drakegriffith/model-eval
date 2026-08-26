@@ -255,12 +255,16 @@ _MISSING = object()
 
 def _write_config(tmp_path, n, name="config.yaml"):
     """A sweep-config copy carrying defaults.turn_cap_n as N (an int), None
-    (explicit yaml null), or _MISSING (the key absent entirely)."""
+    (explicit yaml null), _MISSING (the key absent entirely), or (round 3,
+    issue #19) a non-int scalar -- a Python str is written QUOTED, so it
+    round-trips as a YAML string and not as the int it looks like."""
     path = tmp_path / name
     if n is _MISSING:
         body = "defaults:\n  seed: 1337\n"
     elif n is None:
         body = "defaults:\n  turn_cap_n: null\n  seed: 1337\n"
+    elif isinstance(n, str):
+        body = f'defaults:\n  turn_cap_n: "{n}"\n  seed: 1337\n'
     else:
         body = f"defaults:\n  turn_cap_n: {n}\n  seed: 1337\n"
     path.write_text(body, encoding="utf-8")
@@ -276,6 +280,31 @@ def test_run_and_stats_config_readers_agree(tmp_path, n):
     down."""
     path = _write_config(tmp_path, n)
     assert runner_mod.turn_cap_n_from_config(path) == stats._turn_cap_n_from_config(path)
+
+
+@pytest.mark.parametrize("bad", ["20", 20.0, "twenty", True])
+def test_run_and_stats_reject_non_int_turn_cap_n_the_same_way(tmp_path, bad):
+    """Round 3 (issue #19): a quoted "20", a float 20.0, an unparseable
+    "twenty", and a YAML boolean true are all valid scalars that USED TO
+    diverge -- run.turn_cap_n_from_config returned the raw value (which
+    later raised TypeError deep inside apply_turn_cap's `turns > n`), while
+    stats._turn_cap_n_from_config caught its own int() failure and returned
+    None, silently printing turn_cap_n=unset and publishing an UNCAPPED
+    table with no warning. Both must now fail closed, at the config
+    boundary, with the SAME exception type -- never "unset" for a bad
+    value, only for a genuinely absent one."""
+    path = _write_config(tmp_path, bad)
+    with pytest.raises(ValueError) as run_exc:
+        runner_mod.turn_cap_n_from_config(path)
+    with pytest.raises(ValueError) as stats_exc:
+        stats._turn_cap_n_from_config(path)
+    assert type(run_exc.value) is type(stats_exc.value)
+    # And resolve_turn_cap_n (the entry point every reader actually calls)
+    # propagates rather than swallowing it into "unset".
+    with pytest.raises(ValueError):
+        runner_mod.resolve_turn_cap_n(path, None)
+    with pytest.raises(ValueError):
+        stats._resolve_turn_cap_n(path, None)
 
 
 def test_yaml_wins_when_no_flag_is_given(tmp_path):

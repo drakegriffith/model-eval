@@ -1779,18 +1779,36 @@ def turn_cap_n_from_config(config_path):
     """`defaults.turn_cap_n` out of a sweep config, for a caller that has no
     config of its own already open.
 
-    Tolerant the way a reader-side default has to be: a missing file, a file
-    with no `defaults:` block, and `turn_cap_n` absent or explicitly `null`
-    all return None ("unset"), never an error. This is a default a reader
-    falls back to, not a gate that refuses a bad config -- run.py's own
-    resolve_timeout_s is the gate for the config it actually dispatches
-    under.
+    Tolerant the way a reader-side default has to be about ABSENCE: a
+    missing file, a file with no `defaults:` block, and `turn_cap_n` absent
+    or explicitly `null` all return None ("unset"), never an error.
+
+    NOT tolerant about TYPE (round 3, issue #19). `turn_cap_n: "20"`,
+    `20.0`, `"twenty"` and `true` all parse without error under parse_yaml --
+    a quoted string, a float, an unparseable string, and a bool are all
+    valid YAML scalars -- so a value check has to happen here, not rely on
+    the parser to have refused them. Left unchecked, a quoted "20" reaches
+    apply_turn_cap's `turns > n` and raises TypeError deep inside the
+    classification loop instead of at the config boundary where the bad
+    value actually lives, and stats.py's independent reader used to swallow
+    the same bad value as a caught ValueError and print turn_cap_n=unset --
+    publishing an UNCAPPED table with no warning that the config's N was
+    ignored. `bool` is explicitly excluded even though it subclasses `int` in
+    Python (`isinstance(True, int)` is True), because a stray `turn_cap_n:
+    true` must not silently register a cap of N=1.
     """
     if not config_path or not os.path.exists(config_path):
         return None
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = parse_yaml(f.read()) or {}
-    return (cfg.get("defaults") or {}).get("turn_cap_n")
+    n = (cfg.get("defaults") or {}).get("turn_cap_n")
+    if n is None:
+        return None
+    if isinstance(n, bool) or not isinstance(n, int):
+        raise ValueError(
+            f"{config_path}: defaults.turn_cap_n must be an int or null, "
+            f"got {n!r}")
+    return n
 
 
 def resolve_turn_cap_n(config_path, flag_value):

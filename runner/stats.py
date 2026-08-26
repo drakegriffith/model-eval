@@ -630,10 +630,53 @@ _DEFAULT_TURN_CAP_CONFIG = os.path.join(RUNNER_DIR, "runs-glm-stage1.yaml")
 # one shape this repo's sweep configs use for `defaults:` -- a top-level key
 # followed by more-indented `key: value` lines -- and nothing else; it is not
 # a second general YAML parser.
+def _coerce_scalar(raw):
+    """Mirrors run.py's `_coerce` for exactly the shapes a bare YAML scalar
+    can take: quoted string, true/false, int, float, null/~/empty. Not a
+    second general YAML parser -- this reader still understands only the one
+    `defaults:` block shape -- but the SCALAR on the right of `turn_cap_n:`
+    can be any of these, and round 3 (issue #19) is exactly the bug that
+    followed from not telling them apart: a quoted "20" and an unquoted 20
+    must not coerce to the same Python value."""
+    v = raw.strip()
+    if v in ("", "null", "~"):
+        return None
+    if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"')
+                        or (v[0] == "'" and v[-1] == "'")):
+        return v[1:-1]
+    low = v.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    try:
+        return int(v)
+    except ValueError:
+        pass
+    try:
+        return float(v)
+    except ValueError:
+        pass
+    return v  # unparseable as a number -- the raw (unquoted) string itself
+
+
 def _turn_cap_n_from_config(config_path):
-    """`defaults.turn_cap_n` out of a sweep config. Tolerant like the general
-    reader has to be: a missing file, a file with no `defaults:` block, and
-    `turn_cap_n` absent or explicitly `null` all return None ("unset")."""
+    """`defaults.turn_cap_n` out of a sweep config.
+
+    Tolerant about ABSENCE like the general reader has to be: a missing
+    file, a file with no `defaults:` block, and `turn_cap_n` absent or
+    explicitly `null` all return None ("unset"), never an error.
+
+    NOT tolerant about TYPE (round 3, issue #19): `turn_cap_n: "20"`, `20.0`,
+    `"twenty"` and `true` are all valid YAML scalars that used to coerce
+    silently -- the old `int(val)` either succeeded on the wrong thing or
+    failed and was swallowed into None, printing turn_cap_n=unset and
+    publishing an UNCAPPED table with no warning that the config's N had
+    been ignored. `bool` is excluded even though it subclasses `int` in
+    Python, so `turn_cap_n: true` cannot silently register a cap of N=1.
+    Raises the SAME exception type as run.py's turn_cap_n_from_config on the
+    same bad value (test_turn_cap.py pins this as a cross-module check).
+    """
     if not config_path or not os.path.exists(config_path):
         return None
     in_defaults = False
@@ -652,13 +695,14 @@ def _turn_cap_n_from_config(config_path):
             if indent <= defaults_indent:
                 break  # left the defaults: block
             if stripped.startswith("turn_cap_n:"):
-                val = stripped.split(":", 1)[1].strip()
-                if val in ("", "null", "~"):
+                val = _coerce_scalar(stripped.split(":", 1)[1])
+                if val is None:
                     return None
-                try:
-                    return int(val)
-                except ValueError:
-                    return None
+                if isinstance(val, bool) or not isinstance(val, int):
+                    raise ValueError(
+                        f"{config_path}: defaults.turn_cap_n must be an int "
+                        f"or null, got {val!r}")
+                return val
     return None
 
 
