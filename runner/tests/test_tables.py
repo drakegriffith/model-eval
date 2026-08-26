@@ -175,3 +175,29 @@ def test_table6_still_says_no_basis_when_truly_nothing_was_measured():
     assert "no measured runs" in out, f"a truly unmeasured model must say so:\n{out}"
     assert "no basis to advise" in out, f"and its advice column must say so:\n{out}"
     assert "0%" not in out, f"an empty cell must never render as 0%:\n{out}"
+
+
+# --------------------------------------------------------------------------- #
+# issue #41 (1): table5 crashes on a cell whose scored rows are all
+# cap_exhausted -- min()/max() over an empty spend
+# --------------------------------------------------------------------------- #
+def test_table5_survives_a_cell_whose_scored_rows_are_all_capped():
+    """2 scored rows (cap_exhausted -- SCORED under amendment A1, both clear
+    the >=2 minimum just above) but BOTH excluded from the token axis (a
+    capped run's tokens_out measures where the broker's K-request cap cut it
+    off, not what the tier spent). `spend` is empty, so `min(locs)` on
+    master raises ValueError and aborts the whole report. This cell must
+    render as a named drop instead of a crash."""
+    rows = [
+        row(0, "cap_exhausted", pass_=False, tok=1),
+        row(1, "cap_exhausted", pass_=False, tok=1),
+    ]
+
+    out = tables.table5_variance(rows)  # must not raise
+
+    assert out.startswith("_(no data)_"), (
+        f"a cell with no token-axis evidence cannot render a min/med/max row:\n{out}")
+    assert "excluded from the token axis" in out, (
+        f"the all-capped cell is not named:\n{out}")
+    assert "cap_exhausted=2" in out, f"the drop's cause is not named:\n{out}"
+
