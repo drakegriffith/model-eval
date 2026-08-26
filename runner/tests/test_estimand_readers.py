@@ -222,6 +222,37 @@ def test_the_ladder_still_excludes_truncated_rows_from_the_token_axis(tmp_path):
     assert excluded.get("structurally_impossible") == 1
 
 
+def test_the_ladders_printed_table_shows_both_denominators_and_they_differ(
+        tmp_path, capsys, monkeypatch):
+    """Issue #21 (1). The printed table used to pair a token-axis `n` with a
+    pass_rate computed over `n_scored` and never printed `n_scored` at all --
+    a rendering gap only, since report_block's own dict always carried both
+    keys. This fixture's one cap_exhausted row is scored (counts toward
+    n_scored) but not summarizable (excluded from the token axis's n_tok), so
+    the two printed numbers must both appear and must differ -- proving the
+    reader can no longer mistake one for the other."""
+    path = tmp_path / "results.jsonl"
+    import json
+    with open(path, "w", encoding="utf-8") as f:
+        for r in probe_rows():
+            f.write(json.dumps(r) + "\n")
+
+    monkeypatch.setattr(sys, "argv", ["ladder_from_results.py",
+                                       "--results", str(path)])
+    ladder.main()
+    out = capsys.readouterr().out
+
+    assert "n_tok" in out and "n_scr" in out, (
+        f"both denominators must be labelled, not just printed:\n{out}")
+    data_line = [ln for ln in out.splitlines() if ln.startswith("t1-py-a")][0]
+    n_tok = int(data_line.split()[8])
+    n_scr = int(data_line.split()[9])
+    assert n_tok != n_scr, (
+        f"n_tok and n_scr must differ on a corpus with a cap_exhausted row "
+        f"(scored but not summarizable): {data_line!r}")
+    assert n_scr == DECLARED_DENOMINATOR
+
+
 # --------------------------------------------------------------------------- #
 # stats.py
 # --------------------------------------------------------------------------- #
