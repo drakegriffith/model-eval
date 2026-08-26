@@ -123,3 +123,55 @@ def test_table4_discloses_rows_it_drops_from_the_token_axis():
     assert "cap_exhausted=1" in out, f"the drop's cause is not named:\n{out}"
     assert "999999" not in out.split("\n> ")[0], (
         f"the dropped row's tokens_out leaked into the rendered mean:\n{out}")
+
+
+# --------------------------------------------------------------------------- #
+# (c) table6_decision_matrix: a 0-scored cell must never render as 0%
+# --------------------------------------------------------------------------- #
+def test_table6_never_lets_an_unmeasured_config_outrank_a_real_one():
+    """model has two candidate configs:
+      (effort=high, bare): 2 rows, both `timeout` -> 0 scored rows (n=0)
+      (effort=low,  bare): 2 rows, both `ok` but pass=False -> a REAL 0%
+                           cell, n=2, passes=0, with real tokens_out spent.
+
+    `rate = passes / n if n else 0` scores BOTH candidates `rate == 0`, so the
+    old tiebreak (`-toks`, with an empty cell's `toks` falling back to `or 0`,
+    i.e. reading as free) picked the UNTESTED config over the real one,
+    rendering the whole model as 'no measured runs' / 'no basis to advise'
+    even though a real 0%-pass measurement existed. The real, if-poor,
+    measurement must win the selection, and the table must print its actual
+    0% -- distinct from 'no basis to advise', which is reserved for a model
+    with truly no measured config at all."""
+    rows = [
+        row(0, "timeout", pass_=False, tok=1, effort="high", harness=False),
+        row(1, "timeout", pass_=False, tok=1, effort="high", harness=False),
+        row(2, "ok", pass_=False, tok=500, effort="low", harness=False),
+        row(3, "ok", pass_=False, tok=520, effort="low", harness=False),
+    ]
+
+    out = tables.table6_decision_matrix(rows, {})
+
+    assert "no measured runs" not in out, (
+        f"a real 0%-pass config exists; the model must not render as "
+        f"unmeasured:\n{out}")
+    assert "no basis to advise" not in out, f"same, on the advice column:\n{out}"
+    assert "0%" in out, f"the real, measured 0%-pass config must render as 0%:\n{out}"
+    assert "low/bare" in out, (
+        f"the real measured config (effort=low) must be the one selected, "
+        f"not the untested effort=high cell:\n{out}")
+
+
+def test_table6_still_says_no_basis_when_truly_nothing_was_measured():
+    """Positive control on the OTHER side: a model whose every config is
+    unmeasured (all timeouts) must still say so -- this fix must not turn
+    every empty cell into a fabricated 0%."""
+    rows = [
+        row(0, "timeout", pass_=False, tok=1, effort="high", harness=False),
+        row(1, "timeout", pass_=False, tok=1, effort="high", harness=False),
+    ]
+
+    out = tables.table6_decision_matrix(rows, {})
+
+    assert "no measured runs" in out, f"a truly unmeasured model must say so:\n{out}"
+    assert "no basis to advise" in out, f"and its advice column must say so:\n{out}"
+    assert "0%" not in out, f"an empty cell must never render as 0%:\n{out}"

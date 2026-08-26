@@ -456,9 +456,25 @@ def table6_decision_matrix(rows, qual, ledger=None):
             rs, _excl = run_status.partition_for_rate(rs)
             n = len(rs)
             passes = sum(1 for r in rs if r.get("pass"))
-            rate = passes / n if n else 0
-            toks = mean([out_tokens(r) for r in token_rows(rs)[0]]) or 0
-            score = (rate, -toks)
+            if n:
+                rate = passes / n
+                toks = mean([out_tokens(r) for r in token_rows(rs)[0]]) or 0
+                score = (rate, -toks)
+            else:
+                # issue #31. `rate = passes / n if n else 0` used to score an
+                # unmeasured config (0 scored rows) identically to a REAL
+                # config that measured a genuine 0% pass rate -- both are
+                # `rate == 0`. The tiebreak then favoured the unmeasured one:
+                # its `toks` fell back to `or 0`, which reads as "free," so
+                # -toks=0 beat a real cell's -toks<0, and an untested config
+                # could out-rank a real, if-poor, measured one -- absence
+                # rendering as evidence of the lowest cost, exactly backwards.
+                # A rate below every real 0.0 keeps a config with actual
+                # evidence winning whenever one exists; only a model with NO
+                # measured config at all falls through to the `if not rs`
+                # "no measured runs" branch below.
+                rate, toks = 0.0, 0
+                score = (-1, 0)
             if best is None or score > best:
                 best, best_key = score, (key, rate, toks, rs)
         (effort, htag), rate, toks, rs = best_key
