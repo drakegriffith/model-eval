@@ -4,20 +4,28 @@ Before this file, `runner/serving_registry.record_noise_probe` had zero
 invokers outside its own tests, and no config existed to dispatch the 5
 sequential reps the pre-registration's stage 0 calls for
 (docs/studio-handoff/prompt-2-run-experiment.md, amendments A1/A3/A6).
-`runner/stage0_probe.py` is the invoker; this file proves its two halves
+`runner/stage0_probe.py` is the invoker; this file proves its pieces
 separately, per the prior-art gate's own disposition (randomness never
 touches a gate; the derived numbers are pure functions of the rows):
 
   1. `derive_stage0` and `tag_stage0` are pure functions over a list of row
      dicts, driven entirely by fixtures -- no subprocess, no filesystem,
-     each enumerator named in its own test (issue #26 acceptance #3).
-  2. one end-to-end test drives the REAL run.py, under --mock, through
-     stage0_probe.main(), with --results/--scratch/--registry-path all
-     redirected to tmp_path -- proving the plumbing produces exactly 5 rows
-     tagged `stage: 0` and that the live corpus (results.jsonl, usage.jsonl)
-     AND the live registry (models.yaml) are byte-identical before and
-     after, the same corpus_untouched positive control
-     tests/test_corpus_pinning.py already uses for run.py itself.
+     each enumerator named in its own test (issue #26 acceptance #3). Only
+     SCORED rows (run_status.py) enter any decision -- a verifier caught the
+     first cut reading exit_reason-blind, which let timed-out reps derive as
+     "identical" and mock rows record a fabricated noise probe.
+  2. `finalize_stage0` (derive + conditionally record + render) is exercised
+     directly with fixture rows and a throwaway registry copy -- no
+     subprocess needed to prove the record-vs-provisional-vs-refuse split.
+  3. `run_preflight` is exercised against the REAL captured `lms ps`
+     fixtures in tests/fixtures/ (never against a live LM Studio).
+  4. one end-to-end test drives the REAL run.py, under --mock, through
+     stage0_probe.main(), proving the DISPATCH+TAGGING plumbing produces
+     exactly 5 rows tagged `stage: 0` while the live corpus (results.jsonl,
+     usage.jsonl) AND the live registry (models.yaml) stay byte-identical --
+     and, since every --mock row is unscored by construction, that main()
+     REFUSES the recording step (exit 2) rather than recording a fabricated
+     probe, the exact defect a verifier caught in the first cut.
 
 Every fixture list below states its own row count instead of trusting len();
 a loop over an accidentally-short fixture list would otherwise pass while
@@ -33,6 +41,7 @@ import sys
 import pytest
 
 RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 sys.path.insert(0, RUNNER_DIR)
 import corpus_guard  # noqa: E402
 import serving_registry as sr  # noqa: E402
@@ -42,11 +51,15 @@ REAL_RESULTS = os.path.join(RUNNER_DIR, "results", "results.jsonl")
 REAL_USAGE = os.path.join(RUNNER_DIR, "results", "usage.jsonl")
 REAL_REGISTRY = sr.REGISTRY_PATH
 REAL_STAGE0_CONFIG = os.path.join(RUNNER_DIR, "runs-glm-stage0.yaml")
+LMS_TARGET_STATE = os.path.join(FIXTURES, "lms-ps-target-state.txt")
+LMS_LIVE_MISMATCH = os.path.join(FIXTURES, "lms-ps-live-mismatch.txt")
 
 
-def _row(pass_=True, turns=1, wall_s=10.0, acceptance_requests=None, sweep="glm-stage0"):
+def _row(pass_=True, turns=1, wall_s=10.0, acceptance_requests=None,
+        sweep="glm-stage0", exit_reason="ok"):
     return {"pass": pass_, "turns": turns, "wall_s": wall_s,
-            "acceptance_requests": acceptance_requests, "sweep": sweep}
+            "acceptance_requests": acceptance_requests, "sweep": sweep,
+            "exit_reason": exit_reason}
 
 
 # --------------------------------------------------------------------------- #
@@ -62,10 +75,11 @@ def test_five_identical_rows_yield_reps_2():
     assert d["identical"] == 5
     assert d["flip_rate"] == 0.0
     assert d["rep_decision"] == "reps 2"
+    assert d["provisional"] is False
 
 
 def test_one_flip_yields_reps_3():
-    """Enumerator: 4 pass, 1 fail (disagrees with row 0) -> A6 keeps 3 reps."""
+    """Enumerator: 4 pass, 1 fail -> A6 keeps 3 reps."""
     rows = [_row(pass_=True), _row(pass_=True), _row(pass_=False),
             _row(pass_=True), _row(pass_=True)]
     assert len(rows) == 5, f"expected 5 fixture rows, built {len(rows)}"
@@ -74,6 +88,21 @@ def test_one_flip_yields_reps_3():
     assert d["identical"] == 4
     assert d["of"] == 5
     assert d["rep_decision"] == "reps 3"
+
+
+def test_identical_and_flip_rate_are_order_invariant():
+    """A verifier caught the first cut comparing every row against rows[0]:
+    [F,T,T,T,T] and [T,T,T,T,F] derived DIFFERENT numbers (1/5 vs 4/5
+    identical) for the same 4-1 split, purely from dispatch order. identical
+    is now the count of the MAJORITY outcome, so both permutations below
+    must derive identically."""
+    a = [_row(pass_=p) for p in (False, True, True, True, True)]
+    b = [_row(pass_=p) for p in (True, True, True, True, False)]
+    da, db = stage0_probe.derive_stage0(a), stage0_probe.derive_stage0(b)
+    assert da["identical"] == db["identical"] == 4
+    assert da["flip_rate"] == db["flip_rate"] == pytest.approx(0.2)
+    assert da["flips"] == db["flips"] == 1
+    assert da["rep_decision"] == db["rep_decision"] == "reps 3"
 
 
 def test_a_rep_at_ten_requests_flips_k():
@@ -117,6 +146,23 @@ def test_n_is_3x_max_turns_rounded_up_to_the_next_multiple_of_ten(max_turns, exp
     assert d["n_cap"] == expected_n
 
 
+def test_derive_stage0_refuses_when_max_turns_over_scored_rows_is_zero():
+    """N=0 is could-not-determine, never a decision -- the exact bug a
+    --mock run would trigger silently (turns never leaves its zero default)
+    if this were allowed to print 'N (turn cap): 0' as a real answer."""
+    rows = [_row(turns=0) for _ in range(5)]
+    with pytest.raises(RuntimeError) as e:
+        stage0_probe.derive_stage0(rows)
+    assert "turn" in str(e.value).lower()
+
+
+def test_derive_stage0_refuses_when_a_scored_row_has_no_turns():
+    rows = [_row(turns=3), _row(turns=None), _row(turns=2), _row(turns=4),
+            _row(turns=1)]
+    with pytest.raises(RuntimeError):
+        stage0_probe.derive_stage0(rows)
+
+
 def test_wall_ratio_is_max_over_min():
     rows = [_row(wall_s=w) for w in (100.0, 50.0, 200.0, 80.0, 60.0)]
     d = stage0_probe.derive_stage0(rows)
@@ -140,7 +186,45 @@ def test_derive_stage0_refuses_zero_rows():
     nothing about noise, and must not silently report zeroed-out numbers."""
     with pytest.raises(ValueError) as e:
         stage0_probe.derive_stage0([])
-    assert "0 row" in str(e.value) or "zero row" in str(e.value).lower()
+    assert "0 row" in str(e.value) or "zero row" in str(e.value).lower() \
+        or "0 of 0" in str(e.value)
+
+
+def test_derive_stage0_refuses_when_nothing_scored():
+    """Enumerator: 5 timeouts -> 0 SCORED rows -> refused outright, same
+    posture as the empty-list case (a probe with zero scored reps proves
+    nothing), distinct from the PARTIAL-scoring case below."""
+    rows = [_row(exit_reason="timeout") for _ in range(5)]
+    with pytest.raises(ValueError) as e:
+        stage0_probe.derive_stage0(rows)
+    assert "0 of 5" in str(e.value)
+    assert "timeout" in str(e.value).lower()
+
+
+def test_partial_scoring_is_provisional_and_reports_the_lost_row():
+    """Enumerator: 4 ok + 1 timeout -> derived numbers come from the 4
+    scored rows only, and the result is marked provisional so a caller
+    knows not to record it."""
+    rows = [_row(pass_=True) for _ in range(4)] + [_row(exit_reason="timeout")]
+    assert len(rows) == 5, f"expected 5 fixture rows, built {len(rows)}"
+    d = stage0_probe.derive_stage0(rows)
+    assert d["of"] == 4
+    assert d["produced"] == 5
+    assert d["provisional"] is True
+    assert d["excluded"] == {"timeout": 1}
+    assert d["identical"] == 4  # all 4 scored rows passed
+    assert d["rep_decision"] == "reps 2"
+
+
+def test_run_status_forced_fail_never_looks_identical_from_pass_alone():
+    """Sanity check on the fixture convention itself: run.py forces
+    pass=False for every non-'ok' exit_reason (run.py:~1848), so a real
+    timeout row never actually carries pass=True the way a naive fixture
+    might. The `_row` default (exit_reason='ok') matches a real scored row;
+    the fixtures above that pass exit_reason='timeout' correctly leave
+    `pass_` at its default since it is excluded before `pass` is ever read."""
+    timeout_row = _row(exit_reason="timeout")
+    assert timeout_row["exit_reason"] == "timeout"
 
 
 # --------------------------------------------------------------------------- #
@@ -180,10 +264,70 @@ def test_render_comment_prints_all_the_derived_numbers():
     assert str(d["max_acceptance_requests"]) in text
     assert d["rep_decision"] in text
     assert "re-register" in text.lower()  # this fixture's rep hit 10 requests
+    assert "PROVISIONAL" not in text
+
+
+def test_render_comment_marks_a_provisional_probe_and_states_what_was_lost():
+    rows = [_row(pass_=True) for _ in range(4)] + [_row(exit_reason="timeout")]
+    d = stage0_probe.derive_stage0(rows)
+    text = stage0_probe.render_comment(d, task="t3-a", date="2026-08-25",
+                                       dispatched=5)
+    assert "PROVISIONAL" in text
+    assert "NOT RECORDED" in text
+    assert "timeout=1" in text
+    assert "4/4/5" not in text  # scored/produced/dispatched, not a typo'd order
+    assert "4" in text and "5" in text
 
 
 # --------------------------------------------------------------------------- #
-# Seam 4 -- the real runs-glm-stage0.yaml, read as a library (no subprocess,
+# Seam 4 -- finalize_stage0: derive + conditionally record + render, in one
+# place, exercised directly with a throwaway registry copy (no subprocess).
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def registry_copy(tmp_path):
+    dst = tmp_path / "models.yaml"
+    shutil.copy2(REAL_REGISTRY, dst)
+    return dst
+
+
+def test_finalize_stage0_records_when_every_row_is_scored(registry_copy):
+    rows = [_row(pass_=True, turns=2) for _ in range(5)]
+    comment, recorded = stage0_probe.finalize_stage0(
+        rows, str(registry_copy), date="2026-08-25", task="t3-a")
+    assert recorded is True
+    assert "Recorded to registry: glm-4.7 x claude-code" in comment
+    updated = sr.load_rows(str(registry_copy))
+    row = sr.find_row(updated, "glm-4.7", "claude-code")
+    assert row["noise_probe"] == {"flip_rate": 0.0, "date": "2026-08-25",
+                                  "identical": 5, "of": 5}
+    assert row["deterministic_loops"] is True
+
+
+def test_finalize_stage0_skips_the_write_when_provisional(registry_copy):
+    before = registry_copy.read_text(encoding="utf-8")
+    rows = [_row(pass_=True, turns=2) for _ in range(4)] + [
+        _row(exit_reason="timeout", turns=2)]
+    comment, recorded = stage0_probe.finalize_stage0(
+        rows, str(registry_copy), date="2026-08-25", task="t3-a", dispatched=5)
+    assert recorded is False
+    assert "PROVISIONAL" in comment
+    after = registry_copy.read_text(encoding="utf-8")
+    assert after == before, "a provisional probe must not touch the registry file"
+
+
+def test_finalize_stage0_raises_before_touching_anything_when_nothing_scored(
+        registry_copy):
+    before = registry_copy.read_text(encoding="utf-8")
+    rows = [_row(exit_reason="timeout") for _ in range(5)]
+    with pytest.raises(ValueError):
+        stage0_probe.finalize_stage0(rows, str(registry_copy),
+                                     date="2026-08-25", task="t3-a")
+    after = registry_copy.read_text(encoding="utf-8")
+    assert after == before, "a refused probe must not touch the registry file"
+
+
+# --------------------------------------------------------------------------- #
+# Seam 5 -- the real runs-glm-stage0.yaml, read as a library (no subprocess,
 # no network): valid, and gates cleanly against the real live registry.
 # --------------------------------------------------------------------------- #
 def test_the_real_stage0_config_declares_one_task_five_reps_no_harness():
@@ -217,7 +361,25 @@ def test_the_real_stage0_config_gates_cleanly_against_the_live_registry():
 
 
 # --------------------------------------------------------------------------- #
-# Seam 5 -- end to end, real run.py, under --mock, through stage0_probe.main()
+# Seam 6 -- run_preflight, against the REAL captured `lms ps` fixtures
+# (tests/fixtures/), never against a live LM Studio.
+# --------------------------------------------------------------------------- #
+def test_run_preflight_passes_when_the_live_capture_matches_the_row():
+    code = stage0_probe.run_preflight(REAL_REGISTRY, lms_output=LMS_TARGET_STATE)
+    assert code == 0
+
+
+def test_run_preflight_refuses_on_a_live_mismatch():
+    """lms-ps-live-mismatch.txt is captured verbatim from the Mac Studio
+    showing CONTEXT=65536, PARALLEL=4 against the row's 131072/1 -- the
+    state the server was ACTUALLY in on 2026-08-25, not a constructed
+    fixture (see tests/test_lms_preflight.py's own docstring)."""
+    code = stage0_probe.run_preflight(REAL_REGISTRY, lms_output=LMS_LIVE_MISMATCH)
+    assert code == sr.EXIT_PREFLIGHT_MISMATCH
+
+
+# --------------------------------------------------------------------------- #
+# Seam 7 -- end to end, real run.py, under --mock, through stage0_probe.main()
 # --------------------------------------------------------------------------- #
 def _sha(path):
     with open(path, "rb") as f:
@@ -305,8 +467,19 @@ def stage0_fixture_matrix(tmp_path):
             "scratch": str(scratch)}
 
 
-def test_end_to_end_mock_run_produces_five_stage0_tagged_rows(
+def test_end_to_end_mock_run_tags_five_rows_but_refuses_to_record(
         live_files_untouched, stage0_fixture_matrix, tmp_path, monkeypatch):
+    """A --mock sweep proves the DISPATCH+TAGGING plumbing (run.py invoked,
+    5 rows written, all tagged stage: 0) but can NEVER reach a clean
+    recording: every mock row's exit_reason is 'mock', its own excluded
+    run_status class (never 'ok'), so 0 of 5 rows are SCORED and
+    finalize_stage0 raises before touching the registry. This is deliberate
+    -- a verifier caught the first cut of this file calling
+    record_noise_probe on mock rows and writing deterministic_loops: true
+    from zero real evidence. The CLI turns that refusal into exit 2
+    (could-not-determine), prints nothing that looks like a result, and
+    the registry copy is provably untouched.
+    """
     results = tmp_path / "results.jsonl"
     registry_copy = tmp_path / "models.yaml"
     shutil.copy2(REAL_REGISTRY, registry_copy)
@@ -323,31 +496,32 @@ def test_end_to_end_mock_run_produces_five_stage0_tagged_rows(
          "--date", "2026-08-25",
          "--mock"],
         cwd=RUNNER_DIR, capture_output=True, text=True)
-    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
-    assert "refus" not in proc.stderr.lower()
 
+    assert proc.returncode == stage0_probe.CANNOT_DETERMINE_EXIT, \
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    assert "0 of 5" in proc.stderr
+    assert "mock" in proc.stderr.lower()
+    assert "Stage 0 noise probe" not in proc.stdout, (
+        "no comment may print for a refused probe")
+
+    # The plumbing before the refusal still ran for real: run.py dispatched,
+    # 5 rows landed, every one tagged stage: 0.
     assert results.exists(), "stage0_probe did not write a results file"
     rows = [json.loads(l) for l in results.read_text(encoding="utf-8").splitlines()
             if l.strip()]
     assert len(rows) == 5, f"expected 5 rows, found {len(rows)}"
     assert all(r["stage"] == 0 for r in rows), "not every row was tagged stage: 0"
     assert all(r["sweep"] == "glm-stage0" for r in rows)
+    assert all(r["exit_reason"] == "mock" for r in rows)
 
-    # The #8 comment landed on stdout with the derived numbers in it.
-    assert "Stage 0 noise probe" in proc.stdout
-    assert "fixture-task" in proc.stdout
+    # --mock skips the live preflight and says so.
+    assert "preflight: skipped" in proc.stdout
 
-    # The scratch registry COPY was updated with the measured probe...
+    # The scratch registry COPY, and the REAL live registry/results/usage,
+    # never moved at all (live_files_untouched asserts the latter on
+    # teardown).
     after_registry_copy = registry_copy.read_text(encoding="utf-8")
-    assert after_registry_copy != before_registry_copy
-    updated_rows = sr.load_rows(str(registry_copy))
-    row = sr.find_row(updated_rows, "glm-4.7", "claude-code")
-    assert row["noise_probe"] is not None
-    assert row["noise_probe"]["of"] == 5
-    assert row["noise_probe"]["date"] == "2026-08-25"
-
-    # ...and the REAL live registry/results/usage did not move at all
-    # (live_files_untouched asserts this on teardown).
+    assert after_registry_copy == before_registry_copy
 
 
 def test_mock_against_the_live_registry_path_is_refused(
@@ -369,3 +543,32 @@ def test_mock_against_the_live_registry_path_is_refused(
     assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
     assert "refus" in proc.stderr.lower()
     assert not results.exists(), "run.py must never have been invoked"
+
+
+def test_non_mock_preflight_mismatch_refuses_before_run_py_is_invoked(
+        live_files_untouched, stage0_fixture_matrix, tmp_path, monkeypatch):
+    """The gap a verifier named: run.py's own dispatch gate only checks the
+    DECLARED config against the row, never the live server. Here, a
+    non-mock invocation with --preflight-lms-output pointed at the captured
+    mismatch fixture must refuse (exit 3, cmd_preflight's own
+    EXIT_PREFLIGHT_MISMATCH) before run.py is ever invoked -- proven the
+    same way corpus_guard's own refusal tests are, by asserting nothing
+    downstream ran."""
+    results = tmp_path / "results.jsonl"
+    registry_copy = tmp_path / "models.yaml"
+    shutil.copy2(REAL_REGISTRY, registry_copy)
+
+    monkeypatch.chdir(RUNNER_DIR)
+    proc = subprocess.run(
+        [sys.executable, "stage0_probe.py",
+         "--config", stage0_fixture_matrix["config"],
+         "--tasks-dir", stage0_fixture_matrix["tasks_dir"],
+         "--scratch", stage0_fixture_matrix["scratch"],
+         "--results", str(results),
+         "--registry-path", str(registry_copy),
+         "--preflight-lms-output", LMS_LIVE_MISMATCH],
+        cwd=RUNNER_DIR, capture_output=True, text=True)
+    assert proc.returncode == sr.EXIT_PREFLIGHT_MISMATCH, \
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    assert not results.exists(), "run.py must never have been invoked"
+    assert "MISMATCH" in proc.stdout
