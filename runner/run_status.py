@@ -94,6 +94,13 @@ EXIT_REASON_CLASS = {
     "no_completion": INFRA,
     "kimi_key_missing": INFRA,
     "verify_timeout": INFRA,
+    # run.py has no dispatch path for this row's declared driver (issue #25),
+    # so no CLI was ever launched. An instrument fact, like cli_error -- never
+    # a model measurement -- and distinct from structurally_impossible, which
+    # answers a different question (can the driver EXPRESS this cell at all,
+    # a serving_registry capability-manifest fact) than this one (does run.py
+    # itself have launch code for the driver, independent of the registry).
+    "driver_unsupported": INFRA,
 
     # The cell does not exist for this driver (issue #12 c). Never a 0: a 0
     # asserts the model attempted the task and failed it.

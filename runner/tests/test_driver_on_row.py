@@ -282,3 +282,144 @@ def test_stage1_yaml_has_no_pi_sweep_and_totals_sixty():
     assert len(runs) == 60, len(runs)
     assert sum(1 for r in runs if r.get("driver") == "pi") == 0
     assert "glm-stage1-pi" not in {r["sweep"] for r in runs}
+
+
+# --------------------------------------------------------------------------- #
+# tables.py / stats.py model_key parity (issue #25 verify pass -- BLOCKER)
+# --------------------------------------------------------------------------- #
+EQUIVALENCE_FIXTURES = {
+    "none_plus_known_driver": [
+        {"model": "n", "driver": None},
+        {"model": "n", "driver": "claude-code"},
+    ],
+    "two_known_drivers": [
+        {"model": "n", "driver": "claude-code"},
+        {"model": "n", "driver": "pi"},
+    ],
+    "single_driver": [
+        {"model": "n", "driver": "claude-code"},
+        {"model": "n", "driver": "claude-code"},
+    ],
+    "two_models_one_driver_each": [
+        {"model": "n", "driver": "claude-code"},
+        {"model": "m", "driver": "pi"},
+    ],
+}
+
+
+@pytest.mark.parametrize("name", sorted(EQUIVALENCE_FIXTURES))
+def test_tables_and_stats_model_key_agree(name):
+    """tables.py and stats.py duplicate model_key/multi_driver_models across
+    the CORE_MODULE boundary (stats.py may not import tables.py -- import_gate
+    rule A). This is the control that the duplication has not drifted: every
+    row in every fixture must key identically in both modules. The verify
+    pass found the first cut disagreed on exactly 'none_plus_known_driver':
+    tables.py counts None as a distinct driver when deciding a model is
+    mixed; stats.py's first cut filtered None out before counting, so a
+    corpus mixing an archived pre-field row with a new labelled row split in
+    tables.model_key and pooled in stats.model_key."""
+    import stats  # noqa: E402
+
+    rows = EQUIVALENCE_FIXTURES[name]
+    t_mixed = tables.multi_driver_models(rows)
+    s_mixed = stats.multi_driver_models(rows)
+    for r in rows:
+        assert tables.model_key(r, t_mixed) == stats.model_key(r, s_mixed), (
+            name, r, tables.model_key(r, t_mixed), stats.model_key(r, s_mixed))
+
+
+# --------------------------------------------------------------------------- #
+# Config-time refusal, before any dispatch (issue #25 verify pass)
+# --------------------------------------------------------------------------- #
+def write_config_with_pi_sweep(tmp_path):
+    lines = ["defaults:", "  timeout_t1_t2_s: 1200", "  seed: 1337", "", "serving:"]
+    for key, value in GOOD_SERVING.items():
+        lines.append(f"  {key}: {value}")
+    lines += ["", "sweeps:",
+              "  - name: pi-sweep", "    driver: pi", "    harness: false",
+              "    reps: [1]", "    tasks: [t2-py-a]",
+              "    configs:", "      - {model: glm-4.7-local, effort: high}"]
+    path = tmp_path / "pi-sweep.yaml"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def test_dry_run_refuses_a_pi_sweep_at_config_time_before_any_dispatch(tmp_path, task_tree):
+    """The verifier's probe: re-enabling a pi sweep in a temp config used to
+    dry-run clean (gated=15 ungated=0, no rejection) and only blow up
+    per-row, deep inside execute_run, after prepare_scratch had already spent
+    three git subprocesses on every earlier row in the sweep. The refusal
+    must happen here, at zero cost, and --dry-run must say so and show zero
+    pi rows pending."""
+    results = tmp_path / "results.jsonl"
+    proc = subprocess.run(
+        [sys.executable, os.path.join(RUNNER_DIR, "run.py"),
+         "--config", write_config_with_pi_sweep(tmp_path),
+         "--tasks-dir", task_tree, "--dry-run",
+         "--results", str(results),
+         "--scratch", str(tmp_path / "scratch")],
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        timeout=180)
+
+    assert proc.returncode == 0, proc.stdout
+    assert "driver_unsupported=1" in proc.stdout, proc.stdout
+    assert "total=0 pending=0" in proc.stdout, proc.stdout
+
+    lines = [l for l in results.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 1, lines
+    row = json.loads(lines[0])
+    assert row["exit_reason"] == "driver_unsupported"
+    assert row["driver"] == "pi"
+    assert row["pass"] is None
+
+
+def test_mock_run_does_not_bypass_the_driver_gate(tmp_path, task_tree):
+    """--mock skips straight past build_cli_cmd, the only place the driver
+    check lived before this fix -- so a mock run with driver: pi wrote a
+    genuine 'mock' row despite nothing ever validating the driver. The
+    config-time gate in main() runs unconditionally, not only under
+    --dry-run, so a --mock invocation over the same pi sweep must be refused
+    exactly like --dry-run, before apply_mock ever runs."""
+    results = tmp_path / "results.jsonl"
+    proc = subprocess.run(
+        [sys.executable, os.path.join(RUNNER_DIR, "run.py"),
+         "--config", write_config_with_pi_sweep(tmp_path),
+         "--tasks-dir", task_tree, "--mock",
+         "--results", str(results),
+         "--scratch", str(tmp_path / "scratch")],
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        timeout=180)
+
+    assert proc.returncode == 0, proc.stdout
+    lines = [l for l in results.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 1, lines
+    row = json.loads(lines[0])
+    assert row["exit_reason"] == "driver_unsupported"
+    assert row["exit_reason"] != "mock"
+
+
+def test_execute_run_refuses_before_prepare_scratch_for_an_unsupported_driver(tmp_path, monkeypatch):
+    """Defense-in-depth backstop: any caller reaching execute_run directly
+    with a driver it cannot dispatch -- not only through main()'s gate --
+    must be refused before prepare_scratch's three git subprocesses run, not
+    after."""
+    sys.path.insert(0, RUNNER_DIR)
+    import run as runner  # noqa: E402
+
+    called = []
+    monkeypatch.setattr(runner, "prepare_scratch", lambda *a, **k: called.append(True))
+
+    run = {
+        "run_id": "s--glm-4.7-local--high--bare--t2-py-a--pi-r0",
+        "sweep": "s", "model": "glm-4.7-local", "effort": "high",
+        "harness": False, "harness_level": None, "driver": "pi",
+        "task": "t2-py-a", "rep": 0, "mode": "solo",
+    }
+    results = tmp_path / "results.jsonl"
+
+    row = runner.execute_run(run, {}, str(tmp_path / "tasks"),
+                             str(tmp_path / "scratch"), str(results))
+
+    assert called == [], "prepare_scratch ran before the driver check refused"
+    assert row["exit_reason"] == "driver_unsupported"
+    assert row["driver"] == "pi"

@@ -201,12 +201,23 @@ def group(rows, keyfn):
 # for tables.multi_driver_models/model_key even though the logic is identical
 # by design -- these two functions are that duplication, kept in lockstep with
 # tables.py on purpose rather than DRY'd across the core boundary.
+#
+# VERIFY-PASS CORRECTION. The first cut of this function filtered None out of
+# the driver set BEFORE counting it, so a model mixing an archived pre-field
+# row (driver: None) with a new labelled row (driver: claude-code) was
+# reported as single-driver here while tables.multi_driver_models -- which
+# counts the RAW set, None included, then filters None only from the
+# returned label list -- reported it mixed. Same corpus, two different
+# splits: table1/table4/blocks_for would split the model and section_wilson
+# would pool it. Fixed to count the raw set like tables.py does: an unknown
+# driver must never be silently pooled with a known one. Pinned by
+# tests/test_driver_on_row.py's cross-module equivalence test.
 def multi_driver_models(rows):
     """Models that ran under more than one driver in this corpus."""
     seen = {}
     for r in rows:
         seen.setdefault(r["model"], set()).add(r.get("driver"))
-    return {m for m, ds in seen.items() if len({d for d in ds if d}) > 1}
+    return {m for m, ds in seen.items() if len(ds) > 1}
 
 
 def model_key(row, mixed):
