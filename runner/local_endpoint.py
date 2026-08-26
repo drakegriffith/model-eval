@@ -9,9 +9,9 @@ nothing pinning the two copies equal. Two literals that happen to agree today
 can drift silently tomorrow: an edit to one copy (a new default port, a renamed
 env var) leaves the other unchanged, and the probe would then certify one
 endpoint while a run dispatched against a different one, with no red test
-anywhere to say so. runner/tests/test_local_family.py pins that this cannot
-happen again by grepping runner/*.py for the literal and failing if a second
-definition site reappears.
+anywhere to say so. runner/tests/test_local_base_url_pin.py pins that this
+cannot happen again by grepping runner/*.py for the literal and failing if a
+second definition site reappears.
 
 Not CORE_MODULE. This module reads the environment (get_local_base_url), and
 the core contract enforced by runner/import_gate.py's EXPECTED_CORE_MODULES --

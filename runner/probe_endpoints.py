@@ -84,8 +84,8 @@ CLAUDE_CANDIDATES = [
 KIMI_CANDIDATES = ["kimi-k3", "kimi-k2.7"]
 
 # studio/local-family: same Claude Code scaffold, pointed at an LM Studio server on
-# loopback (MODEL_EVAL_LOCAL_BASE_URL, default http://localhost:1234) instead of a
-# hosted endpoint. Unmetered -- there is no --max-usd concern for this family, unlike
+# loopback (MODEL_EVAL_LOCAL_BASE_URL, default per local_endpoint.get_local_base_url())
+# instead of a hosted endpoint. Unmetered -- there is no --max-usd concern for this family, unlike
 # Kimi -- but reachability and the effort ladder are exactly as unverified, which is
 # what this script exists to answer. Requires an LM Studio server actually running and
 # these two models actually loaded; with neither, every cell here comes back
