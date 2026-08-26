@@ -196,6 +196,38 @@ def group(rows, keyfn):
     return g
 
 
+# issue #25. stats.py is CORE_MODULE (import_gate.py rule A: a core module may
+# import stdlib and other core modules only), so it may not import tables.py
+# for tables.multi_driver_models/model_key even though the logic is identical
+# by design -- these two functions are that duplication, kept in lockstep with
+# tables.py on purpose rather than DRY'd across the core boundary.
+#
+# VERIFY-PASS CORRECTION. The first cut of this function filtered None out of
+# the driver set BEFORE counting it, so a model mixing an archived pre-field
+# row (driver: None) with a new labelled row (driver: claude-code) was
+# reported as single-driver here while tables.multi_driver_models -- which
+# counts the RAW set, None included, then filters None only from the
+# returned label list -- reported it mixed. Same corpus, two different
+# splits: table1/table4/blocks_for would split the model and section_wilson
+# would pool it. Fixed to count the raw set like tables.py does: an unknown
+# driver must never be silently pooled with a known one. Pinned by
+# tests/test_driver_on_row.py's cross-module equivalence test.
+def multi_driver_models(rows):
+    """Models that ran under more than one driver in this corpus."""
+    seen = {}
+    for r in rows:
+        seen.setdefault(r["model"], set()).add(r.get("driver"))
+    return {m for m, ds in seen.items() if len(ds) > 1}
+
+
+def model_key(row, mixed):
+    """The grouping name for a model, split by driver only where it must be."""
+    driver = row.get("driver")
+    if row["model"] in mixed and driver:
+        return f"{row['model']} [{driver}]"
+    return row["model"]
+
+
 def best_effort(model_rows):
     """Winning effort for a model's rows: max pass rate, tiebreak lower mean
     tokens, then higher reasoning effort."""
@@ -277,7 +309,11 @@ def section_wilson(results):
              "",
              "| model | effort | harness | pass/n | pass rate | 95% Wilson CI |",
              "| --- | --- | --- | --- | --- | --- |"]
-    g = group(results, lambda r: (r["model"], r["effort"],
+    # issue #25: split a model's rows by driver wherever it ran under more
+    # than one -- pi has no hooks and no subagents, so pooling it into the
+    # same cell as claude-code would average two different vehicles.
+    mixed = multi_driver_models(results)
+    g = group(results, lambda r: (model_key(r, mixed), r["effort"],
                                   "harness" if r.get("harness") else "bare"))
     for (model, effort, htag), rs in sorted(
             g.items(), key=lambda kv: (kv[0][0], EFFORT_ORDER.get(kv[0][1], 9), kv[0][2])):

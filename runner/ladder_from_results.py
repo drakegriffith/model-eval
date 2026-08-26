@@ -46,6 +46,7 @@ from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus_gates  # noqa: E402
 import run_status  # noqa: E402
+import tables  # noqa: E402  (issue #25: model_key/multi_driver_models, single source)
 from effort_verdict import (  # noqa: E402  (thresholds + vocabulary: single source)
     TIER_ORDER, classify, pre_split_verdict, transition_tally,
 )
@@ -133,6 +134,24 @@ def report_block(label, rows):
     }
 
 
+def blocks_for(rows):
+    """One report_block per (task, driver), driver-suffixed only where a task
+    actually ran under more than one driver (issue #25) -- mirrors
+    tables.model_key/multi_driver_models so a single-driver corpus (every
+    archived result predates the field) renders exactly one block per task,
+    unchanged. A block that pooled a claude-code row with a pi row would
+    average two vehicles findings.md says must never be merged: pi has no
+    hooks and no subagents, so the driver is part of the treatment.
+    """
+    mixed = tables.multi_driver_models(rows)
+    by_block = defaultdict(list)
+    for r in rows:
+        mkey = tables.model_key(r, mixed)
+        label = r["task"] if mkey == r["model"] else f"{r['task']} [{tables.driver_of(r)}]"
+        by_block[label].append(r)
+    return [report_block(label, by_block[label]) for label in sorted(by_block)]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--results",
@@ -154,11 +173,7 @@ def main():
             print("excluded: " + "  ".join(f"{k}={v}" for k, v in sorted(excluded.items())))
         return
 
-    by_task = defaultdict(list)
-    for r in rows:
-        by_task[r["task"]].append(r)
-
-    report = [report_block(t, by_task[t]) for t in sorted(by_task)]
+    report = blocks_for(rows)
     if args.pooled:
         report.append(report_block("POOLED (no task block)", rows))
 

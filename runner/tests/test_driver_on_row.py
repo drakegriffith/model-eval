@@ -120,13 +120,13 @@ def test_harness_level_is_none_rather_than_zero_when_undeclared(tmp_path, task_t
 # --------------------------------------------------------------------------- #
 # The readers refuse to pool two drivers
 # --------------------------------------------------------------------------- #
-def rows_for(driver, n, passes):
+def rows_for(driver, n, passes, task="t1-py-a"):
     out = []
     for i in range(n):
         out.append({
-            "run_id": f"s--glm-4.7-local--high--bare--t1-py-a--{driver}-r{i}",
+            "run_id": f"s--glm-4.7-local--high--bare--{task}--{driver}-r{i}",
             "sweep": "s", "model": "glm-4.7-local", "model_id": "glm-4.7-local",
-            "effort": "high", "task": "t1-py-a", "rep": i, "harness": False,
+            "effort": "high", "task": task, "rep": i, "harness": False,
             "driver": driver, "pass": i < passes, "exit_reason": "ok",
             "status_class": "scored", "tokens_in": 100, "tokens_out": 100,
             "wall_s": 1.0, "loc_changed": 10, "turns": 1,
@@ -187,3 +187,239 @@ def test_the_report_says_out_loud_that_a_model_ran_under_two_drivers():
 
     assert "driver" in out.lower()
     assert "pi" in out
+
+
+# --------------------------------------------------------------------------- #
+# table4_hybrid_vs_solo, report_block, section_wilson (issue #25)
+# --------------------------------------------------------------------------- #
+def test_table4_splits_a_t3_model_that_ran_under_two_drivers():
+    """Positive control: one T3 claude-code row and one T3 pi row must render
+    as two lines, never pooled into one hybrid/solo cell."""
+    corpus = rows_for("claude-code", 3, 3, task="t3-a") + rows_for("pi", 3, 0, task="t3-a")
+
+    out = tables.table4_hybrid_vs_solo(corpus)
+
+    data_lines = [l for l in out.splitlines() if l.startswith("| glm-4.7-local")]
+    assert len(data_lines) == 2, out
+    assert "[claude-code]" in out and "[pi]" in out
+
+
+def test_table4_is_unchanged_for_a_single_driver_corpus():
+    """The control: a corpus with nothing to disambiguate must not grow a
+    driver suffix or split into extra rows."""
+    corpus = rows_for("claude-code", 4, 2, task="t3-a")
+
+    out = tables.table4_hybrid_vs_solo(corpus)
+
+    data_lines = [l for l in out.splitlines() if l.startswith("| glm-4.7-local")]
+    assert len(data_lines) == 1, out
+    assert "[claude-code]" not in out
+
+
+def test_report_block_splits_a_task_that_ran_under_two_drivers():
+    """Positive control for ladder_from_results.py's per-task blocks."""
+    import ladder_from_results as ladder  # noqa: E402 (sys.path already set above)
+
+    corpus = rows_for("claude-code", 3, 3) + rows_for("pi", 3, 0)
+
+    blocks = ladder.blocks_for(corpus)
+
+    assert len(blocks) == 2, blocks
+    labels = sorted(b["block"] for b in blocks)
+    assert labels == ["t1-py-a [claude-code]", "t1-py-a [pi]"], labels
+
+
+def test_report_block_is_unchanged_for_a_single_driver_corpus():
+    import ladder_from_results as ladder  # noqa: E402
+
+    corpus = rows_for("claude-code", 4, 2)
+
+    blocks = ladder.blocks_for(corpus)
+
+    assert len(blocks) == 1, blocks
+    assert blocks[0]["block"] == "t1-py-a"
+
+
+def test_section_wilson_splits_a_model_that_ran_under_two_drivers():
+    """Positive control for stats.py's per-cell Wilson table."""
+    import stats  # noqa: E402
+
+    corpus = rows_for("claude-code", 3, 3) + rows_for("pi", 3, 0)
+
+    out = stats.section_wilson(corpus)
+
+    data_lines = [l for l in out.splitlines() if l.startswith("| glm-4.7-local")]
+    assert len(data_lines) == 2, out
+    assert "[claude-code]" in out and "[pi]" in out
+
+
+def test_section_wilson_is_unchanged_for_a_single_driver_corpus():
+    import stats  # noqa: E402
+
+    corpus = rows_for("claude-code", 4, 2)
+
+    out = stats.section_wilson(corpus)
+
+    data_lines = [l for l in out.splitlines() if l.startswith("| glm-4.7-local")]
+    assert len(data_lines) == 1, out
+    assert "[claude-code]" not in out
+
+
+# --------------------------------------------------------------------------- #
+# The stage-1 config itself (issue #25)
+# --------------------------------------------------------------------------- #
+def test_stage1_yaml_has_no_pi_sweep_and_totals_sixty():
+    """A2 (studio-handoff-20260825): the pi vehicle contrast is stage 1b, not
+    stage 1. This is the same count `--dry-run` prints, exercised directly
+    against build_runs so the regression is caught without a subprocess."""
+    sys.path.insert(0, RUNNER_DIR)
+    import run as runner  # noqa: E402
+
+    with open(os.path.join(RUNNER_DIR, "runs-glm-stage1.yaml"), encoding="utf-8") as f:
+        cfg = runner.parse_yaml(f.read())
+    runs = runner.build_runs(cfg)
+
+    assert len(runs) == 60, len(runs)
+    assert sum(1 for r in runs if r.get("driver") == "pi") == 0
+    assert "glm-stage1-pi" not in {r["sweep"] for r in runs}
+
+
+# --------------------------------------------------------------------------- #
+# tables.py / stats.py model_key parity (issue #25 verify pass -- BLOCKER)
+# --------------------------------------------------------------------------- #
+EQUIVALENCE_FIXTURES = {
+    "none_plus_known_driver": [
+        {"model": "n", "driver": None},
+        {"model": "n", "driver": "claude-code"},
+    ],
+    "two_known_drivers": [
+        {"model": "n", "driver": "claude-code"},
+        {"model": "n", "driver": "pi"},
+    ],
+    "single_driver": [
+        {"model": "n", "driver": "claude-code"},
+        {"model": "n", "driver": "claude-code"},
+    ],
+    "two_models_one_driver_each": [
+        {"model": "n", "driver": "claude-code"},
+        {"model": "m", "driver": "pi"},
+    ],
+}
+
+
+@pytest.mark.parametrize("name", sorted(EQUIVALENCE_FIXTURES))
+def test_tables_and_stats_model_key_agree(name):
+    """tables.py and stats.py duplicate model_key/multi_driver_models across
+    the CORE_MODULE boundary (stats.py may not import tables.py -- import_gate
+    rule A). This is the control that the duplication has not drifted: every
+    row in every fixture must key identically in both modules. The verify
+    pass found the first cut disagreed on exactly 'none_plus_known_driver':
+    tables.py counts None as a distinct driver when deciding a model is
+    mixed; stats.py's first cut filtered None out before counting, so a
+    corpus mixing an archived pre-field row with a new labelled row split in
+    tables.model_key and pooled in stats.model_key."""
+    import stats  # noqa: E402
+
+    rows = EQUIVALENCE_FIXTURES[name]
+    t_mixed = tables.multi_driver_models(rows)
+    s_mixed = stats.multi_driver_models(rows)
+    for r in rows:
+        assert tables.model_key(r, t_mixed) == stats.model_key(r, s_mixed), (
+            name, r, tables.model_key(r, t_mixed), stats.model_key(r, s_mixed))
+
+
+# --------------------------------------------------------------------------- #
+# Config-time refusal, before any dispatch (issue #25 verify pass)
+# --------------------------------------------------------------------------- #
+def write_config_with_pi_sweep(tmp_path):
+    lines = ["defaults:", "  timeout_t1_t2_s: 1200", "  seed: 1337", "", "serving:"]
+    for key, value in GOOD_SERVING.items():
+        lines.append(f"  {key}: {value}")
+    lines += ["", "sweeps:",
+              "  - name: pi-sweep", "    driver: pi", "    harness: false",
+              "    reps: [1]", "    tasks: [t2-py-a]",
+              "    configs:", "      - {model: glm-4.7-local, effort: high}"]
+    path = tmp_path / "pi-sweep.yaml"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def test_dry_run_refuses_a_pi_sweep_at_config_time_before_any_dispatch(tmp_path, task_tree):
+    """The verifier's probe: re-enabling a pi sweep in a temp config used to
+    dry-run clean (gated=15 ungated=0, no rejection) and only blow up
+    per-row, deep inside execute_run, after prepare_scratch had already spent
+    three git subprocesses on every earlier row in the sweep. The refusal
+    must happen here, at zero cost, and --dry-run must say so and show zero
+    pi rows pending."""
+    results = tmp_path / "results.jsonl"
+    proc = subprocess.run(
+        [sys.executable, os.path.join(RUNNER_DIR, "run.py"),
+         "--config", write_config_with_pi_sweep(tmp_path),
+         "--tasks-dir", task_tree, "--dry-run",
+         "--results", str(results),
+         "--scratch", str(tmp_path / "scratch")],
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        timeout=180)
+
+    assert proc.returncode == 0, proc.stdout
+    assert "driver_unsupported=1" in proc.stdout, proc.stdout
+    assert "total=0 pending=0" in proc.stdout, proc.stdout
+
+    lines = [l for l in results.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 1, lines
+    row = json.loads(lines[0])
+    assert row["exit_reason"] == "driver_unsupported"
+    assert row["driver"] == "pi"
+    assert row["pass"] is None
+
+
+def test_mock_run_does_not_bypass_the_driver_gate(tmp_path, task_tree):
+    """--mock skips straight past build_cli_cmd, the only place the driver
+    check lived before this fix -- so a mock run with driver: pi wrote a
+    genuine 'mock' row despite nothing ever validating the driver. The
+    config-time gate in main() runs unconditionally, not only under
+    --dry-run, so a --mock invocation over the same pi sweep must be refused
+    exactly like --dry-run, before apply_mock ever runs."""
+    results = tmp_path / "results.jsonl"
+    proc = subprocess.run(
+        [sys.executable, os.path.join(RUNNER_DIR, "run.py"),
+         "--config", write_config_with_pi_sweep(tmp_path),
+         "--tasks-dir", task_tree, "--mock",
+         "--results", str(results),
+         "--scratch", str(tmp_path / "scratch")],
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        timeout=180)
+
+    assert proc.returncode == 0, proc.stdout
+    lines = [l for l in results.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 1, lines
+    row = json.loads(lines[0])
+    assert row["exit_reason"] == "driver_unsupported"
+    assert row["exit_reason"] != "mock"
+
+
+def test_execute_run_refuses_before_prepare_scratch_for_an_unsupported_driver(tmp_path, monkeypatch):
+    """Defense-in-depth backstop: any caller reaching execute_run directly
+    with a driver it cannot dispatch -- not only through main()'s gate --
+    must be refused before prepare_scratch's three git subprocesses run, not
+    after."""
+    sys.path.insert(0, RUNNER_DIR)
+    import run as runner  # noqa: E402
+
+    called = []
+    monkeypatch.setattr(runner, "prepare_scratch", lambda *a, **k: called.append(True))
+
+    run = {
+        "run_id": "s--glm-4.7-local--high--bare--t2-py-a--pi-r0",
+        "sweep": "s", "model": "glm-4.7-local", "effort": "high",
+        "harness": False, "harness_level": None, "driver": "pi",
+        "task": "t2-py-a", "rep": 0, "mode": "solo",
+    }
+    results = tmp_path / "results.jsonl"
+
+    row = runner.execute_run(run, {}, str(tmp_path / "tasks"),
+                             str(tmp_path / "scratch"), str(results))
+
+    assert called == [], "prepare_scratch ran before the driver check refused"
+    assert row["exit_reason"] == "driver_unsupported"
+    assert row["driver"] == "pi"

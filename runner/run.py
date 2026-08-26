@@ -525,8 +525,36 @@ def prepare_scratch(task_dir, scratch, harness, verify_text=None):
 # tests/test_live_mcp_seal.py::test_mcp_config_value_is_never_last.
 MCP_SEAL_FLAGS = ["--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config"]
 
+# issue #25 verify pass. Drivers build_cli_cmd can actually turn into an argv.
+# None means "undeclared", which every pre-#25 row and every ungated model
+# (fable, sol, ...) carries -- treated as claude-code, the only binary this
+# module execs. Single source for BOTH gates: main()'s config-time loop below
+# calls this to classify a row BEFORE dispatch (so a pi row is refused at zero
+# cost, never after prepare_scratch's git subprocesses have already run), and
+# build_cli_cmd calls it again as the last line of defense for any caller that
+# reaches it directly (a test, a future script) without going through main().
+DISPATCHABLE_DRIVERS = (None, "claude-code")
 
-def build_cli_cmd(model, effort, prompt):
+
+def driver_has_dispatch_path(driver):
+    return driver in DISPATCHABLE_DRIVERS
+
+
+class DriverUnsupported(ValueError):
+    """A row whose driver has no dispatch path in build_cli_cmd (issue #25).
+
+    Distinct from serving_registry.StructurallyImpossible: that answers "can
+    the driver express this cell" -- a capability-manifest fact the registry
+    measures per (model, driver) row. This answers "does run.py itself have
+    launch code for this driver at all" -- orthogonal, and a driver can carry
+    a perfectly valid registry row (glm-4.7 x pi does) while run.py still has
+    no dispatch path for it. Caught before the generic ValueError branch in
+    main()'s gate loop for the same reason StructurallyImpossible is: one
+    unsupported cell must drop that cell, not exit 2 for the whole sweep.
+    """
+
+
+def build_cli_cmd(model, effort, prompt, driver=None):
     """The exact headless invocation for a model, per runner/CLI-FACTS.md.
 
     Dispatches on registry family, so a new model id needs no change here. Effort
@@ -547,7 +575,26 @@ def build_cli_cmd(model, effort, prompt):
     the argv depend on a fact -- whether the knob works -- that isn't known yet.
     Whether it moves spend at all is exactly what probe_endpoints.py's ladder
     phase is for, same as every other family.
+
+    `driver` (issue #25). Trailing and optional, defaulting to None, so every
+    caller that predates it (8+ test files call this positionally with three
+    args) keeps working unchanged. The serving registry (serving_registry.py)
+    already lets a config DECLARE a pi row -- it has its own capability
+    manifest -- but nothing below actually launches pi; the argv this function
+    builds always execs the `claude` binary. A None or "claude-code" driver is
+    exactly what that binary implements, so it proceeds. Any other declared
+    driver (pi today) is refused HERE, before a token is spent, rather than
+    silently producing a row stamped with a driver the CLI that ran it does
+    not match. This is the caec128 defect: glm-stage1-pi declared driver: pi
+    and this function launched claude-code anyway, stamping 15 rows with a
+    label the binary that produced them did not earn.
     """
+    if not driver_has_dispatch_path(driver):
+        raise ValueError(
+            f"build_cli_cmd has no dispatch path for driver {driver!r}: the "
+            f"claude binary this function invokes implements claude-code "
+            f"only. Add a driver-specific branch here (see issue #25) before "
+            f"any config may declare driver: {driver!r}.")
     mid, spec = resolve_model(model)
     check_effort(mid, effort)
     family = spec["family"]
@@ -1696,6 +1743,22 @@ def resolve_timeout_s(task, defaults):
 # Main
 # --------------------------------------------------------------------------- #
 def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None):
+    # issue #25 verify pass. Checked BEFORE task_dir/scratch/prepare_scratch --
+    # main()'s config-time gate already drops a driver_unsupported row from
+    # `runs` before it ever reaches here, but --mock skips straight past
+    # build_cli_cmd (the mock branch below never calls it), so this is the
+    # backstop for any caller -- a --mock invocation, a test, a future script
+    # -- that reaches execute_run directly without going through that gate.
+    # Placed ahead of prepare_scratch deliberately: that function runs three
+    # git subprocesses (init/add/commit) before a token would be spent, and a
+    # row this function is about to refuse must not pay that cost first.
+    if not driver_has_dispatch_path(run.get("driver")):
+        return record_driver_unsupported(
+            run,
+            f"driver {run.get('driver')!r} has no dispatch path in "
+            f"build_cli_cmd (issue #25); only claude-code is implemented",
+            results_path)
+
     # absolute: mock patch / verify run with cwd=scratch, so relative paths break
     task_dir = os.path.abspath(os.path.join(tasks_dir, run["task"]))
     scratch = os.path.abspath(os.path.join(scratch_root, run["run_id"]))
@@ -1772,7 +1835,8 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None
         else:
             prompt = compose_prompt(task_dir, run["harness"], run["mode"],
                                     k=k_cap)
-            cmd = build_cli_cmd(run["model"], run["effort"], prompt)
+            cmd = build_cli_cmd(run["model"], run["effort"], prompt,
+                               driver=run.get("driver"))
             invocation_mode = usage_ledger.invocation_mode(model_family(run["model"]))
             sealed = seal_enabled()
             # AND'd against the seal module's own capability flag rather than
@@ -2009,6 +2073,73 @@ def record_structurally_impossible(run, reason, results_path):
     return row
 
 
+def recorded_driver_unsupported_ids(results_path):
+    """run_ids already written as driver_unsupported (issue #25).
+
+    Same resume-friendly guard recorded_impossible_ids provides for
+    structurally-impossible rows: main() re-walks the whole matrix on every
+    invocation, and a cell that is unsupported today is still unsupported on
+    the next pass, so without this each invocation would append a duplicate
+    status row for the same run_id.
+    """
+    ids = set()
+    if not os.path.exists(results_path):
+        return ids
+    with open(results_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("exit_reason") == "driver_unsupported":
+                ids.add(row.get("run_id"))
+    return ids
+
+
+def record_driver_unsupported(run, reason, results_path):
+    """Write the row for a driver run.py has no dispatch path for (issue #25).
+
+    Distinct from record_structurally_impossible: that answers "can the
+    driver express this cell", a capability-manifest fact serving_registry
+    measures per (model, driver) row. This answers "does run.py itself know
+    how to launch this driver at all" -- orthogonal, and a driver can carry a
+    perfectly valid registry row (glm-4.7 x pi does; check_dispatch passes
+    it) while build_cli_cmd still has no argv for it. Called from two places:
+    main()'s config-time gate, before any row of this shape is ever passed to
+    execute_run, and execute_run itself as a defense-in-depth backstop for
+    any caller (a --mock run, a test, a future script) that reaches it
+    without going through main()'s loop.
+
+    `pass` is None, never False, and exit_reason is a distinct string never
+    "ok" -- same reasoning as record_structurally_impossible: this cell was
+    never dispatched, so False would assert an attempt that never happened,
+    and run_status.py classes "driver_unsupported" INFRA so every existing
+    reader gate already excludes it from a pass-rate denominator.
+    """
+    row = {
+        "run_id": run["run_id"], "ts": now_iso(), "sweep": run["sweep"],
+        "model": run["model"], "model_id": resolve_model(run["model"])[0],
+        "effort": run["effort"], "harness": run["harness"],
+        "harness_level": run.get("harness_level"), "driver": run.get("driver"),
+        "task": run["task"], "rep": run["rep"],
+        "pass": None, "pass_raw": None, "pass_at_cap": None,
+        "exit_reason": "driver_unsupported",
+        "status_class": run_status.status_class("driver_unsupported"),
+        **invocation_provenance(run["model"]),
+        "driver_unsupported_reason": reason,
+        "tokens_in": None, "tokens_out": None, "turns": None, "wall_s": None,
+        "loc_changed": None, "sealed": None, "write_contained": None,
+        "home_isolated": None, "invocation_mode": None,
+        "brokered": None, "k_cap": None, "acceptance_requests": None,
+        "cap_exhausted": False, "tampered": False, "tamper_files": [],
+    }
+    append_row(results_path, row)
+    return row
+
+
 def main():
     ap = argparse.ArgumentParser(description="model-gauntlet runner")
     ap.add_argument("--config", default=os.path.join(RUNNER_DIR, "runs.yaml"))
@@ -2109,6 +2240,7 @@ def main():
 
     bad = []
     impossible = []
+    driver_unsupported = []
     gated = ungated = 0
     for r in runs:
         try:
@@ -2131,8 +2263,32 @@ def main():
                     serving_registry.require_driver(r.get("driver"), row_model),
                     requested_serving,
                     harness_level=r.get("harness_level"))
+                # issue #25 verify pass. Checked AFTER check_dispatch,
+                # deliberately, not before: registry capability is necessary
+                # but not sufficient. check_dispatch above can bless a cell
+                # (glm-4.7 x pi passes it -- pi has its own registry row,
+                # require_driver above already confirmed the NAME is one the
+                # registry recognizes) while run.py itself still has no
+                # launch code for the driver. Checking here means a name the
+                # registry does not recognize at all (a config typo) still
+                # fails through require_driver's own refusal above -- a
+                # config bug, exit 2 -- rather than being reclassified as
+                # this soft, per-cell skip; and a cell the registry already
+                # refused as StructurallyImpossible (pi x L5) keeps that
+                # exit_reason rather than this one, because check_dispatch
+                # raises before this line is ever reached.
+                if not driver_has_dispatch_path(r.get("driver")):
+                    raise DriverUnsupported(
+                        f"driver {r.get('driver')!r} has no dispatch path "
+                        f"in build_cli_cmd (issue #25); only claude-code is "
+                        f"implemented")
                 gated += 1
             else:
+                if not driver_has_dispatch_path(r.get("driver")):
+                    raise DriverUnsupported(
+                        f"driver {r.get('driver')!r} has no dispatch path "
+                        f"in build_cli_cmd (issue #25); only claude-code is "
+                        f"implemented")
                 ungated += 1
         except serving_registry.StructurallyImpossible as e:
             # CAUGHT BEFORE ValueError, and the order is the whole point.
@@ -2144,6 +2300,12 @@ def main():
             # with their own status -- never scored 0, which would assert that
             # the model attempted the task and failed it.
             impossible.append((r, str(e)))
+        except DriverUnsupported as e:
+            # CAUGHT BEFORE ValueError for the identical reason: DriverUnsupported
+            # subclasses ValueError, and one row with a driver run.py cannot yet
+            # launch is a valid matrix containing a cell this INSTRUMENT cannot
+            # dispatch -- not a config bug that should exit 2 for the whole sweep.
+            driver_unsupported.append((r, str(e)))
         except ValueError as e:
             bad.append(f"  {r['run_id']}: {e}")
     if bad:
@@ -2154,6 +2316,7 @@ def main():
 
     print(f"serving gate: gated={gated} ungated={ungated} "
           f"structurally_impossible={len(impossible)} "
+          f"driver_unsupported={len(driver_unsupported)} "
           f"declared={sorted(requested_serving) or 'none'}")
     if impossible:
         dropped = {r["run_id"] for r, _ in impossible}
@@ -2162,6 +2325,14 @@ def main():
             print(f"  [structurally-impossible] {r['run_id']}: {why}")
             if r["run_id"] not in already:
                 record_structurally_impossible(r, why, args.results)
+        runs = [r for r in runs if r["run_id"] not in dropped]
+    if driver_unsupported:
+        dropped = {r["run_id"] for r, _ in driver_unsupported}
+        already = recorded_driver_unsupported_ids(args.results)
+        for r, why in driver_unsupported:
+            print(f"  [driver-unsupported] {r['run_id']}: {why}")
+            if r["run_id"] not in already:
+                record_driver_unsupported(r, why, args.results)
         runs = [r for r in runs if r["run_id"] not in dropped]
 
     # Same posture, same reason: a K outside the pre-registered range makes every
