@@ -178,6 +178,40 @@ def token_rows(rs):
     return kept, len(rs) - len(kept)
 
 
+def token_axis_drop_note(label, rs, dropped):
+    """One clause naming how many of `rs` a table's token axis excluded and
+    why (issue #31): tables 2-4 called `token_rows()` for the count and threw
+    it away, so a cell whose runs were mostly cap_exhausted (SCORED for the
+    pass axis, excluded here because a capped run's tokens_out measures where
+    the broker cut it off) rendered a mean over 1 of 4 rows with nothing said
+    about the other 3.
+
+    Takes `dropped` (already computed by the caller's `token_rows(rs)` call)
+    rather than recomputing it, so the two counts cannot drift apart; only
+    calls back into `corpus_gates.summarizable_rows` -- the SAME predicate
+    `token_rows` gates on -- to get the reason breakdown, and only when
+    `dropped` is truthy, since that breakdown is not needed for a clean cell.
+    """
+    _, excluded = corpus_gates.summarizable_rows(rs)
+    reason = " ".join(f"{k}={v}" for k, v in sorted(excluded.items()))
+    return (f"`{label}`: {dropped} of {len(rs)} row(s) excluded from the "
+            f"token axis ({reason})")
+
+
+def token_axis_note(notes):
+    """The footnote tables 2-4 append when `token_axis_drop_note` fired for at
+    least one cell. Same shape as table5's `dropped_note` and table6's
+    `dropped_note` footnotes -- a trailing blockquote naming the cells, not a
+    7th column, since a dropped ROW is a partial exclusion from an existing
+    cell's mean, not a whole cell with nothing to put in a row."""
+    if not notes:
+        return ""
+    return ("\n> **rows excluded from the token axis** (issue #31 / ticket 31 "
+            "AC#3 -- a truncated run's `tokens_out` measures where it was cut "
+            "off, not what the tier chose to spend): " + "; ".join(notes)
+            + ".\n")
+
+
 def driver_of(row):
     return row.get("driver")
 
@@ -255,6 +289,7 @@ def table2_efficiency_frontier(rows):
     g = group(rows, lambda r: (model_key(r, mixed), r["effort"]))
     data = []
     table_modes = set()
+    token_notes = []
     for (model, effort), rs in sorted(
             g.items(), key=lambda kv: (kv[0][0], EFFORT_ORDER.get(kv[0][1], 9))):
         # Same denominator as table1, from the same predicate. Before this, five
@@ -266,7 +301,9 @@ def table2_efficiency_frontier(rows):
         # The token axis moves with it: tokens_out from a truncated run measures
         # where the run was cut off, not what the tier chose to spend --
         # ladder_from_results.py makes that argument for the same reason.
-        spend, _dropped = token_rows(rs)
+        spend, dropped = token_rows(rs)
+        if dropped:
+            token_notes.append(token_axis_drop_note(f"{model}/{effort}", rs, dropped))
         tot = [out_tokens(r) for r in spend]
         tpp = (sum(tot) / passes) if passes else None
         # The MODE column is not a pass-rate question -- it reports which
@@ -288,6 +325,7 @@ def table2_efficiency_frontier(rows):
                 + " rows — different instruments, not one measurement. Whether "
                 "the pooled comparison is publishable is tickets 03/20's "
                 "ruling; this note only makes the mixing visible.\n")
+    out += token_axis_note(token_notes)
     return out
 
 
@@ -296,6 +334,7 @@ def table3_harness_delta(rows):
     rows = [dict(r, model=model_key(r, mixed)) for r in rows]
     models = sorted({r["model"] for r in rows})
     data = []
+    token_notes = []
     for model in models:
         cell = {}
         for tag, hv in (("bare", False), ("harness", True)):
@@ -303,7 +342,11 @@ def table3_harness_delta(rows):
             scored, _excl = run_status.partition_for_rate(rs)
             n = len(scored)
             passes = sum(1 for r in scored if r.get("pass"))
-            toks = mean([out_tokens(r) for r in token_rows(rs)[0]])
+            spend, dropped = token_rows(rs)
+            if dropped:
+                token_notes.append(
+                    token_axis_drop_note(f"{model}/{tag}", rs, dropped))
+            toks = mean([out_tokens(r) for r in spend])
             cell[tag] = (n, passes, (100.0 * passes / n if n else None), toks)
         b, h = cell["bare"], cell["harness"]
         if b[0] == 0 and h[0] == 0:
@@ -319,7 +362,7 @@ def table3_harness_delta(rows):
         ])
     return md_table(
         ["model", "bare pass%", "bare tok_out", "harness pass%", "harness tok_out",
-         "delta pass", "delta tok_out"], data)
+         "delta pass", "delta tok_out"], data) + token_axis_note(token_notes)
 
 
 def table4_hybrid_vs_solo(rows):
@@ -334,14 +377,20 @@ def table4_hybrid_vs_solo(rows):
     mixed = multi_driver_models(t3)
     g = group(t3, lambda r: model_key(r, mixed))
     data = []
+    token_notes = []
     for model, rs in sorted(g.items()):
         scored, _excl = run_status.partition_for_rate(rs)
         n = len(scored)
         passes = sum(1 for r in scored if r.get("pass"))
-        toks = mean([out_tokens(r) for r in token_rows(rs)[0]])
+        spend, dropped = token_rows(rs)
+        if dropped:
+            token_notes.append(token_axis_drop_note(model, rs, dropped))
+        toks = mean([out_tokens(r) for r in spend])
         kind = "hybrid" if model == "hybrid" else "solo"
         data.append([model, kind, n, pct(passes, n), fnum(toks)])
-    return md_table(["model", "kind", "n", "pass_rate", "mean_tokens_out"], data)
+    return md_table(
+        ["model", "kind", "n", "pass_rate", "mean_tokens_out"], data
+    ) + token_axis_note(token_notes)
 
 
 def table5_variance(rows):
@@ -407,9 +456,25 @@ def table6_decision_matrix(rows, qual, ledger=None):
             rs, _excl = run_status.partition_for_rate(rs)
             n = len(rs)
             passes = sum(1 for r in rs if r.get("pass"))
-            rate = passes / n if n else 0
-            toks = mean([out_tokens(r) for r in token_rows(rs)[0]]) or 0
-            score = (rate, -toks)
+            if n:
+                rate = passes / n
+                toks = mean([out_tokens(r) for r in token_rows(rs)[0]]) or 0
+                score = (rate, -toks)
+            else:
+                # issue #31. `rate = passes / n if n else 0` used to score an
+                # unmeasured config (0 scored rows) identically to a REAL
+                # config that measured a genuine 0% pass rate -- both are
+                # `rate == 0`. The tiebreak then favoured the unmeasured one:
+                # its `toks` fell back to `or 0`, which reads as "free," so
+                # -toks=0 beat a real cell's -toks<0, and an untested config
+                # could out-rank a real, if-poor, measured one -- absence
+                # rendering as evidence of the lowest cost, exactly backwards.
+                # A rate below every real 0.0 keeps a config with actual
+                # evidence winning whenever one exists; only a model with NO
+                # measured config at all falls through to the `if not rs`
+                # "no measured runs" branch below.
+                rate, toks = 0.0, 0
+                score = (-1, 0)
             if best is None or score > best:
                 best, best_key = score, (key, rate, toks, rs)
         (effort, htag), rate, toks, rs = best_key
