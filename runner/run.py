@@ -57,6 +57,11 @@ RUNNER_DIR = os.path.join(ROOT, "runner")
 # doing it on the instrument's behalf.
 USAGE_PATH = usage_ledger.paths_for_repo(ROOT).usage
 
+# Issue #24: the DEFAULT --results path, named so main()'s --results argparse
+# default and the issue #23 guard below both read it off one constant instead
+# of two literals that could drift apart.
+DEFAULT_RESULTS_PATH = os.path.join(RUNNER_DIR, "results", "results.jsonl")
+
 # --- Kimi K3 (Moonshot) ---------------------------------------------------- #
 # K3 has no native agent CLI; we drive it through Codex's OpenAI-compatible
 # provider path. Its API key lives in a gitignored secrets file, whose location
@@ -1689,7 +1694,7 @@ def resolve_timeout_s(task, defaults):
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
-def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
+def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None):
     # absolute: mock patch / verify run with cwd=scratch, so relative paths break
     task_dir = os.path.abspath(os.path.join(tasks_dir, run["task"]))
     scratch = os.path.abspath(os.path.join(scratch_root, run["run_id"]))
@@ -1918,7 +1923,14 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path):
     # Prospective only -- does not touch or retrofit any prior row.
     urow = usage_ledger.build_usage_row(row, model_family(run["model"]), usage_detail,
                                         model_id=row["model_id"])
-    usage_ledger.append_usage_row(USAGE_PATH, urow)
+    # Issue #24: usage_path is None for every caller written before this ticket,
+    # so it falls back to the module-level USAGE_PATH exactly like before --
+    # existing positional callers (tests and any external script) keep working
+    # unchanged. main() below is the only caller that now passes usage_path
+    # explicitly, derived from --results/--usage.
+    if usage_path is None:
+        usage_path = USAGE_PATH
+    usage_ledger.append_usage_row(usage_path, urow)
 
     return row
 
@@ -2001,7 +2013,11 @@ def main():
     ap.add_argument("--config", default=os.path.join(RUNNER_DIR, "runs.yaml"))
     ap.add_argument("--tasks-dir", default=os.path.join(ROOT, "tasks"))
     ap.add_argument("--scratch", default=os.path.join(ROOT, ".scratch"))
-    ap.add_argument("--results", default=os.path.join(RUNNER_DIR, "results", "results.jsonl"))
+    ap.add_argument("--results", default=DEFAULT_RESULTS_PATH)
+    ap.add_argument("--usage", default=None,
+                    help="override the usage-ledger path (issue #24); default "
+                         "is usage.jsonl beside --results, so redirecting "
+                         "--results redirects both files together")
     ap.add_argument("--only", default=None, help="substring filter on run_id")
     ap.add_argument("--limit", type=int, default=None,
                     help="execute at most N pending runs this invocation (resume-friendly)")
@@ -2020,6 +2036,35 @@ def main():
         os.environ["GAUNTLET_MOCK"] = "fail"
     elif args.mock:
         os.environ["GAUNTLET_MOCK"] = "1"
+
+    # Issue #24: usage.jsonl derives from --results' own directory unless
+    # --usage names a different file explicitly -- so a caller who moves
+    # --results to a scratch tree moves the ledger with it, without having to
+    # know the ledger exists.
+    usage_path = (os.path.abspath(args.usage) if args.usage is not None
+                  else os.path.join(os.path.dirname(os.path.abspath(args.results)),
+                                    "usage.jsonl"))
+
+    # Issue #23: this is the guard, not the corpus-pinning tests -- those prove
+    # it fires. A demo/mock/dry invocation that (after the derivation above)
+    # still resolves to either LIVE corpus path is refused outright rather than
+    # silently redirected: three times in one wave a demo run appended synthetic
+    # rows to the real results.jsonl/usage.jsonl because the default WAS the
+    # live path and nothing said so. Redirect-on-detect was considered and
+    # rejected -- it would create an unnamed scratch corpus the caller does not
+    # know to distrust or clean up, and a caller who genuinely wants the live
+    # paths mocked (there is no such legitimate case) gets no way to say so
+    # explicitly, same posture as this. Refusing forces one flag, once, in the
+    # open, the same place the config-rejected checks below already fail closed.
+    if os.environ.get("GAUNTLET_MOCK") and (
+            os.path.abspath(args.results) == os.path.abspath(DEFAULT_RESULTS_PATH)
+            or usage_path == os.path.abspath(USAGE_PATH)):
+        print(
+            "refusing: --mock/--mock-fail would append synthetic rows to the "
+            f"live corpus ({DEFAULT_RESULTS_PATH!r} / {USAGE_PATH!r}). Pass "
+            "--results (and, if needed, --usage) pointing at a scratch path, "
+            "e.g. --results /tmp/scratch/results.jsonl", file=sys.stderr)
+        sys.exit(2)
 
     with open(args.config, "r", encoding="utf-8") as f:
         cfg = parse_yaml(f.read())
@@ -2139,7 +2184,8 @@ def main():
                   f"${args.max_usd:.2f}; skipping {r['run_id']}", flush=True)
             continue
         print(f"[{i}/{len(pending)}] {r['run_id']} ...", flush=True)
-        row = execute_run(r, cfg, args.tasks_dir, args.scratch, args.results)
+        row = execute_run(r, cfg, args.tasks_dir, args.scratch, args.results,
+                          usage_path)
         cost_note = ""
         if is_metered(r["model"]):
             kimi_spent += kimi_dollars(row["tokens_in"], row["tokens_out"])
