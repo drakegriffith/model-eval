@@ -45,6 +45,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus_gates  # noqa: E402
+import report_acceptance  # noqa: E402  (issue #22: acceptance-request summary, single source)
 import run_status  # noqa: E402
 import tables  # noqa: E402  (issue #25: model_key/multi_driver_models, single source)
 from effort_verdict import (  # noqa: E402  (thresholds + vocabulary: single source)
@@ -215,6 +216,13 @@ def main():
     if excluded:
         print("excluded rows: " + "  ".join(f"{k}={v}" for k, v in sorted(excluded.items()))
               + "   (incomplete generation is not a spend measurement)")
+
+    # issue #22 / A1 (a0cef36): the report states max(acceptance_requests),
+    # its distribution, and the cap_exhausted count beside the pass rate.
+    # Printed once over the whole corpus `main()` loaded, the same scope the
+    # "excluded rows" line above already reports at.
+    print(report_acceptance.format_acceptance_summary(
+        report_acceptance.acceptance_summary(rows)))
 
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as f:
