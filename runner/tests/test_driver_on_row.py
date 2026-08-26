@@ -120,13 +120,13 @@ def test_harness_level_is_none_rather_than_zero_when_undeclared(tmp_path, task_t
 # --------------------------------------------------------------------------- #
 # The readers refuse to pool two drivers
 # --------------------------------------------------------------------------- #
-def rows_for(driver, n, passes):
+def rows_for(driver, n, passes, task="t1-py-a"):
     out = []
     for i in range(n):
         out.append({
-            "run_id": f"s--glm-4.7-local--high--bare--t1-py-a--{driver}-r{i}",
+            "run_id": f"s--glm-4.7-local--high--bare--{task}--{driver}-r{i}",
             "sweep": "s", "model": "glm-4.7-local", "model_id": "glm-4.7-local",
-            "effort": "high", "task": "t1-py-a", "rep": i, "harness": False,
+            "effort": "high", "task": task, "rep": i, "harness": False,
             "driver": driver, "pass": i < passes, "exit_reason": "ok",
             "status_class": "scored", "tokens_in": 100, "tokens_out": 100,
             "wall_s": 1.0, "loc_changed": 10, "turns": 1,
@@ -187,3 +187,98 @@ def test_the_report_says_out_loud_that_a_model_ran_under_two_drivers():
 
     assert "driver" in out.lower()
     assert "pi" in out
+
+
+# --------------------------------------------------------------------------- #
+# table4_hybrid_vs_solo, report_block, section_wilson (issue #25)
+# --------------------------------------------------------------------------- #
+def test_table4_splits_a_t3_model_that_ran_under_two_drivers():
+    """Positive control: one T3 claude-code row and one T3 pi row must render
+    as two lines, never pooled into one hybrid/solo cell."""
+    corpus = rows_for("claude-code", 3, 3, task="t3-a") + rows_for("pi", 3, 0, task="t3-a")
+
+    out = tables.table4_hybrid_vs_solo(corpus)
+
+    data_lines = [l for l in out.splitlines() if l.startswith("| glm-4.7-local")]
+    assert len(data_lines) == 2, out
+    assert "[claude-code]" in out and "[pi]" in out
+
+
+def test_table4_is_unchanged_for_a_single_driver_corpus():
+    """The control: a corpus with nothing to disambiguate must not grow a
+    driver suffix or split into extra rows."""
+    corpus = rows_for("claude-code", 4, 2, task="t3-a")
+
+    out = tables.table4_hybrid_vs_solo(corpus)
+
+    data_lines = [l for l in out.splitlines() if l.startswith("| glm-4.7-local")]
+    assert len(data_lines) == 1, out
+    assert "[claude-code]" not in out
+
+
+def test_report_block_splits_a_task_that_ran_under_two_drivers():
+    """Positive control for ladder_from_results.py's per-task blocks."""
+    import ladder_from_results as ladder  # noqa: E402 (sys.path already set above)
+
+    corpus = rows_for("claude-code", 3, 3) + rows_for("pi", 3, 0)
+
+    blocks = ladder.blocks_for(corpus)
+
+    assert len(blocks) == 2, blocks
+    labels = sorted(b["block"] for b in blocks)
+    assert labels == ["t1-py-a [claude-code]", "t1-py-a [pi]"], labels
+
+
+def test_report_block_is_unchanged_for_a_single_driver_corpus():
+    import ladder_from_results as ladder  # noqa: E402
+
+    corpus = rows_for("claude-code", 4, 2)
+
+    blocks = ladder.blocks_for(corpus)
+
+    assert len(blocks) == 1, blocks
+    assert blocks[0]["block"] == "t1-py-a"
+
+
+def test_section_wilson_splits_a_model_that_ran_under_two_drivers():
+    """Positive control for stats.py's per-cell Wilson table."""
+    import stats  # noqa: E402
+
+    corpus = rows_for("claude-code", 3, 3) + rows_for("pi", 3, 0)
+
+    out = stats.section_wilson(corpus)
+
+    data_lines = [l for l in out.splitlines() if l.startswith("| glm-4.7-local")]
+    assert len(data_lines) == 2, out
+    assert "[claude-code]" in out and "[pi]" in out
+
+
+def test_section_wilson_is_unchanged_for_a_single_driver_corpus():
+    import stats  # noqa: E402
+
+    corpus = rows_for("claude-code", 4, 2)
+
+    out = stats.section_wilson(corpus)
+
+    data_lines = [l for l in out.splitlines() if l.startswith("| glm-4.7-local")]
+    assert len(data_lines) == 1, out
+    assert "[claude-code]" not in out
+
+
+# --------------------------------------------------------------------------- #
+# The stage-1 config itself (issue #25)
+# --------------------------------------------------------------------------- #
+def test_stage1_yaml_has_no_pi_sweep_and_totals_sixty():
+    """A2 (studio-handoff-20260825): the pi vehicle contrast is stage 1b, not
+    stage 1. This is the same count `--dry-run` prints, exercised directly
+    against build_runs so the regression is caught without a subprocess."""
+    sys.path.insert(0, RUNNER_DIR)
+    import run as runner  # noqa: E402
+
+    with open(os.path.join(RUNNER_DIR, "runs-glm-stage1.yaml"), encoding="utf-8") as f:
+        cfg = runner.parse_yaml(f.read())
+    runs = runner.build_runs(cfg)
+
+    assert len(runs) == 60, len(runs)
+    assert sum(1 for r in runs if r.get("driver") == "pi") == 0
+    assert "glm-stage1-pi" not in {r["sweep"] for r in runs}

@@ -526,7 +526,7 @@ def prepare_scratch(task_dir, scratch, harness, verify_text=None):
 MCP_SEAL_FLAGS = ["--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config"]
 
 
-def build_cli_cmd(model, effort, prompt):
+def build_cli_cmd(model, effort, prompt, driver=None):
     """The exact headless invocation for a model, per runner/CLI-FACTS.md.
 
     Dispatches on registry family, so a new model id needs no change here. Effort
@@ -547,7 +547,26 @@ def build_cli_cmd(model, effort, prompt):
     the argv depend on a fact -- whether the knob works -- that isn't known yet.
     Whether it moves spend at all is exactly what probe_endpoints.py's ladder
     phase is for, same as every other family.
+
+    `driver` (issue #25). Trailing and optional, defaulting to None, so every
+    caller that predates it (8+ test files call this positionally with three
+    args) keeps working unchanged. The serving registry (serving_registry.py)
+    already lets a config DECLARE a pi row -- it has its own capability
+    manifest -- but nothing below actually launches pi; the argv this function
+    builds always execs the `claude` binary. A None or "claude-code" driver is
+    exactly what that binary implements, so it proceeds. Any other declared
+    driver (pi today) is refused HERE, before a token is spent, rather than
+    silently producing a row stamped with a driver the CLI that ran it does
+    not match. This is the caec128 defect: glm-stage1-pi declared driver: pi
+    and this function launched claude-code anyway, stamping 15 rows with a
+    label the binary that produced them did not earn.
     """
+    if driver not in (None, "claude-code"):
+        raise ValueError(
+            f"build_cli_cmd has no dispatch path for driver {driver!r}: the "
+            f"claude binary this function invokes implements claude-code "
+            f"only. Add a driver-specific branch here (see issue #25) before "
+            f"any config may declare driver: {driver!r}.")
     mid, spec = resolve_model(model)
     check_effort(mid, effort)
     family = spec["family"]
@@ -1772,7 +1791,8 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None
         else:
             prompt = compose_prompt(task_dir, run["harness"], run["mode"],
                                     k=k_cap)
-            cmd = build_cli_cmd(run["model"], run["effort"], prompt)
+            cmd = build_cli_cmd(run["model"], run["effort"], prompt,
+                               driver=run.get("driver"))
             invocation_mode = usage_ledger.invocation_mode(model_family(run["model"]))
             sealed = seal_enabled()
             # AND'd against the seal module's own capability flag rather than

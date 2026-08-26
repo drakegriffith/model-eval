@@ -79,6 +79,30 @@ def test_build_cli_cmd_local_rejects_an_undeclared_effort_before_building_anythi
 
 
 # --------------------------------------------------------------------------- #
+# build_cli_cmd — driver dispatch (issue #25)
+# --------------------------------------------------------------------------- #
+def test_build_cli_cmd_no_driver_is_still_the_default_shape():
+    """The trailing `driver` kwarg must not break any of the 8+ call sites
+    above that predate it and call this positionally with three args."""
+    cmd = runner.build_cli_cmd("glm-4.7-local", None, PROMPT)
+    assert cmd[:2] == ["claude", "-p"]
+
+
+def test_build_cli_cmd_claude_code_driver_is_a_no_op():
+    """The one driver the claude binary actually implements must not raise."""
+    cmd = runner.build_cli_cmd("glm-4.7-local", None, PROMPT, driver="claude-code")
+    assert cmd[:2] == ["claude", "-p"]
+
+
+def test_build_cli_cmd_pi_driver_raises():
+    """caec128's defect: glm-stage1-pi declared driver: pi and build_cli_cmd
+    launched the claude binary anyway, stamping 15 rows with a driver label
+    the binary that ran them did not earn. It must refuse instead."""
+    with pytest.raises(ValueError, match="pi"):
+        runner.build_cli_cmd("glm-4.7-local", None, PROMPT, driver="pi")
+
+
+# --------------------------------------------------------------------------- #
 # run_cli — the real env-injection path, no model invoked
 # --------------------------------------------------------------------------- #
 ENV_PROBE = "import json, os, sys\njson.dump(dict(os.environ), sys.stdout)\n"

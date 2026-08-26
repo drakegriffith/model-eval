@@ -319,7 +319,13 @@ def table4_hybrid_vs_solo(rows):
     t3 = [r for r in rows if str(r.get("task", "")).startswith("t3")]
     if not t3:
         return "_(no data - no T3 runs present in results)_\n"
-    g = group(t3, lambda r: r["model"])
+    # issue #25: a model that ran under more than one driver (e.g. a T3 task
+    # run once under claude-code and once under pi) gets its own row per
+    # driver, the same split table1 already applies -- pi has no hooks and no
+    # subagents, so pooling it with claude-code into one hybrid/solo line
+    # would average two different vehicles into one number.
+    mixed = multi_driver_models(t3)
+    g = group(t3, lambda r: model_key(r, mixed))
     data = []
     for model, rs in sorted(g.items()):
         scored, _excl = run_status.partition_for_rate(rs)
