@@ -634,6 +634,88 @@ def test_case_variant_scratch_dir_name_is_refused_before_run_py_is_invoked(
         shutil.rmtree(lower_dir, ignore_errors=True)
 
 
+def test_symlink_scratch_to_a_case_variant_results_subdir_is_refused_before_run_py(
+        live_files_untouched, stage0_fixture_matrix, tmp_path, monkeypatch):
+    """Round 3's composed bypass, this module's own version: `--scratch`
+    forwarded unchanged to run.py is itself a symlink whose target names an
+    EXISTING results subdirectory by a case variant of 'results'. Neither
+    fix alone catches this -- commonpath/realpath dereferences the symlink
+    but never folds case, and the case-insensitive ancestor walk never
+    dereferences a symlink `candidate` itself is -- only the combination
+    (walking the realpath-resolved candidate too) does."""
+    if not _fs_is_case_insensitive(tmp_path):
+        pytest.skip("filesystem is case-sensitive; this bypass does not apply")
+
+    results = tmp_path / "results.jsonl"
+    registry_copy = tmp_path / "models.yaml"
+    shutil.copy2(REAL_REGISTRY, registry_copy)
+
+    real_subdir = os.path.join(RUNNER_DIR, "results", "round3-stage0-target")
+    os.makedirs(real_subdir, exist_ok=False)
+    case_variant_target = os.path.join(RUNNER_DIR, "RESULTS", "round3-stage0-target")
+    try:
+        link = tmp_path / "scratch-via-case-variant-symlink"
+        link.symlink_to(case_variant_target, target_is_directory=True)
+
+        monkeypatch.chdir(RUNNER_DIR)
+        proc = subprocess.run(
+            [sys.executable, "stage0_probe.py",
+             "--config", stage0_fixture_matrix["config"],
+             "--tasks-dir", stage0_fixture_matrix["tasks_dir"],
+             "--scratch", str(link),
+             "--results", str(results),
+             "--registry-path", str(registry_copy),
+             "--mock"],
+            cwd=RUNNER_DIR, capture_output=True, text=True)
+
+        assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+        assert "refus" in proc.stderr.lower()
+        assert "--scratch" in proc.stderr
+        assert not results.exists(), "run.py must never have been invoked"
+    finally:
+        shutil.rmtree(real_subdir, ignore_errors=True)
+
+
+def test_two_hop_symlink_scratch_to_a_case_variant_results_subdir_is_refused(
+        live_files_untouched, stage0_fixture_matrix, tmp_path, monkeypatch):
+    """Same composed bypass as the single-hop test above, through an extra
+    symlink hop -- proves the fix is not accidentally keyed to a chain
+    depth of exactly one (realpath resolves a chain of any length)."""
+    if not _fs_is_case_insensitive(tmp_path):
+        pytest.skip("filesystem is case-sensitive; this bypass does not apply")
+
+    results = tmp_path / "results.jsonl"
+    registry_copy = tmp_path / "models.yaml"
+    shutil.copy2(REAL_REGISTRY, registry_copy)
+
+    real_subdir = os.path.join(RUNNER_DIR, "results", "round3-stage0-two-hop")
+    os.makedirs(real_subdir, exist_ok=False)
+    case_variant_target = os.path.join(RUNNER_DIR, "RESULTS", "round3-stage0-two-hop")
+    try:
+        link1 = tmp_path / "hop1"
+        link1.symlink_to(case_variant_target, target_is_directory=True)
+        link2 = tmp_path / "hop2"
+        link2.symlink_to(link1, target_is_directory=True)
+
+        monkeypatch.chdir(RUNNER_DIR)
+        proc = subprocess.run(
+            [sys.executable, "stage0_probe.py",
+             "--config", stage0_fixture_matrix["config"],
+             "--tasks-dir", stage0_fixture_matrix["tasks_dir"],
+             "--scratch", str(link2),
+             "--results", str(results),
+             "--registry-path", str(registry_copy),
+             "--mock"],
+            cwd=RUNNER_DIR, capture_output=True, text=True)
+
+        assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+        assert "refus" in proc.stderr.lower()
+        assert "--scratch" in proc.stderr
+        assert not results.exists(), "run.py must never have been invoked"
+    finally:
+        shutil.rmtree(real_subdir, ignore_errors=True)
+
+
 def test_non_mock_preflight_mismatch_refuses_before_run_py_is_invoked(
         live_files_untouched, stage0_fixture_matrix, tmp_path, monkeypatch):
     """The gap a verifier named: run.py's own dispatch gate only checks the

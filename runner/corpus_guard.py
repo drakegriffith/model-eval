@@ -67,18 +67,21 @@ def is_live_path(candidate, live_path):
     return False
 
 
-def _nearest_existing_ancestor(path):
-    """The deepest directory in `path`'s own ancestor chain (including
-    `path` itself) that actually exists on disk.
+def _nearest_existing_ancestor(start):
+    """The deepest directory in `start`'s own ancestor chain (including
+    `start` itself) that actually exists on disk. `start` must already be
+    absolute -- callers pass either os.path.abspath or os.path.realpath of
+    the real candidate, deliberately not computed here (see
+    `_case_insensitive_ancestor_match`, which needs both).
 
     A scratch path's leaf need not exist yet -- `is_inside_or_same` runs
     BEFORE the first checkout is created -- but some ancestor always does
     (the filesystem root, at worst). os.path.exists's own directory-entry
     lookup is case-insensitive on a case-insensitive filesystem (APFS):
-    walking up with it, rather than string-splitting `path`, is what lets
+    walking up with it, rather than string-splitting `start`, is what lets
     the caller find 'RESULTS' exists when only 'results' was ever created.
     """
-    cur = os.path.abspath(path)
+    cur = start
     while not os.path.exists(cur):
         parent = os.path.dirname(cur)
         if parent == cur:
@@ -87,24 +90,13 @@ def _nearest_existing_ancestor(path):
     return cur
 
 
-def _case_insensitive_ancestor_match(candidate, container):
-    """True if `container` names the same file as `candidate`'s nearest
+def _walk_to_root_for_match(start, container):
+    """True if `container` names the same file as `start`'s nearest
     existing ancestor, or as any of THAT ancestor's own ancestors up to the
     filesystem root -- checked with os.path.samefile at every step, never a
-    string compare.
-
-    Why the whole chain, not just one comparison: `candidate`'s nonexistent
-    leaf (if any) sits below its nearest existing ancestor, and containment
-    only requires SOME directory on the way up from `candidate` to be (or
-    be inside) `container` -- checked by climbing from that ancestor toward
-    the root and asking the filesystem, at each step, "is this container".
-    False (never raises) if `container` does not exist -- this guard's own
-    callers always pass an existing live results directory, but a helper
-    that stats an argument no caller can guarantee stays defensive anyway.
-    """
-    if not os.path.exists(container):
-        return False
-    cur = _nearest_existing_ancestor(candidate)
+    string compare. `container` is assumed to already exist (checked once
+    by the caller)."""
+    cur = _nearest_existing_ancestor(start)
     while True:
         try:
             if os.path.samefile(cur, container):
@@ -115,6 +107,38 @@ def _case_insensitive_ancestor_match(candidate, container):
         if parent == cur:
             return False
         cur = parent
+
+
+def _case_insensitive_ancestor_match(candidate, container):
+    """True if `container` contains, or is, `candidate` by filesystem
+    identity rather than by string -- checked along TWO independent
+    starting points, either sufficient: os.path.abspath(candidate) (never
+    dereferences a symlink `candidate` itself might be) and
+    os.path.realpath(candidate) (dereferences every symlink hop, however
+    many, but never folds case -- see module docstring). A verifier
+    reproduced a bypass composed of both gaps at once: `candidate` a
+    symlink whose target names an existing results subdirectory by a case
+    variant (e.g. a symlink to '.../RESULTS/stage0-work' when only
+    '.../results/stage0-work' was ever created). The abspath walk never
+    resolves the symlink, so it starts from the symlink's own path (which
+    "exists" by following the link, but names it, not its target's real
+    ancestors) and never reaches the results directory while climbing. The
+    realpath walk starts from the dereferenced target -- still
+    case-variant, but now walkable by os.path.exists's own case-insensitive
+    lookup -- and finds the live results directory partway up. Neither walk
+    alone is redundant: the realpath walk is what a plain (non-symlink)
+    case-variant path already passed through unchanged, so dropping the
+    abspath walk in favor of realpath-only was considered and rejected --
+    it would just move the blind spot rather than close it.
+
+    False (never raises) if `container` does not exist -- this guard's own
+    callers always pass an existing live results directory, but a helper
+    that stats an argument no caller can guarantee stays defensive anyway.
+    """
+    if not os.path.exists(container):
+        return False
+    return (_walk_to_root_for_match(os.path.abspath(candidate), container)
+            or _walk_to_root_for_match(os.path.realpath(candidate), container))
 
 
 def is_inside_or_same(candidate, container):
@@ -140,7 +164,12 @@ def is_inside_or_same(candidate, container):
     this to fire (it runs before the scratch dir is created); the ancestor
     check climbs to whatever nearest directory does exist and asks the
     filesystem, via samefile, rather than the string compare the first
-    check already is.
+    check already is -- and itself climbs from two independent starting
+    points (abspath and realpath of `candidate`) because a SECOND verifier
+    pass composed both gaps: a candidate that is itself a symlink to a
+    case-variant path is caught by neither commonpath (case) nor an
+    abspath-only ancestor walk (symlink) alone (see
+    `_case_insensitive_ancestor_match`'s own docstring).
     """
     cand = _norm(candidate)
     cont = _norm(container)

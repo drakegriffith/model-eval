@@ -429,6 +429,68 @@ def test_case_variant_scratch_dir_name_from_runner_cwd_is_refused(
             f"run.py created a checkout at the case-variant path {stray!r}")
 
 
+def test_symlink_to_a_case_variant_path_of_a_results_subdir_is_refused(
+        corpus_untouched, tmp_path):
+    """Round 3's verifier reproduction: the two independent fixes above
+    (commonpath for symlinks/relpaths, ancestor-walk for case) each passed
+    its OWN test but left a hole where both gaps compose. `--scratch` here
+    is itself a symlink (so the commonpath/realpath check alone, which
+    dereferences the symlink but never folds case, cannot match a
+    case-variant target) whose target names an EXISTING results
+    subdirectory by a case variant of 'results' (so the case-insensitive
+    ancestor walk, which never dereferences a symlink `candidate` itself
+    is, cannot see past the unresolved symlink string). Composed, live
+    against the real repo: `--scratch` a symlink to
+    '<RUNNER_DIR>/RESULTS/<subdir>' when only
+    '<RUNNER_DIR>/results/<subdir>' was ever created."""
+    if not _fs_is_case_insensitive(tmp_path):
+        pytest.skip("filesystem is case-sensitive; this bypass does not apply")
+
+    real_subdir = os.path.join(RUNNER_DIR, "results", "round3-symlink-target")
+    os.makedirs(real_subdir, exist_ok=False)
+    case_variant_target = os.path.join(RUNNER_DIR, "RESULTS", "round3-symlink-target")
+    try:
+        link = tmp_path / "scratch-via-case-variant-symlink"
+        link.symlink_to(case_variant_target, target_is_directory=True)
+        proc = run_cli_subprocess([
+            "--mock", "--only", "no-such-run-id-xyz", "--scratch", str(link),
+            "--results", str(tmp_path / "results.jsonl"),
+        ])
+        assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+        assert "refus" in proc.stderr.lower()
+        assert "--scratch" in proc.stderr
+    finally:
+        shutil.rmtree(real_subdir, ignore_errors=True)
+
+
+def test_two_hop_symlink_chain_to_a_case_variant_results_subdir_is_refused(
+        corpus_untouched, tmp_path):
+    """Same composed bypass as the single-hop test above, through an extra
+    symlink hop (link2 -> link1 -> case-variant target): realpath resolves
+    a chain of any length, not just one hop, so this proves the fix is not
+    accidentally keyed to a chain depth of exactly one."""
+    if not _fs_is_case_insensitive(tmp_path):
+        pytest.skip("filesystem is case-sensitive; this bypass does not apply")
+
+    real_subdir = os.path.join(RUNNER_DIR, "results", "round3-two-hop-target")
+    os.makedirs(real_subdir, exist_ok=False)
+    case_variant_target = os.path.join(RUNNER_DIR, "RESULTS", "round3-two-hop-target")
+    try:
+        link1 = tmp_path / "hop1"
+        link1.symlink_to(case_variant_target, target_is_directory=True)
+        link2 = tmp_path / "hop2"
+        link2.symlink_to(link1, target_is_directory=True)
+        proc = run_cli_subprocess([
+            "--mock", "--only", "no-such-run-id-xyz", "--scratch", str(link2),
+            "--results", str(tmp_path / "results.jsonl"),
+        ])
+        assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+        assert "refus" in proc.stderr.lower()
+        assert "--scratch" in proc.stderr
+    finally:
+        shutil.rmtree(real_subdir, ignore_errors=True)
+
+
 def test_scratch_resolving_to_a_results_sibling_directory_is_not_refused(
         corpus_untouched, tmp_path):
     """The discarded alternative this fix's commit names: a string-prefix
