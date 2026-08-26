@@ -17,13 +17,16 @@ WHY A NEW MODULE AND NOT tables.py. tables.py's own docstring scopes it to
 "the six deliverable tables (video chapters)" read by build_report, each
 keyed on `qual`/`ledger` and emitted as markdown. This summary has none of
 that shape: it is plain text meant to sit beside `ladder_from_results.py`'s
-per-block table (which is not markdown either), it needs no judgments and no
-usage ledger, and stage0_probe.py already computes a near-identical
-`max_acceptance_requests`/distribution/cap_exhausted trio for the stage-0
-comment independently -- a second private copy inside tables.py would be a
-third. Putting the rule here, once, gives both callers (ladder_from_results
-now; stage0_probe.py's `render_comment` is a candidate to switch over later,
-out of scope for this fix) one place to agree.
+per-block table (which is not markdown either), and it needs no judgments and
+no usage ledger. stage0_probe.py already computes ONE of these three
+independently -- `max_acceptance_requests` over its own scored rows
+(stage0_probe.py:190-192) -- but no distribution and no cap_exhausted count;
+those two exist only here. Putting the shared piece (the max) behind one rule
+instead of a second private copy inside tables.py, and putting the two pieces
+stage0_probe.py does not have anywhere at all, gives every future caller
+(ladder_from_results now; stage0_probe.py's `render_comment` switching its own
+max over to this module is a candidate follow-up, out of scope for this fix)
+one place to agree on all three, not just one.
 
 DENOMINATOR. Same estimand as everywhere else in this stack: the summary is
 computed over `run_status.partition_for_rate(rows)`'s SCORED set, which is

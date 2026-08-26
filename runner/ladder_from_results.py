@@ -219,10 +219,21 @@ def main():
 
     # issue #22 / A1 (a0cef36): the report states max(acceptance_requests),
     # its distribution, and the cap_exhausted count beside the pass rate.
-    # Printed once over the whole corpus `main()` loaded, the same scope the
-    # "excluded rows" line above already reports at.
-    print(report_acceptance.format_acceptance_summary(
-        report_acceptance.acceptance_summary(rows)))
+    # Printed once over `rows`, the same scope the "excluded rows" line above
+    # already reports at -- which is the WHOLE corpus main() loaded only when
+    # --passing-only was not given. With that flag, load_rows() has already
+    # dropped every non-passing row before `rows` reaches here, so this max
+    # is a max over passing runs, not the corpus's true max. A reader who
+    # ran with --passing-only and read this line as the corpus max would
+    # under-count exactly the runs most likely to carry a high
+    # acceptance_requests value (a run that did not converge kept spending
+    # requests), so the scope is named on the line itself rather than left
+    # to be inferred from a flag the reader may not have typed themselves.
+    acc_line = report_acceptance.format_acceptance_summary(
+        report_acceptance.acceptance_summary(rows))
+    if args.passing_only:
+        acc_line += "  (scope: --passing-only rows)"
+    print(acc_line)
 
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as f:

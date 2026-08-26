@@ -95,3 +95,32 @@ def test_wired_into_ladder_main_beside_the_pass_rate(tmp_path, capsys, monkeypat
     assert "acceptance_requests -- max: 20" in out, (
         f"the acceptance summary never reached main()'s output:\n{out}")
     assert "cap_exhausted: 1" in out, out
+    assert "--passing-only" not in out, (
+        f"the scope marker must not appear without the flag:\n{out}")
+
+
+def test_passing_only_marks_the_acceptance_summarys_narrowed_scope(
+        tmp_path, capsys, monkeypatch):
+    """--passing-only makes load_rows() drop every non-passing row before
+    `rows` reaches report_acceptance, so the printed max is a max over
+    passing runs only -- not the corpus max a reader would assume without a
+    flag they may not have typed themselves. The line must say so."""
+    import json
+    path = tmp_path / "results.jsonl"
+    with open(path, "w", encoding="utf-8") as f:
+        for r in probe_rows():
+            f.write(json.dumps(r) + "\n")
+
+    monkeypatch.setattr(sys, "argv", ["ladder_from_results.py",
+                                       "--results", str(path), "--passing-only"])
+    ladder.main()
+    out = capsys.readouterr().out
+
+    assert "acceptance_requests -- max:" in out, out
+    assert "(scope: --passing-only rows)" in out, (
+        f"the narrowed scope is not marked on the line:\n{out}")
+    # The cap_exhausted row (pass=False) and the None-acceptance row
+    # (pass=False) are both dropped by --passing-only, so this run's max is
+    # 5 (the two passing rows), not 20 (the corpus max asserted above).
+    assert "max: 5" in out, (
+        f"expected the passing-only max (5), not the corpus max:\n{out}")
