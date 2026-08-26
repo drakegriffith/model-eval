@@ -234,3 +234,53 @@ def test_table6_prefers_real_spend_over_an_all_capped_cell_at_a_rate_tie():
     assert "high/bare" not in out, (
         f"the no-evidence config (effort=high) must not win over a real "
         f"measurement:\n{out}")
+
+
+# --------------------------------------------------------------------------- #
+# issue #31 residual (found in PR #42's verify): the all-capped cell's score
+# must beat an all-timeout sibling on its OWN rate, not by tying with it
+# --------------------------------------------------------------------------- #
+def test_table6_renders_the_capped_configs_rate_against_an_all_timeout_sibling():
+    """Two candidates for one model, and this time neither has real spend:
+      (effort=high, bare): 2 rows, both `timeout` -> 0 scored rows (n=0),
+                           truly unmeasured, scores (-1, 0).
+      (effort=low,  bare): 2 rows, both `cap_exhausted` -> SCORED (n=2,
+                           rate=0.0), but every row is excluded from the
+                           token axis, so it scores (rate, float('-inf')) =
+                           (0.0, -inf).
+
+    0.0 > -1, so the capped config must win on the FIRST tuple element alone
+    and render its real 0% -- this must hold even though the timeout group
+    is listed (and therefore evaluated) first, which is what would expose a
+    regression that scored the empty-spend cell as the same (-1, 0) sentinel
+    the n=0 branch uses: with that mutation the two candidates score an exact
+    tie, `score > best` (strict) never fires for the second one, and the
+    FIRST-seen group -- the truly unmeasured timeout config -- wins by
+    default, rendering the whole model 'no measured runs' even though a real,
+    if 0%, measurement exists.
+
+    Mutation control (per hand-back): changing the empty-spend key in
+    `table6_decision_matrix` from `(rate, float("-inf"))` to the n=0 branch's
+    `(-1, 0)` turns this into an exact tie and makes this test fail because
+    the timeout group, listed first, keeps the win; reverted after
+    confirming the failure."""
+    rows = [
+        row(0, "timeout", pass_=False, tok=1, effort="high", harness=False),
+        row(1, "timeout", pass_=False, tok=1, effort="high", harness=False),
+        row(2, "cap_exhausted", pass_=False, tok=1, effort="low", harness=False),
+        row(3, "cap_exhausted", pass_=False, tok=1, effort="low", harness=False),
+    ]
+
+    out = tables.table6_decision_matrix(rows, {})
+
+    assert "no measured runs" not in out, (
+        f"a real (if 0%) measured config exists (effort=low, cap_exhausted); "
+        f"the model must not render as unmeasured:\n{out}")
+    assert "0%" in out, (
+        f"the capped config's real 0%-pass rate must render:\n{out}")
+    assert "low/bare" in out, (
+        f"the capped config (effort=low) must be selected over the truly "
+        f"unmeasured timeout config (effort=high):\n{out}")
+    assert "high/bare" not in out, (
+        f"the unmeasured timeout config must not win over a real, if 0%, "
+        f"measurement:\n{out}")

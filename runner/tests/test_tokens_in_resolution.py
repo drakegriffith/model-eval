@@ -44,8 +44,13 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 # as it stood at dd8f532. The live results.jsonl grows (PR #37 added 5 rows
 # and pushed it to 273) without re-running the audit, so this file must not
 # read the live corpus -- see runner/tests/fixtures/results-268.jsonl and
-# issue #43. USAGE stays live: the ledger rows PR #37 appended are new,
-# unrecoverable run_ids that never join against the frozen 268-row corpus.
+# issue #43. USAGE stays live: the ledger rows PR #37 appended are
+# recoverable in shape (kind=worker, retrofit_status=measured), not
+# unrecoverable -- they carry run_ids absent from the frozen 268-row corpus,
+# so they join nothing here. A future usage row that reused a frozen run_id
+# would move test_the_quarantined_rows_are_the_ones_with_no_copy_anywhere and
+# test_a_recovered_row_reads_higher_than_the_number_on_the_row -- catching
+# exactly that drift is their purpose.
 RESULTS = os.path.join(TESTS_DIR, "fixtures", "results-268.jsonl")
 USAGE = os.path.join(RUNNER_DIR, "results", "usage.jsonl")
 
