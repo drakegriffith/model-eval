@@ -571,7 +571,15 @@ def test_the_shipped_rows_carry_the_panels_measured_serving_config():
         assert s["max_tokens_floor"] == 8192
         assert s["temperature"] == 0
         assert s["seed"] == 42
-        assert row["deterministic_loops"] is False
+        # deterministic_loops is the stage-0 probe's own verdict, not the
+        # panel's config: True only where a recorded noise_probe says 5/5
+        # identical (claude-code row, 2026-08-26 re-run, issue #8); the
+        # unprobed pi row stays False with noise_probe null.
+        if row["noise_probe"] is None:
+            assert row["deterministic_loops"] is False
+        else:
+            assert row["deterministic_loops"] is True
+            assert row["noise_probe"]["identical"] == row["noise_probe"]["of"]
         assert row["timeout"]["prefill_tok_s_min"] == 57
         assert row["timeout"]["prefill_tok_s_max"] == 71
         inspected.append(sr.row_key(row))
