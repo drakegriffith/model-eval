@@ -64,11 +64,14 @@ import threading
 # defences offered during that session (distribution-free tolerance bound,
 # geometric fit, effort headroom) are struck and recorded as struck; do not
 # revive them here. Ticket 17's one-shot revision-by-formula (K' = min(20, 2M))
-# is superseded before stage 0 by pre-registration amendment A1
+# is retired by this commit, not by A1 -- pre-registration amendment A1
 # (docs/studio-handoff/prompt-2-run-experiment.md at a0cef36, registered
-# 2026-08-25: K=20, cap_exhausted SCORED, stage-0 flip at >= 10 requests): K
-# is fixed at K_CEILING with no formula, and re-registered only if a stage-0
-# rep reaches >= 10 acceptance requests, from GLM's own observed distribution.
+# 2026-08-25) never mentions ticket 17 or that formula; it fixes K=20 for
+# stage 0/1 outright, and its only revision path is the >= 10-request flip.
+# K_DEFAULT stays 10 as resolve_k(None)'s value
+# (tests/test_acceptance_broker.py:488); runs-glm-stage0.yaml:60 and
+# runs-glm-stage1.yaml:83 set k_acceptance: 20 explicitly, so stage 0/1
+# never actually run at this default.
 K_DEFAULT = 10
 # The revision ceiling, enforced here so a config typo cannot quietly exceed the
 # pre-registered bound. "The ceiling of 20 exists so the revision cannot eat the

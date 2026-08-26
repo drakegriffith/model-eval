@@ -1898,9 +1898,9 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None
     # ticket 34. Pre-registration amendment A1 (docs/studio-handoff/prompt-2-
     # run-experiment.md at a0cef36, registered 2026-08-25: K=20, cap_exhausted
     # SCORED, stage-0 flip at >= 10 requests) -- "a run that exhausts K ...
-    # is SCORED as an autonomy failure" -- generalized from the cap to every
-    # run that did not finish. exit_reason == "ok" is this instrument's
-    # completeness gate
+    # is SCORED as an autonomy failure" -- rules the cap case; ticket 34
+    # generalizes it here, from the cap to every run that did not finish.
+    # exit_reason == "ok" is this instrument's completeness gate
     # (existing_ids() above; ladder_from_results.py excludes non-"ok" rows and
     # prints the excluded count), so `pass` -- the field that reads most like a
     # verdict -- may not claim success for an incomplete run. Before this, only
@@ -1919,11 +1919,12 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None
         passed = False
 
     # Kept under its original name because every row written before ticket 34
-    # carries it and pre-registration amendment A1 (docs/studio-handoff/
-    # prompt-2-run-experiment.md at a0cef36, registered 2026-08-25: K=20,
-    # cap_exhausted SCORED, stage-0 flip at >= 10 requests) names it. It is
-    # now exactly pass_raw narrowed to the cap case; the general gate above
-    # is what forces `pass` False, here as everywhere else.
+    # carries it -- `pass_at_cap` is this runner's field, introduced at
+    # ticket 34, not named by pre-registration amendment A1
+    # (docs/studio-handoff/prompt-2-run-experiment.md at a0cef36, registered
+    # 2026-08-25), which says only that cap_exhausted is SCORED and K=20. It
+    # is now exactly pass_raw narrowed to the cap case; the general gate
+    # above is what forces `pass` False, here as everywhere else.
     pass_at_cap = pass_raw if exit_reason == "cap_exhausted" else None
 
     loc = loc_changed(scratch)

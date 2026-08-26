@@ -29,8 +29,8 @@ WHAT IS NOT CHANGED, deliberately: `cap_exhausted`. That is the BROKER's K
 acceptance cap, and pre-registration amendment A1
 (docs/studio-handoff/prompt-2-run-experiment.md at a0cef36, registered
 2026-08-25: K=20, cap_exhausted SCORED, stage-0 flip at >= 10 requests) scores
-it a failure on purpose -- the model spent its revisions and did not converge,
-which is a fact about the model. It is a different cap from the wall clock,
+it a failure on purpose -- the model spent its acceptance requests and did not
+converge, which is a fact about the model. It is a different cap from the wall clock,
 and merging the two would smuggle a protocol treatment out of the denominator.
 """
 import json
@@ -157,9 +157,9 @@ def test_the_broker_cap_stays_in_the_denominator():
     """The control. cap_exhausted is the K acceptance cap, which pre-registration
     amendment A1 (docs/studio-handoff/prompt-2-run-experiment.md at a0cef36,
     registered 2026-08-25: K=20, cap_exhausted SCORED, stage-0 flip at >= 10
-    requests) scores as a failure -- the model spent its revisions and did not
-    converge. If the fix swept that out too, a real model failure would have been
-    laundered into an infra note."""
+    requests) scores as a failure -- the model spent its acceptance requests
+    and did not converge. If the fix swept that out too, a real model failure
+    would have been laundered into an infra note."""
     rows = rows_for([("ok", True), ("cap_exhausted", False)])
 
     out = tables.table1_effort_ladder(rows, {})

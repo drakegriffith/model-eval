@@ -41,10 +41,10 @@ looks worse" result the harness-dose experiment exists to measure.
 WHAT DELIBERATELY STAYS SCORED. `cap_exhausted` -- the BROKER's K acceptance cap.
 Pre-registration amendment A1 (docs/studio-handoff/prompt-2-run-experiment.md at
 a0cef36, registered 2026-08-25: K=20, cap_exhausted SCORED, stage-0 flip at >= 10
-requests) scores it a failure on purpose: the model spent its K revisions and did
-not converge, which is a fact about the model. It is a different cap from the
-wall clock, and folding the two together would smuggle a protocol treatment out
-of the denominator.
+requests) scores it a failure on purpose: the model spent its K acceptance
+requests and did not converge, which is a fact about the model. It is a
+different cap from the wall clock, and folding the two together would smuggle
+a protocol treatment out of the denominator.
 
 Stdlib only. No file I/O, no imports of the instrument.
 """
