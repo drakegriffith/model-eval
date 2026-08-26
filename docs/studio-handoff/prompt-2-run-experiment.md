@@ -138,6 +138,12 @@ claude binary on this machine lists no such flag, checked 2026-08-25);
 wiring serving_registry.derive_turn_cap_s as written (prefill-only model,
 24 s predicted vs 314 s measured for a 2-turn run).
 
+Filled 2026-08-26, from the stage-0 probe comment on issue #8
+(2026-08-26T22:10:26Z: "rows scored / rows produced / rows dispatched:
+5/5/5", "max(turns): 84"): N = 3 x max(turns)=84 = 252, rounded up to the
+next multiple of 10 = **260**. Registered in
+runner/runs-glm-stage1.yaml (defaults.turn_cap_n).
+
 A4. Rep collapse. Per task, rate = scored passes / scored reps, where a
 scored rep is one whose exit_reason class is SCORED (pass, fail,
 cap_exhausted); EXCLUDED reps (timeout, infra, turn_cap) leave that task's
@@ -166,6 +172,10 @@ cut from 3 to 2 (A4's binary then reads 2 of 2); any flip -> 3 reps kept.
 The conductor fills N (A3) and the rep count from the stage-0 comment on
 issue #8 and records both in a follow-up commit to this file before the
 first stage-1 row.
+
+Filled 2026-08-26, from the same #8 comment (2026-08-26T22:10:26Z:
+"flips: 0/5 (5/5 identical)"): probe scored 5/5 identical, no flip ->
+stage-1 **reps cut from 3 to 2**.
 
 A7. Supersedes: issue #22's clause "any stage-1 run exhausting K forces
 #18 to be resolved before publication" is replaced by A1 (the rule is fixed
