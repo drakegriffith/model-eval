@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 
 import broker
 import corpus_guard
+import local_endpoint
 import registry
 import run_status
 import sandbox_seal
@@ -86,12 +87,13 @@ KIMI_PRICE_OUT = 15.0
 # about the instrument -- a different port or a remote box shouldn't need a code
 # change. No key file and no price constants here: unlike Kimi this family is
 # unmetered, so there is nothing to load and nothing to charge.
-LOCAL_BASE_URL = os.environ.get("MODEL_EVAL_LOCAL_BASE_URL", "http://localhost:1234")
-# LM Studio does not check this value -- there is no account behind it -- but the
-# claude binary refuses to start against a custom ANTHROPIC_BASE_URL with an empty
-# ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN, so a non-empty placeholder is required to
-# get past the CLI's own auth precondition, not LM Studio's.
-LOCAL_PLACEHOLDER_TOKEN = "sk-local-lmstudio-unused"
+#
+# Single-sourced in local_endpoint.py (issue #5): this used to be a literal
+# defined here AND, byte-identical, in probe_endpoints.py, with nothing pinning
+# the two copies equal, so a probe could certify one endpoint while a run
+# dispatched against a different one.
+LOCAL_BASE_URL = local_endpoint.get_local_base_url()
+LOCAL_PLACEHOLDER_TOKEN = local_endpoint.LOCAL_PLACEHOLDER_TOKEN
 
 def load_kimi_key():
     """Return MOONSHOT_API_KEY from the gitignored secrets file, or None.
