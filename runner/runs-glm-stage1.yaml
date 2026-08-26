@@ -106,7 +106,11 @@ sweeps:
   - name: glm-stage1
     driver: claude-code
     harness: false
-    reps: [1, 2, 3]
+    # A6 (prompt-2-run-experiment.md on studio-handoff-20260825 at 476b309,
+    # filled 2026-08-26 from the stage-0 probe, issue #8 comment
+    # 2026-08-26T22:10:26Z): flips 0/5, 5/5 identical -> stage-1 reps cut
+    # from 3 to 2. Recorded here with N, before the first stage-1 row.
+    reps: [1, 2]
     tasks: [t1-py-a, t1-py-b, t1-ts-a, t1-ts-b, t2-py-a, t2-py-b, t2-ts-a, t2-ts-b, t3-a, t4-py-a, t4-py-b, t4-ts-a, t5-py-a, t5-py-b, t5-ts-a]
     configs:
       - {model: glm-4.7-local, effort: high}
