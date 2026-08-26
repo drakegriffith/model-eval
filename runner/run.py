@@ -34,6 +34,7 @@ import urllib.parse
 from datetime import datetime, timezone
 
 import broker
+import corpus_guard
 import registry
 import run_status
 import sandbox_seal
@@ -2046,25 +2047,38 @@ def main():
                                     "usage.jsonl"))
 
     # Issue #23: this is the guard, not the corpus-pinning tests -- those prove
-    # it fires. A demo/mock/dry invocation that (after the derivation above)
-    # still resolves to either LIVE corpus path is refused outright rather than
-    # silently redirected: three times in one wave a demo run appended synthetic
-    # rows to the real results.jsonl/usage.jsonl because the default WAS the
-    # live path and nothing said so. Redirect-on-detect was considered and
-    # rejected -- it would create an unnamed scratch corpus the caller does not
-    # know to distrust or clean up, and a caller who genuinely wants the live
-    # paths mocked (there is no such legitimate case) gets no way to say so
-    # explicitly, same posture as this. Refusing forces one flag, once, in the
-    # open, the same place the config-rejected checks below already fail closed.
-    if os.environ.get("GAUNTLET_MOCK") and (
-            os.path.abspath(args.results) == os.path.abspath(DEFAULT_RESULTS_PATH)
-            or usage_path == os.path.abspath(USAGE_PATH)):
-        print(
-            "refusing: --mock/--mock-fail would append synthetic rows to the "
-            f"live corpus ({DEFAULT_RESULTS_PATH!r} / {USAGE_PATH!r}). Pass "
-            "--results (and, if needed, --usage) pointing at a scratch path, "
-            "e.g. --results /tmp/scratch/results.jsonl", file=sys.stderr)
-        sys.exit(2)
+    # it fires. A demo/mock/dry-run invocation that (after the derivation
+    # above) still resolves to either LIVE corpus path is refused outright
+    # rather than silently redirected: three times in one wave a demo run
+    # appended synthetic rows to the real results.jsonl/usage.jsonl because
+    # the default WAS the live path and nothing said so. Redirect-on-detect
+    # was considered and rejected -- it would create an unnamed scratch
+    # corpus the caller does not know to distrust or clean up, and a caller
+    # who genuinely wants the live paths mocked (there is no such legitimate
+    # case) gets no way to say so explicitly, same posture as this. Refusing
+    # forces one flag, once, in the open, the same place the config-rejected
+    # checks below already fail closed.
+    #
+    # --dry-run is in scope alongside GAUNTLET_MOCK, not just an alias for it:
+    # a dry-run whose matrix contains a structurally-impossible cell still
+    # calls record_structurally_impossible() (below, before the dry-run
+    # return) and that write goes through args.results same as any other row.
+    # Issue #23's title says "demo/dry runs" -- dry-run is named, not implied.
+    #
+    # The path check itself is corpus_guard.is_live_path, not a string
+    # compare: a symlinked directory, a case-only variant (APFS is
+    # case-insensitive by default) and a doubled leading slash all name the
+    # live file while comparing unequal as strings, and a verifier
+    # reproduced all three against the first cut of this guard.
+    if os.environ.get("GAUNTLET_MOCK") or args.dry_run:
+        msg = corpus_guard.refusal_message(
+            [(args.results, DEFAULT_RESULTS_PATH, "results corpus"),
+             (usage_path, USAGE_PATH, "usage ledger")],
+            "--results (and, if needed, --usage) at a scratch path, e.g. "
+            "--results /tmp/scratch/results.jsonl")
+        if msg:
+            print(msg, file=sys.stderr)
+            sys.exit(corpus_guard.REFUSE_EXIT)
 
     with open(args.config, "r", encoding="utf-8") as f:
         cfg = parse_yaml(f.read())

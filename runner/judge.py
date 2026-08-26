@@ -24,6 +24,7 @@ import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import corpus_guard  # noqa: E402
 import usage_ledger  # noqa: E402
 # The run_id format, owned by one module (blocker 3). `run_id` is already the
 # name of the local variable holding one throughout this file, so the module is
@@ -32,6 +33,14 @@ import run_id as run_id_mod  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER_DIR = os.path.join(ROOT, "runner")
+
+# Issue #24 named "any --mock or demo run", not just run.py's: judge.py has
+# its own --mock and its own --out/--usage defaults pointed at the same live
+# results/ directory. Named so the argparse defaults and the corpus_guard
+# call below read off one constant each instead of two literals that could
+# drift apart.
+DEFAULT_JUDGMENTS_PATH = os.path.join(RUNNER_DIR, "results", "judgments.jsonl")
+DEFAULT_USAGE_PATH = os.path.join(RUNNER_DIR, "results", "usage.jsonl")
 
 RUBRIC = """You are a strict senior code reviewer. Below is a git diff that solves a
 programming task. You do not know who or what wrote it. Score the SOLUTION on four
@@ -312,13 +321,27 @@ def main():
                     help="skip the CLIs and emit fixed placeholder scores (no tokens)")
     ap.add_argument("--scratch", default=os.path.join(ROOT, ".scratch"))
     ap.add_argument("--tasks-dir", default=os.path.join(ROOT, "tasks"))
-    ap.add_argument("--out", default=os.path.join(RUNNER_DIR, "results", "judgments.jsonl"))
-    ap.add_argument("--usage", default=os.path.join(RUNNER_DIR, "results", "usage.jsonl"),
+    ap.add_argument("--out", default=DEFAULT_JUDGMENTS_PATH)
+    ap.add_argument("--usage", default=DEFAULT_USAGE_PATH,
                     help="append one usage row per judge call (ticket 20 item 3); "
                          "set empty to disable")
     args = ap.parse_args()
 
     mock = args.mock or bool(os.environ.get("GAUNTLET_MOCK"))
+
+    # Issue #23/#24: same refusal run.py's main() applies, through the same
+    # corpus_guard helper -- a mock/demo judge call must not reach the live
+    # judgments.jsonl or the live usage.jsonl either. args.usage can be the
+    # empty string (documented above as "disable"), which is not a live-path
+    # collision and must not be flagged as one.
+    if mock:
+        msg = corpus_guard.refusal_message(
+            [(args.out, DEFAULT_JUDGMENTS_PATH, "judgments corpus"),
+             (args.usage or None, DEFAULT_USAGE_PATH, "usage ledger")],
+            "--out (and, if needed, --usage) at a scratch path")
+        if msg:
+            print(msg, file=sys.stderr)
+            sys.exit(corpus_guard.REFUSE_EXIT)
 
     if args.from_results:
         run_ids = passing_run_ids(args.from_results)

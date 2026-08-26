@@ -27,10 +27,24 @@ be shown refusing on a positive control, not assumed from a missing row"):
   - test_mock_with_only_usage_left_at_default_is_still_refused: redirecting
     --results is not enough by itself to clear the guard if --usage still
     resolves to the live ledger -- the second half of the OR.
+  - test_dry_run_without_mock_against_default_paths_is_refused: --dry-run is
+    named in issue #23's own title, and is unguarded by GAUNTLET_MOCK checks
+    alone because a structurally-impossible cell writes before the dry-run
+    return.
+  - test_mock_with_symlinked_default_dir_is_refused and
+    test_mock_with_case_variant_default_path_is_refused: a verifier
+    reproduced both as live bypasses of a naive os.path.abspath string
+    compare (plus a doubled-leading-slash variant realpath already
+    normalizes without special-casing). Path identity is inode identity --
+    see corpus_guard.py.
   - test_mock_with_both_paths_redirected_is_not_refused: the guard is not a
     blanket "no --mock ever", so a caller who names scratch paths for both
     files is let through (asserted via an --only filter that matches no run,
     so nothing downstream needs a real task).
+  - test_mock_with_both_paths_redirected_writes_exactly_one_row_only_to_scratch:
+    the previous test proves the guard doesn't fire; this one proves a run
+    that actually executes writes ONLY to the redirected scratch files, via a
+    real (fabricated) task driven end to end through main().
   - test_execute_run_writes_usage_row_to_explicit_path_not_the_module_default
     and the _falls_back_ test below: execute_run's new usage_path parameter
     plumbs a caller-supplied path through to the ledger, and its default
@@ -38,6 +52,9 @@ be shown refusing on a positive control, not assumed from a missing row"):
     caller (test_write_containment.py, test_pass_completeness_gate.py,
     test_acceptance_broker.py) already relies on via monkeypatch --
     positional callers written before this ticket keep working unchanged.
+  - test_judge_mock_against_default_paths_is_refused_and_leaves_corpus_untouched:
+    the write-set extension issue #24 asks for ("any --mock or demo run") --
+    judge.py calls the same corpus_guard.refusal_message as run.py.
 """
 import hashlib
 import json
@@ -50,6 +67,7 @@ import pytest
 
 RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RUNNER_DIR)
+import corpus_guard  # noqa: E402
 import run as runner  # noqa: E402
 
 REAL_RESULTS = os.path.join(RUNNER_DIR, "results", "results.jsonl")
@@ -93,7 +111,12 @@ def run_cli_subprocess(args):
 def test_mock_against_default_paths_is_refused_and_leaves_corpus_untouched(
         corpus_untouched):
     proc = run_cli_subprocess(["--mock", "--only", "no-such-run-id-xyz"])
-    assert proc.returncode != 0
+    # Pinned to corpus_guard.REFUSE_EXIT (3), not just "nonzero": this repo's
+    # own exit 2 already means "config rejected" elsewhere in run.py, and the
+    # wave's harness separately reads exit 2 as could-not-inspect. A refusal
+    # that regressed to exit 2 would look like one of those to the harness,
+    # not like a decision this guard made on purpose.
+    assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
     assert "refus" in proc.stderr.lower()
     assert REAL_RESULTS.split(os.sep)[-1] in proc.stderr or REAL_RESULTS in proc.stderr
 
@@ -104,7 +127,19 @@ def test_mock_fail_against_default_paths_is_refused_and_leaves_corpus_untouched(
     therefore truthy -- the guard must not special-case the pass/fail flavor
     of mock, since #23's incident rows were freely either."""
     proc = run_cli_subprocess(["--mock-fail", "--only", "no-such-run-id-xyz"])
-    assert proc.returncode != 0
+    assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+    assert "refus" in proc.stderr.lower()
+
+
+def test_dry_run_without_mock_against_default_paths_is_refused(corpus_untouched):
+    """Issue #23's title names 'demo/dry runs', not just --mock: a --dry-run
+    invocation whose matrix has a structurally-impossible cell still calls
+    record_structurally_impossible(), which writes to args.results BEFORE the
+    dry-run early return. GAUNTLET_MOCK is never set here -- this is the half
+    of the guard's OR condition that fires on --dry-run alone."""
+    assert not os.environ.get("GAUNTLET_MOCK")
+    proc = run_cli_subprocess(["--dry-run"])
+    assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
     assert "refus" in proc.stderr.lower()
 
 
@@ -120,9 +155,47 @@ def test_mock_with_only_usage_left_at_default_is_still_refused(
         "--mock", "--only", "no-such-run-id-xyz",
         "--results", str(scratch_results), "--usage", REAL_USAGE,
     ])
-    assert proc.returncode != 0
+    assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
     assert "refus" in proc.stderr.lower()
     assert not scratch_results.exists()
+
+
+def test_mock_with_symlinked_default_dir_is_refused(corpus_untouched, tmp_path):
+    """Positive control for a verifier-reproduced bypass: os.path.abspath
+    string comparison does not see through a symlink, so a --results pointed
+    through a symlinked copy of the live results/ directory sailed past the
+    first cut of this guard and appended a real row (268 -> 269). The fix
+    (corpus_guard.is_live_path) resolves both sides with os.path.realpath
+    before comparing, which follows the symlink to the same live file."""
+    link = tmp_path / "results-link"
+    link.symlink_to(os.path.join(RUNNER_DIR, "results"), target_is_directory=True)
+    proc = run_cli_subprocess([
+        "--mock", "--only", "no-such-run-id-xyz",
+        "--results", str(link / "results.jsonl"),
+    ])
+    assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+    assert "refus" in proc.stderr.lower()
+
+
+def test_mock_with_case_variant_default_path_is_refused(corpus_untouched, tmp_path):
+    """Positive control for a second verifier-reproduced bypass: APFS (this
+    machine's default filesystem) is case-insensitive but case-preserving, so
+    'Results/results.jsonl' opens the SAME file as 'results/results.jsonl'
+    while comparing unequal as a string. Skipped on a case-sensitive
+    filesystem, where the premise (the candidate path even resolves to the
+    live file) does not hold."""
+    marker = tmp_path / "case-marker.txt"
+    marker.write_text("x", encoding="utf-8")
+    if not os.path.exists(str(marker).upper()):
+        pytest.skip("filesystem is case-sensitive; this bypass does not apply")
+
+    case_variant = os.path.join(RUNNER_DIR, "Results", "results.jsonl")
+    assert os.path.exists(case_variant), "case-insensitive premise did not hold"
+    proc = run_cli_subprocess([
+        "--mock", "--only", "no-such-run-id-xyz", "--results", case_variant,
+    ])
+    assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+    assert "refus" in proc.stderr.lower()
 
 
 def test_mock_with_both_paths_redirected_is_not_refused(corpus_untouched, tmp_path):
@@ -137,6 +210,88 @@ def test_mock_with_both_paths_redirected_is_not_refused(corpus_untouched, tmp_pa
     assert proc.returncode == 0, proc.stderr
     assert "refus" not in proc.stderr.lower()
     assert "pending=0" in proc.stdout
+
+
+@pytest.fixture
+def fabricated_matrix(tmp_path):
+    """A complete, minimal matrix (runs.yaml + one task) so main() itself --
+    not execute_run directly -- can be driven end to end through a real
+    --mock run without touching the real tasks/ or runs.yaml. The task is
+    solvable by `git apply` and graded by a one-line `exit 0`, so the run
+    completes in well under a second: nothing here needs a venv or npm
+    install the way the real tasks/*/verify.sh scripts do.
+    """
+    tasks_dir = tmp_path / "tasks"
+    task_dir = tasks_dir / "t-corpus-pin"
+    base = task_dir / "base"
+    base.mkdir(parents=True)
+    (base / "README.md").write_text("solve it\n", encoding="utf-8")
+    (task_dir / "PROMPT.md").write_text("append 42\n", encoding="utf-8")
+    (task_dir / "verify.sh").write_text("#!/usr/bin/env bash\nexit 0\n",
+                                        encoding="utf-8")
+    os.chmod(task_dir / "verify.sh", 0o755)
+
+    env = dict(os.environ)
+    subprocess.run(["git", "init", "-q"], cwd=base, env=env, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=base, env=env, check=True)
+    subprocess.run(["git", "-c", "user.email=g@g", "-c", "user.name=gauntlet",
+                    "commit", "-q", "-m", "base"], cwd=base, env=env, check=True)
+    (base / "README.md").write_text("solve it\n42\n", encoding="utf-8")
+    diff = subprocess.run(["git", "diff"], cwd=base, env=env,
+                          capture_output=True, text=True, check=True).stdout
+    shutil.rmtree(base / ".git")
+    (base / "README.md").write_text("solve it\n", encoding="utf-8")
+    (task_dir / "solution.patch").write_text(diff, encoding="utf-8")
+
+    config = tmp_path / "runs.yaml"
+    config.write_text(
+        "defaults:\n"
+        "  timeout_default_s: 60\n"
+        "sweeps:\n"
+        "  - name: pin\n"
+        "    harness: false\n"
+        "    reps: [1]\n"
+        "    tasks: [t-corpus-pin]\n"
+        "    configs:\n"
+        "      - {model: claude-haiku-4-5, effort: low}\n",
+        encoding="utf-8")
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    return {"config": str(config), "tasks_dir": str(tasks_dir), "scratch": str(scratch)}
+
+
+def test_mock_with_both_paths_redirected_writes_exactly_one_row_only_to_scratch(
+        corpus_untouched, fabricated_matrix, tmp_path):
+    """The pass-through test above proves the guard does not fire; it proves
+    nothing about where a run that actually executes writes to, since --only
+    matched zero runs there. This one drives a REAL mock run (real
+    prepare_scratch, real git-apply, real verify.sh, real append_row/
+    append_usage_row) through main() end to end, with --results/--usage both
+    redirected, and asserts two things together: the live corpus gained
+    nothing (corpus_untouched, byte-hash) and the scratch corpus gained
+    exactly one row in each file -- "wrote the right file" and "wrote the
+    right file AND NOTHING ELSE" are different claims, same distinction
+    test_usage_ledger_portability.py's repo_untouched fixture draws.
+    """
+    scratch_results = tmp_path / "scratch-results.jsonl"
+    scratch_usage = tmp_path / "scratch-usage.jsonl"
+    proc = run_cli_subprocess([
+        "--mock", "--config", fabricated_matrix["config"],
+        "--tasks-dir", fabricated_matrix["tasks_dir"],
+        "--scratch", fabricated_matrix["scratch"],
+        "--results", str(scratch_results), "--usage", str(scratch_usage),
+        "--only", "t-corpus-pin",
+    ])
+    assert proc.returncode == 0, proc.stderr
+    assert "refus" not in proc.stderr.lower()
+
+    for path in (scratch_results, scratch_usage):
+        assert path.exists(), f"{path} was never written"
+        rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()
+                if l.strip()]
+        assert len(rows) == 1, f"{path} has {len(rows)} row(s), expected exactly 1"
+    assert json.loads(scratch_results.read_text().splitlines()[0])["exit_reason"] == "mock"
 
 
 # --------------------------------------------------------------------------- #
@@ -228,3 +383,23 @@ def test_execute_run_without_usage_path_falls_back_to_module_default(
         "USAGE_PATH, the same constant every existing test monkeypatches")
     rows = [json.loads(l) for l in open(default_usage, encoding="utf-8") if l.strip()]
     assert [r["run_id"] for r in rows] == ["pin--probe--r1"]
+
+
+# --------------------------------------------------------------------------- #
+# The write-set extension: judge.py has its own --mock and its own --out/
+# --usage defaults pointed at the same live results/ directory (issue #24
+# says "any --mock or demo run", not just run.py's). Same guard, same
+# corpus_guard helper, same positive-control shape as the run.py tests above.
+# --------------------------------------------------------------------------- #
+def test_judge_mock_against_default_paths_is_refused_and_leaves_corpus_untouched(
+        corpus_untouched):
+    """judge.py's run_id is a required positional argument in the non-mock
+    path (ap.error below the guard) -- passing none at all and still getting
+    refused BEFORE that error is itself part of the proof: the guard runs
+    ahead of argument validation that has nothing to do with it."""
+    proc = subprocess.run(
+        [sys.executable, "judge.py", "--mock"],
+        cwd=RUNNER_DIR, capture_output=True, text=True)
+    assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+    assert "refus" in proc.stderr.lower()
+    assert "provide a run_id" not in proc.stderr
