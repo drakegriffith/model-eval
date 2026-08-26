@@ -172,10 +172,16 @@ def test_no_arm_inherits_a_claude_or_xdg_variable(
     that reads these names."""
     env = probe_env(repo, monkeypatch, model=model)
 
+    # CLAUDE_STREAM_IDLE_TIMEOUT_MS is deliberately set by run_cli only on the
+    # local family (issue #40); excluding it on every arm would let a leaked
+    # parent value ride into a non-local arm unnoticed.
+    excused = {"CLAUDE_CONFIG_DIR"}
+    if model is not None and runner.model_family(model) == "local":
+        excused.add("CLAUDE_STREAM_IDLE_TIMEOUT_MS")
+
     leaked = sorted(k for k in env
                     if k.startswith(("CLAUDE_", "XDG_", "CLAUDECODE"))
-                    and k not in ("CLAUDE_CONFIG_DIR",
-                                  "CLAUDE_STREAM_IDLE_TIMEOUT_MS"))
+                    and k not in excused)
     assert leaked == [], f"{model}: leaked {leaked} from the parent session"
 
 

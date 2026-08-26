@@ -1151,13 +1151,19 @@ def local_family_client_timeout_ms(model, wall_clock_s):
     """The value for CLAUDE_STREAM_IDLE_TIMEOUT_MS and API_TIMEOUT_MS on a
     local-family child (issue #40).
 
-    claude-code carries its own client-side stream-idle timer (measured
-    empirically at ~200s; the literal defaults are not recoverable from static
-    strings) that aborts a turn the instant it sees no visible-content bytes
-    for that long -- regardless of whether tokens are still flowing
-    server-side. A model that reasons silently before emitting visible content
-    (GLM 4.7 logged one turn reasoning for 1964s) trips this long before it has
-    failed anything.
+    claude-code carries its own client-side stream-idle timer that aborts a
+    turn the instant it sees no visible-content bytes for that long --
+    regardless of whether tokens are still flowing server-side. Measured
+    directly in the 2.1.246 binary: its first-party default is 180000 ms when
+    CLAUDE_STREAM_IDLE_TIMEOUT_MS is unset, and whatever value this function
+    returns is clamped by the CLI itself to Math.min(Math.max(value, 10000),
+    1800000) -- a 30-minute ceiling no caller-supplied number can raise. A
+    model that reasons silently before emitting visible content (GLM 4.7
+    logged one turn reasoning for 1964s) can still trip this: a silent
+    reasoning stretch longer than 30 minutes still aborts the turn as
+    cli_error no matter what this function passes in. The wall clock
+    (resolve_timeout_s) remains the actual hang backstop, since the
+    subprocess is killed there regardless of how the client timer resolves.
 
     Resolution order: the serving row's own `client_timeout_ms` (models.yaml),
     a human-set value for a model whose reasoning latency has actually been
