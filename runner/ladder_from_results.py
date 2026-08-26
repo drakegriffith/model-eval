@@ -45,6 +45,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus_gates  # noqa: E402
+import report_acceptance  # noqa: E402  (issue #22: acceptance-request summary, single source)
 import run_status  # noqa: E402
 import tables  # noqa: E402  (issue #25: model_key/multi_driver_models, single source)
 from effort_verdict import (  # noqa: E402  (thresholds + vocabulary: single source)
@@ -182,19 +183,28 @@ def main():
     # `was` = the pre-split verdict, on every block and not only the moved ones
     # (ticket 42 AC#4). `end/1` is the top tier over the bottom -- the signed reading
     # the split turns on, which `spread` (max/min) is blind to.
+    # issue #21 (1): `n_tok` and `n_scr` are two different denominators over
+    # the same block -- n_tok is the token axis's floor (the smallest tier
+    # sample, gated on corpus_gates.summarizable), n_scr is run_status's
+    # scored count that `pass` is a rate OVER. Printing one number labelled
+    # `n` beside a pass_rate computed on the other let a reader multiply
+    # pass_rate x n and get a passing-run count that does not exist. Both
+    # are printed, both are labelled, and neither name is left free to be
+    # misread as the other.
     hdr = (f"{'block':<24} {'was':<12} {'verdict':<13} {'spread':>7} {'end/1':>6} "
-           f"{'mono':>5} {'btwCV':>6} {'winCV':>6} {'n':>3} {'pass':>5}  "
-           f"out-tokens by tier")
+           f"{'mono':>5} {'btwCV':>6} {'winCV':>6} {'n_tok':>5} {'n_scr':>5} "
+           f"{'pass':>5}  out-tokens by tier")
     print(hdr)
     print("-" * len(hdr))
     for r in report:
         tiers = " ".join(f"{t}={r['out_tokens_by_tier'][t]}" for t in r["tiers"]
                          if t in r["out_tokens_by_tier"])
-        n = min(r["n_per_tier"]) if r["n_per_tier"] else 0
+        n_tok = min(r["n_per_tier"]) if r["n_per_tier"] else 0
         print(f"{r['block']:<24} {pre_split_verdict(r['verdict']):<12} "
               f"{r['verdict']:<13} {str(r['spread']):>7} {str(r['end_ratio']):>6} "
               f"{str(r['monotone']):>5} {str(r['between_cv']):>6} "
-              f"{str(r['within_cv']):>6} {n:>3} {str(r['pass_rate']):>5}  {tiers}")
+              f"{str(r['within_cv']):>6} {n_tok:>5} {r['n_scored']:>5} "
+              f"{str(r['pass_rate']):>5}  {tiers}")
 
     blocks = [r for r in report if not r["block"].startswith("POOLED")]
     counts = {}
@@ -208,6 +218,24 @@ def main():
     if excluded:
         print("excluded rows: " + "  ".join(f"{k}={v}" for k, v in sorted(excluded.items()))
               + "   (incomplete generation is not a spend measurement)")
+
+    # issue #22 / A1 (a0cef36): the report states max(acceptance_requests),
+    # its distribution, and the cap_exhausted count beside the pass rate.
+    # Printed once over `rows`, the same scope the "excluded rows" line above
+    # already reports at -- which is the WHOLE corpus main() loaded only when
+    # --passing-only was not given. With that flag, load_rows() has already
+    # dropped every non-passing row before `rows` reaches here, so this max
+    # is a max over passing runs, not the corpus's true max. A reader who
+    # ran with --passing-only and read this line as the corpus max would
+    # under-count exactly the runs most likely to carry a high
+    # acceptance_requests value (a run that did not converge kept spending
+    # requests), so the scope is named on the line itself rather than left
+    # to be inferred from a flag the reader may not have typed themselves.
+    acc_line = report_acceptance.format_acceptance_summary(
+        report_acceptance.acceptance_summary(rows))
+    if args.passing_only:
+        acc_line += "  (scope: --passing-only rows)"
+    print(acc_line)
 
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as f:

@@ -345,13 +345,26 @@ def table5_variance(rows):
     g = group(rows, lambda r: (model_key(r, mixed), r["effort"],
                                "harness" if r.get("harness") else "bare", r["task"]))
     data = []
+    dropped_note = []
     for (model, effort, htag, task), rs in sorted(g.items()):
         # Variance is measured over the runs that produced a measurement. A
         # timeout's loc_changed and tokens_out describe where it was cut off, so
         # including them measures the scheduler's spread, not the model's.
-        rs, _excl = run_status.partition_for_rate(rs)
+        rs, excl = run_status.partition_for_rate(rs)
         if len(rs) < 2:
-            continue  # variance needs repeated cells
+            # issue #21 (2). A `continue` here used to be silent: a cell that
+            # had 3 runs and lost 2 to timeouts vanished from the table,
+            # indistinguishable from a cell nobody ever ran. Every other table
+            # in this module now prints its exclusions (table1's `excluded`
+            # column, table6's `dropped_note`); this one threw them away. The
+            # cell cannot render as a data row -- there is no min/med/max over
+            # fewer than 2 samples -- so it is named in a footnote instead,
+            # the same shape table6 uses for its own un-renderable drops.
+            why = run_status.format_excluded(excl) if excl else "no repeated runs recorded for this cell"
+            dropped_note.append(
+                f"`{model}/{effort}/{htag}` / `{task}`: n={len(rs)} scored "
+                f"run(s), below the minimum of 2 needed for variance ({why})")
+            continue
         passes = sum(1 for r in rs if r.get("pass"))
         spend, _dropped = token_rows(rs)
         locs = [r.get("loc_changed", 0) for r in spend]
@@ -361,9 +374,13 @@ def table5_variance(rows):
             f"{min(locs)}/{round(statistics.median(locs))}/{max(locs)}",
             f"{min(toks):,}/{round(statistics.median(toks)):,}/{max(toks):,}",
         ])
-    return md_table(
+    out = md_table(
         ["cell (model/effort/harness)", "task", "reps", "passed",
          "loc min/med/max", "tokens_out min/med/max"], data)
+    if dropped_note:
+        out += ("\n> **cells excluded from variance** (issue #21, below the "
+                "2-run minimum): " + "; ".join(dropped_note) + ".\n")
+    return out
 
 
 def table6_decision_matrix(rows, qual, ledger=None):

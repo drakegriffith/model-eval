@@ -172,6 +172,37 @@ def test_the_report_names_every_excluded_status_and_its_count():
         assert fragment in out, f"the report never says {fragment}:\n{out}"
 
 
+def test_table5_names_a_cell_it_drops_below_the_variance_minimum():
+    """Issue #21 (2). `table5_variance` needs >= 2 scored runs per cell to
+    report a min/med/max spread at all -- correctly, since variance over one
+    observation is not a measurement. The `continue` that skips such a cell
+    used to be silent, so a cell that had 3 runs and lost 2 to timeouts
+    rendered identically to a cell nobody ever ran. The drop must be named:
+    which cell, how many scored runs survived, and the minimum it fell
+    short of -- the same disclosure table1's `excluded` column and table6's
+    `dropped_note` already give their own drops."""
+    def row(rep, exit_reason, tok):
+        return {
+            "run_id": f"drop--r{rep}", "sweep": "s", "model": "glm-4.7-local",
+            "model_id": "glm-4.7-local", "effort": "high", "task": "t9-solo",
+            "rep": rep, "harness": False, "driver": "claude-code",
+            "pass": exit_reason == "ok", "exit_reason": exit_reason,
+            "tokens_in": 100, "tokens_out": tok, "wall_s": 1.0,
+            "loc_changed": 5, "turns": 1, "tokens_in_status": "measured",
+            "invocation_mode": "multi_turn",
+        }
+    rows = [row(0, "ok", 500), row(1, "timeout", 1)]
+
+    out = tables.table5_variance(rows)
+
+    assert out.startswith("_(no data)_"), (
+        f"a cell with only 1 scored run cannot render a min/med/max row:\n{out}")
+    assert ("`glm-4.7-local/high/bare` / `t9-solo`: n=1 scored run(s), "
+            "below the minimum of 2" in out), (
+        f"the dropped cell is not named:\n{out}")
+    assert "timeout=1" in out, f"the drop's cause is not named:\n{out}"
+
+
 def test_a_corpus_with_no_scored_rows_says_so_rather_than_printing_zero():
     rows = [r for r in probe_rows() if r["exit_reason"] in
             ("timeout", "cli_error", "structurally_impossible")]
@@ -222,6 +253,37 @@ def test_the_ladder_still_excludes_truncated_rows_from_the_token_axis(tmp_path):
     assert excluded.get("timeout") == 1
     assert excluded.get("cli_error") == 1
     assert excluded.get("structurally_impossible") == 1
+
+
+def test_the_ladders_printed_table_shows_both_denominators_and_they_differ(
+        tmp_path, capsys, monkeypatch):
+    """Issue #21 (1). The printed table used to pair a token-axis `n` with a
+    pass_rate computed over `n_scored` and never printed `n_scored` at all --
+    a rendering gap only, since report_block's own dict always carried both
+    keys. This fixture's one cap_exhausted row is scored (counts toward
+    n_scored) but not summarizable (excluded from the token axis's n_tok), so
+    the two printed numbers must both appear and must differ -- proving the
+    reader can no longer mistake one for the other."""
+    path = tmp_path / "results.jsonl"
+    import json
+    with open(path, "w", encoding="utf-8") as f:
+        for r in probe_rows():
+            f.write(json.dumps(r) + "\n")
+
+    monkeypatch.setattr(sys, "argv", ["ladder_from_results.py",
+                                       "--results", str(path)])
+    ladder.main()
+    out = capsys.readouterr().out
+
+    assert "n_tok" in out and "n_scr" in out, (
+        f"both denominators must be labelled, not just printed:\n{out}")
+    data_line = [ln for ln in out.splitlines() if ln.startswith("t1-py-a")][0]
+    n_tok = int(data_line.split()[8])
+    n_scr = int(data_line.split()[9])
+    assert n_tok != n_scr, (
+        f"n_tok and n_scr must differ on a corpus with a cap_exhausted row "
+        f"(scored but not summarizable): {data_line!r}")
+    assert n_scr == DECLARED_DENOMINATOR
 
 
 # --------------------------------------------------------------------------- #
