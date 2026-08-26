@@ -178,6 +178,40 @@ def token_rows(rs):
     return kept, len(rs) - len(kept)
 
 
+def token_axis_drop_note(label, rs, dropped):
+    """One clause naming how many of `rs` a table's token axis excluded and
+    why (issue #31): tables 2-4 called `token_rows()` for the count and threw
+    it away, so a cell whose runs were mostly cap_exhausted (SCORED for the
+    pass axis, excluded here because a capped run's tokens_out measures where
+    the broker cut it off) rendered a mean over 1 of 4 rows with nothing said
+    about the other 3.
+
+    Takes `dropped` (already computed by the caller's `token_rows(rs)` call)
+    rather than recomputing it, so the two counts cannot drift apart; only
+    calls back into `corpus_gates.summarizable_rows` -- the SAME predicate
+    `token_rows` gates on -- to get the reason breakdown, and only when
+    `dropped` is truthy, since that breakdown is not needed for a clean cell.
+    """
+    _, excluded = corpus_gates.summarizable_rows(rs)
+    reason = " ".join(f"{k}={v}" for k, v in sorted(excluded.items()))
+    return (f"`{label}`: {dropped} of {len(rs)} row(s) excluded from the "
+            f"token axis ({reason})")
+
+
+def token_axis_note(notes):
+    """The footnote tables 2-4 append when `token_axis_drop_note` fired for at
+    least one cell. Same shape as table5's `dropped_note` and table6's
+    `dropped_note` footnotes -- a trailing blockquote naming the cells, not a
+    7th column, since a dropped ROW is a partial exclusion from an existing
+    cell's mean, not a whole cell with nothing to put in a row."""
+    if not notes:
+        return ""
+    return ("\n> **rows excluded from the token axis** (issue #31 / ticket 31 "
+            "AC#3 -- a truncated run's `tokens_out` measures where it was cut "
+            "off, not what the tier chose to spend): " + "; ".join(notes)
+            + ".\n")
+
+
 def driver_of(row):
     return row.get("driver")
 
@@ -255,6 +289,7 @@ def table2_efficiency_frontier(rows):
     g = group(rows, lambda r: (model_key(r, mixed), r["effort"]))
     data = []
     table_modes = set()
+    token_notes = []
     for (model, effort), rs in sorted(
             g.items(), key=lambda kv: (kv[0][0], EFFORT_ORDER.get(kv[0][1], 9))):
         # Same denominator as table1, from the same predicate. Before this, five
@@ -266,7 +301,9 @@ def table2_efficiency_frontier(rows):
         # The token axis moves with it: tokens_out from a truncated run measures
         # where the run was cut off, not what the tier chose to spend --
         # ladder_from_results.py makes that argument for the same reason.
-        spend, _dropped = token_rows(rs)
+        spend, dropped = token_rows(rs)
+        if dropped:
+            token_notes.append(token_axis_drop_note(f"{model}/{effort}", rs, dropped))
         tot = [out_tokens(r) for r in spend]
         tpp = (sum(tot) / passes) if passes else None
         # The MODE column is not a pass-rate question -- it reports which
@@ -288,6 +325,7 @@ def table2_efficiency_frontier(rows):
                 + " rows — different instruments, not one measurement. Whether "
                 "the pooled comparison is publishable is tickets 03/20's "
                 "ruling; this note only makes the mixing visible.\n")
+    out += token_axis_note(token_notes)
     return out
 
 
