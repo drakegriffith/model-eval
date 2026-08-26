@@ -60,6 +60,12 @@ SET_BY_RUN_CLI = {"GAUNTLET_TASK_DIR", "TMPDIR", "TMP", "TEMP",
 
 ANTHROPIC_EXTRAS = {"ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
 
+# issue #40: the local-family child's stream-idle and API timeout knobs, set
+# deliberately by run_cli from the serving row (or the run's own wall-clock
+# cap) -- never inherited, and not one of the ANTHROPIC_* names above because
+# they are set for "local" only, not "kimi".
+LOCAL_TIMEOUT_EXTRAS = {"CLAUDE_STREAM_IDLE_TIMEOUT_MS", "API_TIMEOUT_MS"}
+
 # Added by the PLATFORM, not inherited: CoreFoundation stamps this into every
 # process it initialises on macOS. Verified rather than assumed -- launching a
 # child with an explicit `env={"PATH": "/usr/bin"}` still shows it, so it does
@@ -168,7 +174,8 @@ def test_no_arm_inherits_a_claude_or_xdg_variable(
 
     leaked = sorted(k for k in env
                     if k.startswith(("CLAUDE_", "XDG_", "CLAUDECODE"))
-                    and k != "CLAUDE_CONFIG_DIR")
+                    and k not in ("CLAUDE_CONFIG_DIR",
+                                  "CLAUDE_STREAM_IDLE_TIMEOUT_MS"))
     assert leaked == [], f"{model}: leaked {leaked} from the parent session"
 
 
@@ -196,6 +203,8 @@ def test_the_child_environment_is_exactly_the_allowlist_plus_declared_additions(
     permitted = EXPECTED_ALLOWLIST | SET_BY_RUN_CLI | OS_INJECTED
     if model is not None and runner.model_family(model) in ("kimi", "local"):
         permitted |= ANTHROPIC_EXTRAS
+    if model is not None and runner.model_family(model) == "local":
+        permitted |= LOCAL_TIMEOUT_EXTRAS
     unexpected = sorted(set(env) - permitted)
     assert unexpected == [], (
         f"{model}: names in the child env that nothing declared: {unexpected}")
