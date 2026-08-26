@@ -419,11 +419,40 @@ def load_rows(path=REGISTRY_PATH):
         return []
     with open(path, "r", encoding="utf-8") as f:
         doc = parse_registry_yaml(f.read())
-    return doc.get("models") or []
+    rows = doc.get("models") or []
+    for row in rows:
+        _validate_client_timeout_ms(row)
+    return rows
 
 
 def row_key(row):
     return (row["model"], row["driver"])
+
+
+def _validate_client_timeout_ms(row):
+    """issue #40: `client_timeout_ms`, if a row declares one, must be a
+    positive int.
+
+    Optional, unlike the SERVING_FIELDS: most rows carry no measurement of how
+    long this model's own reasoning latency runs, and absence is meaningful
+    (it means "fall back to the run's wall-clock cap", not "zero"). What is
+    refused is a value that could not mean that: a non-int cannot survive
+    `str()` into an env var the way the caller expects, and a value <= 0 would
+    make the child's own timers fire before or at start, i.e. the opposite of
+    a safety margin. Checked at load time so every reader of load_rows() --
+    the dispatch gate, run.py's env block, `list`, `validate` -- sees a row
+    that already passed rather than re-deriving this itself.
+    """
+    if "client_timeout_ms" not in row or row["client_timeout_ms"] is None:
+        return
+    value = row["client_timeout_ms"]
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RegistryError(
+            f"{row_key(row)}: client_timeout_ms must be a positive int, got "
+            f"{value!r}. This value becomes CLAUDE_STREAM_IDLE_TIMEOUT_MS and "
+            f"API_TIMEOUT_MS in the local-family child's env (issue #40); a "
+            f"non-int cannot be sent through that env var and a non-positive "
+            f"one would make the client give up at or before start.")
 
 
 # runner/registry.py calls the model `glm-4.7-local`; runner/models.yaml calls
@@ -494,7 +523,7 @@ def find_row(rows, model, driver):
 def new_row(model, driver, serving, prefill_tok_s=None, prefill_tok_s_max=None,
             permission_mode="default", permission_authorization=None,
             permission_authorized_date=None, capabilities=None,
-            deterministic_loops=None, notes=None):
+            deterministic_loops=None, client_timeout_ms=None, notes=None):
     """Build a row with the panel's seven auto-asserts applied.
 
     Two of the seven are never optional and so take no argument that could
@@ -551,7 +580,7 @@ def new_row(model, driver, serving, prefill_tok_s=None, prefill_tok_s_max=None,
             "prefill rate x prompt size (rule 7), so a row without a measured "
             "rate has no honest timeout basis")
 
-    return {
+    row = {
         "model": model,
         "driver": driver,
         "serving": {f: serving[f] for f in SERVING_FIELDS},
@@ -576,8 +605,12 @@ def new_row(model, driver, serving, prefill_tok_s=None, prefill_tok_s_max=None,
             "basis": "turn cap derived from prefill rate x prompt size; "
                      "wall-clock expiry logs its own status, never a task fail",
         },
+        # issue #40: absent by default -- see _validate_client_timeout_ms.
+        "client_timeout_ms": client_timeout_ms,
         "notes": notes,
     }
+    _validate_client_timeout_ms(row)
+    return row
 
 
 def record_noise_probe(row, flip_rate, date, identical, of):
@@ -1058,6 +1091,7 @@ def cmd_add_model(args):
                   permission_mode=args.permission_mode,
                   permission_authorization=args.permission_authorization,
                   permission_authorized_date=args.permission_authorized_date,
+                  client_timeout_ms=args.client_timeout_ms,
                   notes=args.notes)
     rows.append(row)
     with open(args.path, "w", encoding="utf-8") as f:
@@ -1173,6 +1207,10 @@ def main(argv=None):
     add.add_argument("--permission-mode", default="default")
     add.add_argument("--permission-authorization")
     add.add_argument("--permission-authorized-date")
+    add.add_argument("--client-timeout-ms", type=int, dest="client_timeout_ms",
+                     help="issue #40: CLAUDE_STREAM_IDLE_TIMEOUT_MS / "
+                          "API_TIMEOUT_MS for this row's local-family child; "
+                          "omit to fall back to the run's own wall-clock cap")
     add.add_argument("--notes")
     add.set_defaults(func=cmd_add_model)
 

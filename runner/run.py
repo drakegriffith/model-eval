@@ -901,6 +901,20 @@ def broker_enabled():
 #                           live whenever a sweep is launched from inside a
 #                           Claude Code session, which is how every sweep on
 #                           this machine has been launched
+#   API_TIMEOUT_MS, CLAUDE_STREAM_IDLE_TIMEOUT_MS
+#                           from the PARENT these are exactly the class above:
+#                           an operator's shell env leaking into a claude-sonnet
+#                           row would silently widen or shrink its timeout
+#                           budget under a label that does not say so. Blocked
+#                           here for that reason. run_cli sets BOTH of them
+#                           deliberately, from a value it derives itself, on
+#                           the local-family CHILD only (issue #40) -- that is
+#                           not the same hazard, because the value is not
+#                           inherited from an uninspected shell, it is either
+#                           the serving row's own client_timeout_ms or this
+#                           run's own resolved wall-clock cap, so the row
+#                           is still labelled with a number this instrument
+#                           chose and can name.
 #
 # CLAUDE_EFFORT is the one that ruins an experiment rather than merely
 # threatening it. `CLAUDE_EFFORT=high` in the parent is `CLAUDE_EFFORT=high` in
@@ -1133,6 +1147,44 @@ def child_env(source=None):
     return {name: src[name] for name in CHILD_ENV_ALLOWLIST if name in src}
 
 
+def local_family_client_timeout_ms(model, wall_clock_s):
+    """The value for CLAUDE_STREAM_IDLE_TIMEOUT_MS and API_TIMEOUT_MS on a
+    local-family child (issue #40).
+
+    claude-code carries its own client-side stream-idle timer (measured
+    empirically at ~200s; the literal defaults are not recoverable from static
+    strings) that aborts a turn the instant it sees no visible-content bytes
+    for that long -- regardless of whether tokens are still flowing
+    server-side. A model that reasons silently before emitting visible content
+    (GLM 4.7 logged one turn reasoning for 1964s) trips this long before it has
+    failed anything.
+
+    Resolution order: the serving row's own `client_timeout_ms` (models.yaml),
+    a human-set value for a model whose reasoning latency has actually been
+    measured, else `wall_clock_s` -- this run's own resolved wall-clock cap
+    (resolve_timeout_s), converted to ms. The wall clock is the safe default
+    because it is the one number in this instrument that is guaranteed to be
+    at least as large: the subprocess is killed at wall_clock_s regardless, so
+    the client timer can never be the thing that ends the run first.
+
+    A single hardcoded constant was the other option and is rejected: it would
+    have to be sized for whichever model reasons slowest, which is a fact that
+    changes every time a new local model is added, and this instrument already
+    has a per-task-tier bound (resolve_timeout_s) that does not need a second,
+    parallel guess to go stale against it.
+    """
+    row_model = serving_registry.serving_model_name(resolve_model(model)[0])
+    try:
+        row = serving_registry.find_row(
+            serving_registry.load_rows(), row_model, "claude-code")
+    except serving_registry.RegistryError:
+        row = None
+    client_ms = row.get("client_timeout_ms") if row else None
+    if client_ms is not None:
+        return client_ms
+    return int(wall_clock_s * 1000)
+
+
 def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=None):
     """Run headlessly, killing the process group on timeout. Returns (out, reason, wall).
 
@@ -1186,6 +1238,15 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=Non
         env["ANTHROPIC_BASE_URL"] = LOCAL_BASE_URL
         env["ANTHROPIC_API_KEY"] = LOCAL_PLACEHOLDER_TOKEN
         env["ANTHROPIC_AUTH_TOKEN"] = LOCAL_PLACEHOLDER_TOKEN
+        # issue #40: without this, every local-family child runs on
+        # claude-code's own client-side stream-idle default (~200s) instead of
+        # this run's resolved wall-clock cap, and a model that reasons for
+        # minutes before emitting visible content trips the client timer long
+        # before failing the task. See local_family_client_timeout_ms's
+        # docstring for the resolution order.
+        client_ms = local_family_client_timeout_ms(model, timeout_s)
+        env["CLAUDE_STREAM_IDLE_TIMEOUT_MS"] = str(client_ms)
+        env["API_TIMEOUT_MS"] = str(client_ms)
 
     with contextlib.ExitStack() as stack:
         # verify.sh is copied into scratch; tasks whose test assets live beside

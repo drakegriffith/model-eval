@@ -1,3 +1,13 @@
+# client_timeout_ms (optional, issue #40): the value run.py's local-family
+# child gets for both CLAUDE_STREAM_IDLE_TIMEOUT_MS and API_TIMEOUT_MS.
+# claude-code's own client-side stream-idle timer defaults to roughly 200s and
+# aborts a turn on silence alone, which a model that reasons for minutes
+# before emitting visible content (GLM 4.7 measured 32 min on one turn) trips
+# long before it has failed anything. Set this only from a measurement of how
+# slow THIS row's reasoning actually runs; absent (or null), run.py falls back
+# to the run's own resolved wall-clock cap in ms, which is always at least as
+# large since the subprocess is killed there regardless. Validated by
+# serving_registry.load_rows() as a positive int when present.
 models:
   - model: glm-4.7
     driver: claude-code
