@@ -34,7 +34,13 @@ RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RUNNER_DIR)
 import corpus_gates  # noqa: E402
 
-RESULTS = os.path.join(RUNNER_DIR, "results", "results.jsonl")
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+# Frozen, not live: the audit's counts below (268, 267, 148...) are named
+# against the corpus as it stood at dd8f532. The live results.jsonl grows
+# (PR #37 added 5 rows and pushed it to 273) without re-running the audit,
+# so this file must not read the live corpus -- see runner/tests/fixtures/
+# results-268.jsonl and issue #43.
+RESULTS = os.path.join(TESTS_DIR, "fixtures", "results-268.jsonl")
 
 # --------------------------------------------------------------------------- #
 # THE DECISION RULE -- INDEPENDENT COPY
