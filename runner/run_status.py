@@ -60,9 +60,16 @@ Stdlib only. No file I/O, no imports of the instrument.
 # and that is the intended friction, not duplication to design away.
 CORE_MODULE = True
 
-# The five dispositions, plus the one that says nobody has decided.
+# The six dispositions, plus the one that says nobody has decided.
 SCORED = "scored"
 TIMEOUT = "timeout"
+# Amendment A3's post-hoc turn cap. A distinct class from TIMEOUT on purpose:
+# the two are different facts (a wall-clock hang backstop vs a registered turn
+# budget N the protocol pre-committed to), and format_excluded's disclosure
+# line names classes by this constant, so folding it into TIMEOUT would report
+# a turn-cap exclusion as "timeout=N" -- true in spirit, wrong in the number an
+# operator would go looking for.
+TURN_CAP = "turn_cap"
 INFRA = "infra"
 STRUCTURAL = "structurally_impossible"
 # Mock runs apply solution.patch and never call a model. These were filed under
@@ -91,6 +98,13 @@ EXIT_REASON_CLASS = {
     # The wall clock ran out. This says the cap was too small, or the server was
     # busy, or a neighbour was prefilling -- it says nothing about the task.
     "timeout": TIMEOUT,
+
+    # Amendment A3: the row's turns exceeded the registered cap N. Stamped
+    # post-hoc by apply_turn_cap() below, at read time, never on disk. A
+    # treatment exclusion, not an instrument fault -- the protocol pre-committed
+    # to voiding these -- so it is EXCLUDED like TIMEOUT, but reported under its
+    # own name (see the TURN_CAP constant).
+    "turn_cap": TURN_CAP,
 
     # The instrument did not produce a measurement of the model.
     "cli_error": INFRA,
@@ -122,8 +136,10 @@ EXIT_REASON_CLASS = {
 
 # When run.py appends a second reason with '+', the row carries both facts. The
 # worse one wins, worst first: a run that timed out AND whose grader hung is
-# still, first, a run nobody measured.
-_SEVERITY = (UNCLASSIFIED, STRUCTURAL, TIMEOUT, INFRA, MOCK, SCORED)
+# still, first, a run nobody measured. TURN_CAP sits beside TIMEOUT: both are
+# backstop exclusions rather than instrument faults, and neither should be able
+# to hide behind an INFRA or SCORED co-occurrence.
+_SEVERITY = (UNCLASSIFIED, STRUCTURAL, TIMEOUT, TURN_CAP, INFRA, MOCK, SCORED)
 
 
 def status_class(exit_reason):
@@ -170,3 +186,50 @@ def format_excluded(excluded):
     """The separate report, as one short phrase. Empty string when nothing was
     excluded -- the caller decides whether to print a column at all."""
     return " ".join(f"{cls}={n}" for cls, n in sorted(excluded.items()))
+
+
+def apply_turn_cap(rows, n):
+    """Amendment A3's post-hoc turn cap, applied at READ time.
+
+    A row whose `turns` is strictly greater than N is re-classed to
+    exit_reason "turn_cap" (EXCLUDED, never SCORED -- see the TURN_CAP
+    constant). Returns COPIES; ROWS is never mutated and nothing is written
+    back to disk. That is the point: N is not registered until the conductor
+    fills it after stage 0 (A6), and a later re-registration of N must be a
+    re-read of the same stored rows, not a rewrite of them.
+
+    N=None (the positive control, and the default until the conductor
+    registers it) is a no-op: every row comes back as an equal copy, with no
+    field added or changed, so every reader's rate is byte-for-byte what it
+    was before this function existed.
+
+    PRECEDENCE -- the turn cap is the OUTER exclusion. This function does not
+    look at the row's existing exit_reason before overwriting it: a
+    `cap_exhausted` row (the broker's K acceptance cap, scored SCORED by
+    amendment A1) whose turns also exceed N is re-classed to turn_cap anyway,
+    because A3 voids the session at N turns regardless of why it was still
+    running -- the turn budget is the protocol's own backstop, not a
+    judgement about what the row would have scored had it kept going. The
+    row's exit_reason immediately before this function ran is preserved
+    on a sibling field, `exit_reason_pre_turn_cap`, so the overwritten fact
+    is never lost, only superseded.
+
+    MISSING `turns` -- a row with no `turns` field (or `turns: null`) is NOT
+    capped: there is no measurement to compare against N, and capping a row
+    with no evidence would be exactly the "cannot-determine counted as a
+    pass" failure the harness's absence-is-not-evidence rule refuses.  Such a
+    row's exit_reason and classification are untouched. It is straightforward
+    for a caller to disclose how many rows this covers -- e.g.
+    `sum(1 for r in rows if r.get("turns") is None)` -- since this function
+    leaves the field itself alone rather than stamping a new one on rows it
+    did not touch.
+    """
+    out = []
+    for row in rows:
+        row = dict(row)
+        turns = row.get("turns")
+        if n is not None and turns is not None and turns > n:
+            row["exit_reason_pre_turn_cap"] = row.get("exit_reason")
+            row["exit_reason"] = "turn_cap"
+        out.append(row)
+    return out

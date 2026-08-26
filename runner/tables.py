@@ -458,7 +458,21 @@ def table6_decision_matrix(rows, qual, ledger=None):
          "input tokens/task (true)", "when to use"], data) + note
 
 
-def build_report(results, judgments, ledger=None):
+def build_report(results, judgments, ledger=None, turn_cap_n=None):
+    # Amendment A3, applied ONCE, here, before any table sees a row -- same
+    # posture as corpus_gates/run_status below: one call site, not one per
+    # table. This module takes no config, so N (the registered turn cap)
+    # arrives as `turn_cap_n`, sourced from main()'s `--turn-cap-n`.
+    # turn_cap_n=None (the default, and the only state before the conductor
+    # registers N) makes apply_turn_cap a no-op -- the positive control: every
+    # table below sees exit_reason exactly as `results` already carried it.
+    # Reclassifying `exit_reason` itself (rather than threading a second
+    # predicate through every table) is what makes this ONE call site correct
+    # for both axes without touching table1-6's bodies: corpus_gates.summarizable
+    # and run_status.status_class both key off row["exit_reason"], so a row
+    # turn_cap re-classes out of the token axis (§2,3,5,6) the same way it
+    # re-classes out of the pass axis (§1) and every other table.
+    results = run_status.apply_turn_cap(results, turn_cap_n)
     qual = quality_by_run(judgments)
     # The headline count is the ESTIMAND's, not every row's. It used to read
     # "N run row(s), P passing" with P taken over the whole corpus, so the
@@ -529,6 +543,11 @@ def main():
     ap.add_argument("--usage", default=os.path.join(RUNNER_DIR, "results", "usage.jsonl"),
                     help="ledger joined by run_id for recovered input tokens")
     ap.add_argument("--out", default=None, help="write markdown here (default: stdout)")
+    ap.add_argument("--turn-cap-n", type=int, default=None,
+                    help="amendment A3's registered turn cap N; rows with "
+                         "turns > N are excluded as exit_reason turn_cap. "
+                         "Omitted or unset (the default) is the positive "
+                         "control: behaviour is unchanged from before A3.")
     args = ap.parse_args()
 
     results = load_jsonl(args.results)
@@ -536,7 +555,7 @@ def main():
     ledger = usage_ledger.recovered_tokens_in(args.usage)
     if not results:
         print(f"no results found at {args.results}", file=sys.stderr)
-    report = build_report(results, judgments, ledger)
+    report = build_report(results, judgments, ledger, args.turn_cap_n)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(report + "\n")

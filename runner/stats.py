@@ -614,7 +614,19 @@ def section_power(results):
     return "\n".join(lines)
 
 
-def build_report(results, judgments):
+def build_report(results, judgments, turn_cap_n=None):
+    # Amendment A3, applied FIRST, before THE GATE below sees a row. This
+    # module takes no config, so N (the registered turn cap) arrives as
+    # `turn_cap_n`, sourced from main()'s `--turn-cap-n` -- tables.py and
+    # ladder_from_results.py take the same argument for the same reason and
+    # both import run_status rather than each duplicating this call (stats.py
+    # is CORE_MODULE and may not import tables.py at all -- issue #25's
+    # import_gate rule -- so the two stay in lockstep only because both call
+    # the one function in run_status, not because either copies the other).
+    # turn_cap_n=None (the default, and the only state before the conductor
+    # registers N) makes this a no-op -- the positive control.
+    results = run_status.apply_turn_cap(results, turn_cap_n)
+
     # THE GATE (ticket 34, ticket 31 AC#4). Applied ONCE, here, so no section can
     # be added later that quietly skips it: a run that did not exit cleanly is
     # excluded from every test below, because its `pass` was never earned by
@@ -778,6 +790,11 @@ def main():
                          "to --results)")
     ap.add_argument("--selftest", action="store_true",
                     help="run unit checks vs known values and exit")
+    ap.add_argument("--turn-cap-n", type=int, default=None,
+                    help="amendment A3's registered turn cap N; rows with "
+                         "turns > N are excluded as exit_reason turn_cap. "
+                         "Omitted or unset (the default) is the positive "
+                         "control: behaviour is unchanged from before A3.")
     args = ap.parse_args()
 
     if args.selftest:
@@ -790,7 +807,7 @@ def main():
 
     out = args.out or os.path.join(os.path.dirname(os.path.abspath(args.results)),
                                    "STATS-APPENDIX.md")
-    report = build_report(results, judgments)
+    report = build_report(results, judgments, args.turn_cap_n)
     with open(out, "w", encoding="utf-8") as f:
         f.write(report)
     print(f"wrote {out}")

@@ -54,8 +54,20 @@ from effort_verdict import (  # noqa: E402  (thresholds + vocabulary: single sou
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def load_rows(path, sweep, model, passing_only):
-    """Return (kept_rows, excluded_by_reason). Keeps only complete runs."""
+def load_rows(path, sweep, model, passing_only, turn_cap_n=None):
+    """Return (kept_rows, excluded_by_reason). Keeps only complete runs.
+
+    This reader takes no config file, so N (amendment A3) arrives as
+    `turn_cap_n`, a plain argument sourced from main()'s `--turn-cap-n` --
+    unlike run.py, which reads it out of the sweep config it already loads.
+    Applied per row via run_status.apply_turn_cap BEFORE the summarizable/
+    in_denominator check below, so a capped row's exit_reason is already
+    "turn_cap" by the time that check runs, and both axes it feeds (the pass
+    rate via run_status.in_denominator, the token ladder via
+    corpus_gates.summarizable) see the reclassified row. turn_cap_n=None (the
+    default, and the only state before the conductor registers N) makes this
+    a no-op -- the positive control.
+    """
     kept, excluded = [], defaultdict(int)
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -71,6 +83,7 @@ def load_rows(path, sweep, model, passing_only):
             # match either the alias as written or the canonical id behind it
             if model and model not in (r.get("model"), r.get("model_id")):
                 continue
+            r = run_status.apply_turn_cap([r], turn_cap_n)[0]
             # Kept when EITHER axis can use the row: cleanly-exited rows feed the
             # token ladder, and run_status-scored rows feed the pass rate. The
             # two sets differ by cap_exhausted, which is a scored model failure
@@ -164,10 +177,16 @@ def main():
                     help="also show the unblocked (probe-style) pooled verdict")
     ap.add_argument("--passing-only", action="store_true",
                     help="count only passing runs (default counts all complete runs)")
+    ap.add_argument("--turn-cap-n", type=int, default=None,
+                    help="amendment A3's registered turn cap N; rows with "
+                         "turns > N are excluded as exit_reason turn_cap. "
+                         "Omitted or unset (the default) is the positive "
+                         "control: behaviour is unchanged from before A3.")
     ap.add_argument("--json-out", default=None)
     args = ap.parse_args()
 
-    rows, excluded = load_rows(args.results, args.sweep, args.model, args.passing_only)
+    rows, excluded = load_rows(args.results, args.sweep, args.model,
+                               args.passing_only, args.turn_cap_n)
     if not rows:
         print(f"no matching complete rows in {args.results}"
               f" (sweep={args.sweep} model={args.model})")
