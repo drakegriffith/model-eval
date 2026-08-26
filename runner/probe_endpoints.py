@@ -37,6 +37,8 @@ import subprocess
 import sys
 import time
 
+import local_endpoint
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS_DIR = os.path.join(ROOT, "runner", "results")
 KIMI_KEY_FILE = os.path.expanduser(
@@ -82,14 +84,19 @@ CLAUDE_CANDIDATES = [
 KIMI_CANDIDATES = ["kimi-k3", "kimi-k2.7"]
 
 # studio/local-family: same Claude Code scaffold, pointed at an LM Studio server on
-# loopback (MODEL_EVAL_LOCAL_BASE_URL, default http://localhost:1234) instead of a
-# hosted endpoint. Unmetered -- there is no --max-usd concern for this family, unlike
+# loopback (MODEL_EVAL_LOCAL_BASE_URL, default per local_endpoint.get_local_base_url())
+# instead of a hosted endpoint. Unmetered -- there is no --max-usd concern for this family, unlike
 # Kimi -- but reachability and the effort ladder are exactly as unverified, which is
 # what this script exists to answer. Requires an LM Studio server actually running and
 # these two models actually loaded; with neither, every cell here comes back
 # unreachable rather than silently skipped, which is the correct floor-phase signal.
-LOCAL_BASE_URL = os.environ.get("MODEL_EVAL_LOCAL_BASE_URL", "http://localhost:1234")
-LOCAL_PLACEHOLDER_TOKEN = "sk-local-lmstudio-unused"
+#
+# Single-sourced in local_endpoint.py (issue #5): this used to be a literal
+# defined here AND, byte-identical, in run.py, with nothing pinning the two
+# copies equal, so this probe could certify one endpoint while a run
+# dispatched against a different one.
+LOCAL_BASE_URL = local_endpoint.get_local_base_url()
+LOCAL_PLACEHOLDER_TOKEN = local_endpoint.LOCAL_PLACEHOLDER_TOKEN
 LOCAL_CANDIDATES = ["glm-4.7-local", "qwen3-coder-next-local"]
 
 
