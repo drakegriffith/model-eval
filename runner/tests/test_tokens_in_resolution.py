@@ -39,7 +39,14 @@ sys.path.insert(0, RUNNER_DIR)
 import tables  # noqa: E402
 import usage_ledger  # noqa: E402
 
-RESULTS = os.path.join(RUNNER_DIR, "results", "results.jsonl")
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+# Frozen, not live: the 268/204/64 counts below are named against the corpus
+# as it stood at dd8f532. The live results.jsonl grows (PR #37 added 5 rows
+# and pushed it to 273) without re-running the audit, so this file must not
+# read the live corpus -- see runner/tests/fixtures/results-268.jsonl and
+# issue #43. USAGE stays live: the ledger rows PR #37 appended are new,
+# unrecoverable run_ids that never join against the frozen 268-row corpus.
+RESULTS = os.path.join(TESTS_DIR, "fixtures", "results-268.jsonl")
 USAGE = os.path.join(RUNNER_DIR, "results", "usage.jsonl")
 
 # --------------------------------------------------------------------------- #

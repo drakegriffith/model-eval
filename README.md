@@ -4,7 +4,10 @@ A benchmark instrument that runs frontier models against small, verifiable
 coding tasks headlessly, grades them with a sealed and sandboxed harness, and
 publishes the raw transcripts and judgments alongside the code that produced
 them. See `CONTRIBUTING.md` for how to add a task or a model, and what CI
-protects.
+protects. A PR that only adds rows to `runner/results/` still changes what
+several tests measure, so data PRs must run the full suite
+(`.venv/bin/python -m pytest -q runner --ignore=runner/fixtures`), not just
+the tests nearest the change.
 
 ## Security model
 
