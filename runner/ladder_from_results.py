@@ -47,6 +47,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus_gates  # noqa: E402
 import run_status  # noqa: E402
 import tables  # noqa: E402  (issue #25: model_key/multi_driver_models, single source)
+# issue #19 round 2: reuse run.py's parse_yaml (via turn_cap_n_from_config /
+# resolve_turn_cap_n) for this reader's --config default, rather than a
+# fourth copy of YAML parsing. Not core-boundary-restricted -- this module
+# already imports tables.py, a non-core neighbour -- and run.py does not
+# import this module or tables.py back, so this is a new edge, not a cycle.
+import run as runner_mod  # noqa: E402
 from effort_verdict import (  # noqa: E402  (thresholds + vocabulary: single source)
     TIER_ORDER, classify, pre_split_verdict, transition_tally,
 )
@@ -98,6 +104,38 @@ def load_rows(path, sweep, model, passing_only, turn_cap_n=None):
                 continue
             kept.append(r)
     return kept, dict(excluded)
+
+
+def count_turns_missing(path, sweep, model):
+    """How many rows (after the same sweep/model filter load_rows applies)
+    carry no `turns` field -- amendment A3's turn cap cannot classify them
+    (run_status.apply_turn_cap treats a missing measurement as not capped),
+    so this is the disclosure a reader needs to tell "nothing here exceeded
+    N" apart from "N could not be checked against most of this corpus".
+
+    A second pass over the file rather than an extra return value on
+    load_rows: load_rows's (kept, excluded) contract already has two other
+    callers (test_estimand_readers.py, test_effort_verdict_backwards.py) that
+    unpack it as a 2-tuple, and this count is orthogonal to which rows were
+    kept or excluded -- a missing-turns row can land on either side.
+    """
+    n = 0
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if sweep and r.get("sweep") != sweep:
+                continue
+            if model and model not in (r.get("model"), r.get("model_id")):
+                continue
+            if r.get("turns") is None:
+                n += 1
+    return n
 
 
 def tiers_for(rows):
@@ -178,15 +216,31 @@ def main():
     ap.add_argument("--passing-only", action="store_true",
                     help="count only passing runs (default counts all complete runs)")
     ap.add_argument("--turn-cap-n", type=int, default=None,
-                    help="amendment A3's registered turn cap N; rows with "
-                         "turns > N are excluded as exit_reason turn_cap. "
-                         "Omitted or unset (the default) is the positive "
+                    help="amendment A3's registered turn cap N, overriding "
+                         "--config's defaults.turn_cap_n; rows with turns > N "
+                         "are excluded as exit_reason turn_cap. Neither this "
+                         "nor the config set (the default) is the positive "
                          "control: behaviour is unchanged from before A3.")
+    ap.add_argument("--config", default=runner_mod.DEFAULT_TURN_CAP_CONFIG,
+                    help="sweep config this reader falls back to for "
+                         "defaults.turn_cap_n when --turn-cap-n is not given "
+                         "(issue #19 round 2: one source of truth for N, not "
+                         "two that can silently disagree)")
     ap.add_argument("--json-out", default=None)
     args = ap.parse_args()
 
+    # Resolved and printed BEFORE anything else, so the value a table was
+    # rendered under is visible even on the "no matching rows" early return
+    # below, and never has to be inferred from which flag the caller typed.
+    n, n_source = runner_mod.resolve_turn_cap_n(args.config, args.turn_cap_n)
+    turn_cap_line = f"turn_cap_n={n if n is not None else 'unset'}"
+    if n is not None:
+        turn_cap_line += (f" (source={n_source})  turns_missing="
+                          f"{count_turns_missing(args.results, args.sweep, args.model)}")
+    print(turn_cap_line)
+
     rows, excluded = load_rows(args.results, args.sweep, args.model,
-                               args.passing_only, args.turn_cap_n)
+                               args.passing_only, n)
     if not rows:
         print(f"no matching complete rows in {args.results}"
               f" (sweep={args.sweep} model={args.model})")

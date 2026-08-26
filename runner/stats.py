@@ -614,17 +614,81 @@ def section_power(results):
     return "\n".join(lines)
 
 
-def build_report(results, judgments, turn_cap_n=None):
-    # Amendment A3, applied FIRST, before THE GATE below sees a row. This
-    # module takes no config, so N (the registered turn cap) arrives as
-    # `turn_cap_n`, sourced from main()'s `--turn-cap-n` -- tables.py and
-    # ladder_from_results.py take the same argument for the same reason and
-    # both import run_status rather than each duplicating this call (stats.py
-    # is CORE_MODULE and may not import tables.py at all -- issue #25's
-    # import_gate rule -- so the two stay in lockstep only because both call
-    # the one function in run_status, not because either copies the other).
-    # turn_cap_n=None (the default, and the only state before the conductor
-    # registers N) makes this a no-op -- the positive control.
+_DEFAULT_TURN_CAP_CONFIG = os.path.join(RUNNER_DIR, "runs-glm-stage1.yaml")
+
+
+# issue #19 round 2. This reader takes no config of its own, so N used to
+# arrive ONLY via --turn-cap-n -- a second source of truth that silently
+# diverged from a sweep config's defaults.turn_cap_n the moment an operator
+# forgot the flag. ladder_from_results.py and tables.py fixed this by
+# importing run.py's parse_yaml; stats.py cannot -- it is CORE_MODULE
+# (runner/import_gate.py rule A: a core module may import only the stdlib
+# and other core modules), and run.py is neither. So this is a duplicated,
+# deliberately minimal scalar reader: same posture as multi_driver_models/
+# model_key above, kept in lockstep with run.py's own turn_cap_n_from_config
+# by intent, not DRY'd across the core boundary. It understands exactly the
+# one shape this repo's sweep configs use for `defaults:` -- a top-level key
+# followed by more-indented `key: value` lines -- and nothing else; it is not
+# a second general YAML parser.
+def _turn_cap_n_from_config(config_path):
+    """`defaults.turn_cap_n` out of a sweep config. Tolerant like the general
+    reader has to be: a missing file, a file with no `defaults:` block, and
+    `turn_cap_n` absent or explicitly `null` all return None ("unset")."""
+    if not config_path or not os.path.exists(config_path):
+        return None
+    in_defaults = False
+    defaults_indent = None
+    with open(config_path, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.split("#", 1)[0].rstrip("\n")
+            if not line.strip():
+                continue
+            indent = len(line) - len(line.lstrip(" "))
+            stripped = line.strip()
+            if not in_defaults:
+                if stripped == "defaults:":
+                    in_defaults, defaults_indent = True, indent
+                continue
+            if indent <= defaults_indent:
+                break  # left the defaults: block
+            if stripped.startswith("turn_cap_n:"):
+                val = stripped.split(":", 1)[1].strip()
+                if val in ("", "null", "~"):
+                    return None
+                try:
+                    return int(val)
+                except ValueError:
+                    return None
+    return None
+
+
+def _resolve_turn_cap_n(config_path, flag_value):
+    """N with an explicit --turn-cap-n beating the config, same precedence
+    run.py's resolve_turn_cap_n uses. Returns (n, source): "flag", "yaml", or
+    "unset"."""
+    if flag_value is not None:
+        return flag_value, "flag"
+    n = _turn_cap_n_from_config(config_path)
+    if n is not None:
+        return n, "yaml"
+    return None, "unset"
+
+
+def build_report(results, judgments, turn_cap_n=None, turn_cap_n_source="flag"):
+    # Amendment A3, applied FIRST, before THE GATE below sees a row. N
+    # arrives as `turn_cap_n`, resolved by main() from --turn-cap-n or,
+    # falling back, --config's defaults.turn_cap_n (issue #19 round 2) --
+    # `turn_cap_n_source` names which one won, "flag" by default for a
+    # direct-argument caller that never went through that resolution.
+    # tables.py and ladder_from_results.py take the same two arguments for
+    # the same reason and both import run_status rather than each
+    # duplicating this call (stats.py is CORE_MODULE and may not import
+    # tables.py at all -- issue #25's import_gate rule -- so the two stay in
+    # lockstep only because both call the one function in run_status, not
+    # because either copies the other). turn_cap_n=None (the default, and
+    # the only state before the conductor registers N) makes this a no-op --
+    # the positive control.
+    turns_missing = sum(1 for r in results if r.get("turns") is None)
     results = run_status.apply_turn_cap(results, turn_cap_n)
 
     # THE GATE (ticket 34, ticket 31 AC#4). Applied ONCE, here, so no section can
@@ -668,6 +732,13 @@ def build_report(results, judgments, turn_cap_n=None):
         "every denominator and reported here, never as model failures: "
         + (run_status.format_excluded(excl_status) or "nothing excluded")
         + f" (scored={len(scored)} of {n_in}).",
+        "",
+        "> **turn cap** (amendment A3, issue #19) — turn_cap_n="
+        + (f"{turn_cap_n} (source={turn_cap_n_source})" if turn_cap_n is not None
+           else "unset")
+        + (f", turns_missing={turns_missing} (no `turns` field, not capped)"
+           if turn_cap_n is not None else "")
+        + ".",
         "",
         "> **exclusions** — "
         + corpus_gates.format_exclusions("results rows", n_in, kept, excluded)
@@ -791,10 +862,16 @@ def main():
     ap.add_argument("--selftest", action="store_true",
                     help="run unit checks vs known values and exit")
     ap.add_argument("--turn-cap-n", type=int, default=None,
-                    help="amendment A3's registered turn cap N; rows with "
-                         "turns > N are excluded as exit_reason turn_cap. "
-                         "Omitted or unset (the default) is the positive "
+                    help="amendment A3's registered turn cap N, overriding "
+                         "--config's defaults.turn_cap_n; rows with turns > N "
+                         "are excluded as exit_reason turn_cap. Neither this "
+                         "nor the config set (the default) is the positive "
                          "control: behaviour is unchanged from before A3.")
+    ap.add_argument("--config", default=_DEFAULT_TURN_CAP_CONFIG,
+                    help="sweep config this reader falls back to for "
+                         "defaults.turn_cap_n when --turn-cap-n is not given "
+                         "(issue #19 round 2: one source of truth for N, not "
+                         "two that can silently disagree)")
     args = ap.parse_args()
 
     if args.selftest:
@@ -805,9 +882,10 @@ def main():
     if not results:
         print(f"no results found at {args.results}", file=sys.stderr)
 
+    n, n_source = _resolve_turn_cap_n(args.config, args.turn_cap_n)
     out = args.out or os.path.join(os.path.dirname(os.path.abspath(args.results)),
                                    "STATS-APPENDIX.md")
-    report = build_report(results, judgments, args.turn_cap_n)
+    report = build_report(results, judgments, n, n_source)
     with open(out, "w", encoding="utf-8") as f:
         f.write(report)
     print(f"wrote {out}")

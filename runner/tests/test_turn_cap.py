@@ -28,6 +28,7 @@ import pytest
 RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RUNNER_DIR)
 import ladder_from_results as ladder  # noqa: E402
+import run as runner_mod  # noqa: E402
 import run_status  # noqa: E402
 import stats  # noqa: E402
 import tables  # noqa: E402
@@ -237,6 +238,186 @@ def test_stats_agrees_with_tables_on_the_same_fixture():
     assert "3 run row(s), 2 passing" in stats_out
     assert "67%" in tables_out
     assert "turn_cap=2" in tables_out
+
+
+# --------------------------------------------------------------------------- #
+# Round 2 (issue #19): one source of truth for N.
+#
+# The defect: with turn_cap_n: 20 in a config and no --turn-cap-n flag,
+# every reader used to default to None and print as if turn caps did not
+# exist -- a second source of truth that silently disagreed with the first.
+# Every reader now falls back to --config's defaults.turn_cap_n when
+# --turn-cap-n is not given, an explicit flag always wins, and both the
+# resolved N and which source won are visible on the printed line.
+# --------------------------------------------------------------------------- #
+_MISSING = object()
+
+
+def _write_config(tmp_path, n, name="config.yaml"):
+    """A sweep-config copy carrying defaults.turn_cap_n as N (an int), None
+    (explicit yaml null), or _MISSING (the key absent entirely)."""
+    path = tmp_path / name
+    if n is _MISSING:
+        body = "defaults:\n  seed: 1337\n"
+    elif n is None:
+        body = "defaults:\n  turn_cap_n: null\n  seed: 1337\n"
+    else:
+        body = f"defaults:\n  turn_cap_n: {n}\n  seed: 1337\n"
+    path.write_text(body, encoding="utf-8")
+    return str(path)
+
+
+@pytest.mark.parametrize("n", [20, None, _MISSING])
+def test_run_and_stats_config_readers_agree(tmp_path, n):
+    """The two independent scalar readers (run.turn_cap_n_from_config for
+    ladder/tables, stats._turn_cap_n_from_config duplicated across the
+    CORE_MODULE boundary) must return the same answer for the same file, or
+    the two sources-of-truth defect this round fixes reappears one level
+    down."""
+    path = _write_config(tmp_path, n)
+    assert runner_mod.turn_cap_n_from_config(path) == stats._turn_cap_n_from_config(path)
+
+
+def test_yaml_wins_when_no_flag_is_given(tmp_path):
+    path = _write_config(tmp_path, 20)
+    assert runner_mod.resolve_turn_cap_n(path, None) == (20, "yaml")
+    assert stats._resolve_turn_cap_n(path, None) == (20, "yaml")
+
+
+def test_flag_overrides_yaml(tmp_path):
+    path = _write_config(tmp_path, 20)
+    assert runner_mod.resolve_turn_cap_n(path, 30) == (30, "flag")
+    assert stats._resolve_turn_cap_n(path, 30) == (30, "flag")
+
+
+@pytest.mark.parametrize("n", [None, _MISSING])
+def test_yaml_null_or_absent_is_unset(tmp_path, n):
+    path = _write_config(tmp_path, n)
+    assert runner_mod.resolve_turn_cap_n(path, None) == (None, "unset")
+    assert stats._resolve_turn_cap_n(path, None) == (None, "unset")
+
+
+def test_missing_config_file_is_unset():
+    ghost = "/no/such/config/exists-for-real.yaml"
+    assert runner_mod.resolve_turn_cap_n(ghost, None) == (None, "unset")
+    assert stats._resolve_turn_cap_n(ghost, None) == (None, "unset")
+
+
+# --------------------------------------------------------------------------- #
+# The config-driven N actually caps, end to end, per reader
+# --------------------------------------------------------------------------- #
+def test_ladder_caps_from_config_alone_no_flag(tmp_path):
+    """Extends the byte-identical positive control: this is the SAME fixture
+    and the SAME N as the flag-driven test above, reached the other way --
+    through --config, with --turn-cap-n never given -- and it must produce
+    the identical excluded/kept split."""
+    config = _write_config(tmp_path, 20)
+    results = tmp_path / "results.jsonl"
+    _write_jsonl(results, FIXTURE)
+
+    n, source = runner_mod.resolve_turn_cap_n(config, None)
+    assert (n, source) == (20, "yaml")
+    kept, excluded = ladder.load_rows(str(results), None, None, False, turn_cap_n=n)
+    assert excluded == {"turn_cap": 2}
+    assert len(kept) == 3
+
+
+def test_ladder_flag_30_overrides_yaml_20(tmp_path):
+    """With N=30 instead of 20, only turns=40 exceeds the cap -- turns=21 no
+    longer does -- which is what makes this differ observably from the yaml
+    default and proves the flag, not the file, won."""
+    config = _write_config(tmp_path, 20)
+    results = tmp_path / "results.jsonl"
+    _write_jsonl(results, FIXTURE)
+
+    n, source = runner_mod.resolve_turn_cap_n(config, 30)
+    assert (n, source) == (30, "flag")
+    kept, excluded = ladder.load_rows(str(results), None, None, False, turn_cap_n=n)
+    assert excluded == {"turn_cap": 1}
+    assert len(kept) == 4
+
+
+def test_tables_caps_from_config_alone_no_flag(tmp_path):
+    config = _write_config(tmp_path, 20)
+    n, source = runner_mod.resolve_turn_cap_n(config, None)
+    out = tables.build_report(FIXTURE, {}, turn_cap_n=n, turn_cap_n_source=source)
+    assert "turn_cap_n=20 (source=yaml)" in out
+    assert "turn_cap=2" in out
+    assert "67%" in out
+
+
+def test_stats_caps_from_config_alone_no_flag(tmp_path):
+    config = _write_config(tmp_path, 20)
+    n, source = stats._resolve_turn_cap_n(config, None)
+    out = stats.build_report(FIXTURE, [], turn_cap_n=n, turn_cap_n_source=source)
+    assert "turn_cap_n=20 (source=yaml)" in out
+    assert "3 run row(s), 2 passing" in out
+
+
+# --------------------------------------------------------------------------- #
+# yaml absent/null -> "unset", byte-identical to today (extends the N=null
+# positive control to the config-driven path specifically)
+# --------------------------------------------------------------------------- #
+def test_tables_yaml_absent_is_unset_and_byte_identical(tmp_path):
+    config = _write_config(tmp_path, _MISSING)
+    n, source = runner_mod.resolve_turn_cap_n(config, None)
+    assert (n, source) == (None, "unset")
+    with_config = tables.build_report(FIXTURE, {}, turn_cap_n=n, turn_cap_n_source=source)
+    bypassed = tables.build_report(FIXTURE, {})
+    assert with_config == bypassed
+    assert "turn_cap_n=unset" in with_config
+
+
+def test_stats_yaml_null_is_unset_and_byte_identical(tmp_path):
+    config = _write_config(tmp_path, None)
+    n, source = stats._resolve_turn_cap_n(config, None)
+    assert (n, source) == (None, "unset")
+    with_config = stats.build_report(FIXTURE, [], turn_cap_n=n, turn_cap_n_source=source)
+    bypassed = stats.build_report(FIXTURE, [])
+    assert with_config == bypassed
+    assert "turn_cap_n=unset" in with_config
+
+
+def test_ladder_yaml_absent_is_unset_and_matches_no_config(tmp_path):
+    config = _write_config(tmp_path, _MISSING)
+    results = tmp_path / "results.jsonl"
+    _write_jsonl(results, FIXTURE)
+
+    n, source = runner_mod.resolve_turn_cap_n(config, None)
+    assert (n, source) == (None, "unset")
+    with_config = ladder.load_rows(str(results), None, None, False, turn_cap_n=n)
+    bypassed = ladder.load_rows(str(results), None, None, False)
+    assert with_config == bypassed
+
+
+# --------------------------------------------------------------------------- #
+# turns_missing -- rows with no `turns` field, disclosed when N is set
+# --------------------------------------------------------------------------- #
+FIXTURE_WITH_MISSING_TURNS = FIXTURE + [mkrow(6, None, "ok", True)]
+
+
+def test_tables_prints_turns_missing_when_n_is_set():
+    out = tables.build_report(FIXTURE_WITH_MISSING_TURNS, {}, turn_cap_n=N)
+    assert "turns_missing=1" in out
+
+
+def test_stats_prints_turns_missing_when_n_is_set():
+    out = stats.build_report(FIXTURE_WITH_MISSING_TURNS, [], turn_cap_n=N)
+    assert "turns_missing=1" in out
+
+
+def test_tables_omits_turns_missing_when_n_is_unset():
+    """Printed only when it means something: with no cap in force, whether a
+    row carries `turns` is not yet a fact anyone needs on this line."""
+    out = tables.build_report(FIXTURE_WITH_MISSING_TURNS, {})
+    assert "turns_missing" not in out
+    assert "turn_cap_n=unset" in out
+
+
+def test_ladder_count_turns_missing(tmp_path):
+    results = tmp_path / "results.jsonl"
+    _write_jsonl(results, FIXTURE_WITH_MISSING_TURNS)
+    assert ladder.count_turns_missing(str(results), None, None) == 1
 
 
 if __name__ == "__main__":

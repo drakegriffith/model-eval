@@ -1755,6 +1755,60 @@ def resolve_timeout_s(task, defaults):
         f"add one of {', '.join(tried)} to the config's defaults")
 
 
+# Amendment A3, round 2 (issue #19). ladder_from_results.py, tables.py and
+# stats.py each compute a rate but load no sweep config of their own, so N
+# used to arrive ONLY via a --turn-cap-n flag -- a second source of truth
+# that silently diverged from this file's own defaults.turn_cap_n the moment
+# an operator forgot the flag: a config carrying turn_cap_n: 20 and an
+# unflagged reader printed a rate as if turn caps did not exist, with no
+# warning that the two had disagreed. These two functions are the one place
+# that precedence is decided, so every reader states it the same way.
+#
+# ladder_from_results.py and tables.py import this module and call
+# turn_cap_n_from_config/resolve_turn_cap_n directly, reusing parse_yaml
+# rather than inventing a third YAML reader. stats.py cannot: it is
+# CORE_MODULE (runner/import_gate.py rule A: a core module may import only
+# the stdlib and other core modules), and this module is neither, so it
+# carries its own minimal, duplicated scalar reader instead -- same posture
+# as stats.py's own multi_driver_models/model_key, kept in lockstep with
+# tables.py by intent rather than DRY'd across the core boundary.
+DEFAULT_TURN_CAP_CONFIG = os.path.join(RUNNER_DIR, "runs-glm-stage1.yaml")
+
+
+def turn_cap_n_from_config(config_path):
+    """`defaults.turn_cap_n` out of a sweep config, for a caller that has no
+    config of its own already open.
+
+    Tolerant the way a reader-side default has to be: a missing file, a file
+    with no `defaults:` block, and `turn_cap_n` absent or explicitly `null`
+    all return None ("unset"), never an error. This is a default a reader
+    falls back to, not a gate that refuses a bad config -- run.py's own
+    resolve_timeout_s is the gate for the config it actually dispatches
+    under.
+    """
+    if not config_path or not os.path.exists(config_path):
+        return None
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = parse_yaml(f.read()) or {}
+    return (cfg.get("defaults") or {}).get("turn_cap_n")
+
+
+def resolve_turn_cap_n(config_path, flag_value):
+    """N with an explicit --turn-cap-n beating the config, always -- exactly
+    one of the two sources of truth wins, and the caller learns which.
+
+    Returns (n, source) where source is "flag", "yaml", or "unset". Every
+    reader prints both, in the same line, so a published table never has to
+    be reverse-engineered to learn what N it was rendered under.
+    """
+    if flag_value is not None:
+        return flag_value, "flag"
+    n = turn_cap_n_from_config(config_path)
+    if n is not None:
+        return n, "yaml"
+    return None, "unset"
+
+
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
