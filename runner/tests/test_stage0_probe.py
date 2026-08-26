@@ -545,6 +545,41 @@ def test_mock_against_the_live_registry_path_is_refused(
     assert not results.exists(), "run.py must never have been invoked"
 
 
+def test_scratch_inside_results_dir_is_refused_before_run_py_is_invoked(
+        live_files_untouched, stage0_fixture_matrix, tmp_path, monkeypatch):
+    """Issue #28, same shape as run.py's own guard: a --scratch forwarded
+    unchanged to run.py (run_stage0's subprocess call) that resolves inside
+    the live results directory must be refused HERE, before run.py is ever
+    invoked -- proven the same "nothing downstream ran" way
+    test_mock_against_the_live_registry_path_is_refused above proves its
+    own guard: no --results file, and no checkout directory under the live
+    runner/results/. A scratch registry COPY is supplied so the registry
+    guard above does not fire first and mask which guard actually refused."""
+    results = tmp_path / "results.jsonl"
+    registry_copy = tmp_path / "models.yaml"
+    shutil.copy2(REAL_REGISTRY, registry_copy)
+
+    checkout_root = os.path.join(RUNNER_DIR, "results", "stage0-work")
+    assert not os.path.exists(checkout_root), "stale checkout from a prior failed run"
+
+    monkeypatch.chdir(RUNNER_DIR)
+    proc = subprocess.run(
+        [sys.executable, "stage0_probe.py",
+         "--config", stage0_fixture_matrix["config"],
+         "--tasks-dir", stage0_fixture_matrix["tasks_dir"],
+         "--scratch", checkout_root,
+         "--results", str(results),
+         "--registry-path", str(registry_copy),
+         "--mock"],
+        cwd=RUNNER_DIR, capture_output=True, text=True)
+
+    assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+    assert "refus" in proc.stderr.lower()
+    assert not results.exists(), "run.py must never have been invoked"
+    assert not os.path.exists(checkout_root), (
+        "stage0_probe created a checkout inside the live results directory")
+
+
 def test_non_mock_preflight_mismatch_refuses_before_run_py_is_invoked(
         live_files_untouched, stage0_fixture_matrix, tmp_path, monkeypatch):
     """The gap a verifier named: run.py's own dispatch gate only checks the

@@ -67,6 +67,56 @@ def is_live_path(candidate, live_path):
     return False
 
 
+def is_inside_or_same(candidate, container):
+    """True if `candidate` resolves to `container` itself or to a path
+    nested inside it.
+
+    Compared by resolved PATH COMPONENTS (os.path.commonpath), never by
+    string prefix. A string-prefix test was considered and rejected: it
+    wrongly refuses a sibling directory that merely shares a prefix --
+    "/a/results2".startswith("/a/results") is True, but results2 does not
+    live inside results, and a caller must still be able to name a scratch
+    dir next to the live results directory. Both sides go through `_norm`
+    first (realpath + normcase, see module docstring) so a symlink hop, a
+    doubled slash, or a relative path resolved against a different cwd all
+    land on the same identity before containment is tested.
+    """
+    cand = _norm(candidate)
+    cont = _norm(container)
+    if cand == cont:
+        return True
+    try:
+        common = os.path.commonpath([cand, cont])
+    except ValueError:
+        # No common root (e.g. different drives on Windows) -- never nested.
+        return False
+    return common == cont
+
+
+def refuse_scratch_inside_results(scratch, results_dir):
+    """None if `scratch` resolves outside `results_dir`; otherwise a
+    ready-to-print refusal string naming both resolved paths (issue #28).
+
+    Distinct from `refusal_message` above: that guard catches a --results/
+    --usage/--registry-path argument that resolves TO a live corpus file.
+    This one catches a --scratch argument that resolves INTO the live
+    results directory -- a run checkout left there pollutes the corpus
+    directory even though it is not itself a corpus write, so those row-
+    level guards report the corpus untouched while runner/results/ fills up
+    with git checkouts. Must be called, and must refuse, before the first
+    scratch directory is created; it does not depend on --mock/--dry-run,
+    because a live dispatch with a bad --scratch pollutes the same
+    directory just as surely as a mock one does.
+    """
+    if is_inside_or_same(scratch, results_dir):
+        return (
+            f"refusing: --scratch {os.path.realpath(scratch)!r} resolves "
+            f"inside the live results directory "
+            f"{os.path.realpath(results_dir)!r}. Pass --scratch a path "
+            f"outside the results directory, e.g. --scratch /tmp/scratch/work.")
+    return None
+
+
 def refusal_message(live_pairs, flag_hint):
     """None if no (candidate, live_path) pair in `live_pairs` collides;
     otherwise a ready-to-print refusal string naming the live path it found.

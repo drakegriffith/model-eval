@@ -2172,6 +2172,21 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
+    # Issue #28: a --scratch that resolves inside (or equal to) the live
+    # results directory leaves run checkouts sitting among corpus files even
+    # though a checkout is not itself a corpus write -- the guard below only
+    # ever looks at --results/--usage, never at --scratch, so it reports the
+    # corpus untouched while runner/results/ fills up with git checkouts.
+    # Checked here, before the config is even parsed and long before the
+    # first prepare_scratch() call, and unconditionally (not gated on
+    # --mock/--dry-run like the guard below): a live dispatch with a bad
+    # --scratch pollutes the same directory just as surely as a mock one.
+    scratch_msg = corpus_guard.refuse_scratch_inside_results(
+        args.scratch, os.path.dirname(DEFAULT_RESULTS_PATH))
+    if scratch_msg:
+        print(scratch_msg, file=sys.stderr)
+        sys.exit(corpus_guard.REFUSE_EXIT)
+
     # CLI flags are sugar over the GAUNTLET_MOCK env var that execute_run reads.
     if args.mock_fail:
         os.environ["GAUNTLET_MOCK"] = "fail"

@@ -295,6 +295,104 @@ def test_mock_with_both_paths_redirected_writes_exactly_one_row_only_to_scratch(
 
 
 # --------------------------------------------------------------------------- #
+# #28: a --scratch that resolves inside (or equal to) the live results
+# directory. Distinct from #23/#24 above -- those guard --results/--usage
+# reaching a live FILE; this guards --scratch reaching the live results
+# DIRECTORY, since a run checkout left there is not itself a corpus write
+# and so passes the #23/#24 guards untouched while still polluting
+# runner/results/. The reproduction is issue #28's own words: a relative
+# --scratch from cwd runner/ created a checkout inside the live results
+# directory while results.jsonl/usage.jsonl were reported untouched.
+# --------------------------------------------------------------------------- #
+def test_relative_scratch_from_runner_cwd_into_results_is_refused_and_creates_no_checkout(
+        corpus_untouched):
+    """Issue #28's own reproduction, verbatim: cwd=runner/, `--scratch
+    results/work` (relative, no other redirect). Absence is asserted, not
+    assumed -- a directory that was never going to be created either way
+    would make this assertion pass for the wrong reason; the companion
+    control test below proves the same checkout DOES appear when --scratch
+    is left outside results/, so this absence assertion is capable of
+    catching a regression, not vacuously true."""
+    checkout_root = os.path.join(RUNNER_DIR, "results", "work")
+    assert not os.path.exists(checkout_root), "stale checkout from a prior failed run"
+    try:
+        proc = run_cli_subprocess([
+            "--mock", "--only", "no-such-run-id-xyz", "--scratch", "results/work",
+        ])
+        assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+        assert "refus" in proc.stderr.lower()
+        assert not os.path.exists(checkout_root), (
+            "run.py created a checkout inside the live results directory")
+    finally:
+        if os.path.exists(checkout_root):
+            shutil.rmtree(checkout_root)
+
+
+def test_scratch_outside_results_still_creates_a_checkout_control(
+        fabricated_matrix, tmp_path):
+    """Control for the absence assertion above (INDEX.md: a gate that
+    inspected zero subjects failed). Identical fabricated matrix, but
+    --scratch stays at its own tmp_path location, outside results/: the run
+    proceeds (exit 0) and a checkout DOES land under --scratch, proving
+    prepare_scratch really does create a directory here under --mock, so
+    the previous test's "no checkout dir" assertion is a claim that could
+    have failed."""
+    scratch_results = tmp_path / "control-results.jsonl"
+    proc = run_cli_subprocess([
+        "--mock", "--config", fabricated_matrix["config"],
+        "--tasks-dir", fabricated_matrix["tasks_dir"],
+        "--scratch", fabricated_matrix["scratch"],
+        "--results", str(scratch_results),
+        "--only", "t-corpus-pin",
+    ])
+    assert proc.returncode == 0, proc.stderr
+    entries = os.listdir(fabricated_matrix["scratch"])
+    assert entries, (
+        "no checkout directory appeared under --scratch -- the fixture's "
+        "own assumption (prepare_scratch creates a dir per run) is broken, "
+        "which would silently defeat the absence assertion above")
+
+
+def test_symlinked_scratch_pointing_into_results_dir_is_refused(
+        corpus_untouched, tmp_path):
+    """Same bypass class test_mock_with_symlinked_default_dir_is_refused
+    above proves for --results: a --scratch that is ITSELF a symlink whose
+    target resolves inside the live results directory must not sail past
+    an unresolved-path or string-prefix compare. The symlink target is a
+    path nested one level inside results/ (not results/ itself), so this
+    exercises the containment branch (os.path.commonpath), not just the
+    equality branch."""
+    link = tmp_path / "scratch-into-results"
+    link.symlink_to(os.path.join(RUNNER_DIR, "results", "nested-via-symlink"),
+                    target_is_directory=True)
+    proc = run_cli_subprocess([
+        "--mock", "--only", "no-such-run-id-xyz", "--scratch", str(link),
+    ])
+    assert proc.returncode == corpus_guard.REFUSE_EXIT, proc.stderr
+    assert "refus" in proc.stderr.lower()
+
+
+def test_scratch_resolving_to_a_results_sibling_directory_is_not_refused(
+        corpus_untouched, tmp_path):
+    """The discarded alternative this fix's commit names: a string-prefix
+    compare would wrongly refuse this, since "results2" starts with
+    "results" as a string. os.path.commonpath compares resolved PATH
+    COMPONENTS, correctly treats results2 as a sibling (not a descendant)
+    of results/, and lets it through. --only matches no run_id, so nothing
+    beyond the guard itself is exercised. --results is redirected to a
+    scratch file so the pre-existing #23 guard (default --results resolving
+    to the live corpus) does not fire first and mask which guard this test
+    is actually about."""
+    sibling = os.path.join(RUNNER_DIR, "results2")
+    proc = run_cli_subprocess([
+        "--mock", "--only", "no-such-run-id-xyz", "--scratch", sibling,
+        "--results", str(tmp_path / "sibling-results.jsonl"),
+    ])
+    assert proc.returncode == 0, proc.stderr
+    assert "refus" not in proc.stderr.lower()
+
+
+# --------------------------------------------------------------------------- #
 # #24: execute_run's usage_path plumbing, at the unit level. A fabricated task
 # with a trivial verify.sh (`exit 0`) so the assertion is about which FILE the
 # usage row lands in, not about grading.

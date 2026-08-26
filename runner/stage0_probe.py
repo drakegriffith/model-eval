@@ -419,6 +419,18 @@ def main(argv=None):
                          "how tests exercise it without touching LM Studio")
     args = ap.parse_args(argv)
 
+    # Issue #28: same guard run.py itself applies, run here BEFORE run.py is
+    # ever invoked (as a subprocess, below) -- a --scratch forwarded
+    # unchanged that resolves inside the live results directory would
+    # otherwise let run.py's own subprocess create the checkout first and
+    # this module only find out after the fact. Unconditional, same as
+    # run.py's own check: not gated on --mock.
+    scratch_msg = corpus_guard.refuse_scratch_inside_results(
+        args.scratch, os.path.join(HERE, "results"))
+    if scratch_msg:
+        print(scratch_msg, file=sys.stderr)
+        sys.exit(corpus_guard.REFUSE_EXIT)
+
     if args.mock:
         msg = corpus_guard.refusal_message(
             [(args.registry_path, sr.REGISTRY_PATH, "model registry")],
