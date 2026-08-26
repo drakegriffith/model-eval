@@ -59,7 +59,12 @@ defaults:
   # turn_cap at READ time (never rewritten on disk) -- EXCLUDED from the pass
   # denominator and the token axis, reported separately -- and the wall clock
   # above stops applying (see the comment on timeout_t*_s).
-  turn_cap_n: null
+  #
+  # Filled 2026-08-26 (issue #19; amendment A3, docs/studio-handoff/
+  # prompt-2-run-experiment.md): stage-0 noise probe comment on issue #8,
+  # 2026-08-26T22:10:26Z -- "max(turns): 84", "flips: 0/5 (5/5 identical)".
+  # N = 3 x max(turns)=84 = 252, rounded up to the next multiple of 10 = 260.
+  turn_cap_n: 260
   # ACCEPTANCE CAP -- read this before changing it, because both directions bias
   # the headline number and the bundle registers neither.
   #
