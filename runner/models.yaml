@@ -83,8 +83,12 @@ models:
       hooks: true
       tools: unknown
     max_harness_level: 5
-    deterministic_loops: false
-    noise_probe: null
+    deterministic_loops: true
+    noise_probe:
+      flip_rate: 0.0
+      date: 2026-08-27
+      identical: 5
+      of: 5
     reasoning_probe: null
     permission:
       mode: bypassPermissions
