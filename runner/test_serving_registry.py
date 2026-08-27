@@ -116,14 +116,30 @@ def test_a_comment_on_a_key_with_no_value_is_still_a_comment():
 def test_the_shipped_authorization_is_quoted_in_the_file():
     """Belt and braces: the refusal above protects future hand edits, and this
     protects the record that exists now. An unquoted authorization is one typed
-    '#' away from being silently rewritten."""
+    '#' away from being silently rewritten.
+
+    The subject is "every row that claims bypassPermissions carries its typed
+    authorization, quoted, verbatim" -- not "there are exactly two authorization
+    lines". The row count is a census of what has been added so far; a third
+    bypassPermissions row is a new subject to check, not a reason to bump the
+    pin to 3."""
+    rows = sr.load_rows()
+    bypass_rows = [r for r in rows if r["permission"]["mode"] == "bypassPermissions"]
+    assert bypass_rows, "no bypassPermissions row shipped; nothing for this test to check"
+
     with open(sr.REGISTRY_PATH, "r", encoding="utf-8") as f:
         lines = [ln for ln in f if ln.strip().startswith("authorization:")]
-    assert len(lines) == 2, f"expected 2 authorization lines, found {len(lines)}"
-    quoted = [ln for ln in lines
-              if ln.split(":", 1)[1].strip() in ("null",)
-              or ln.split(":", 1)[1].strip().startswith('"')]
-    assert len(quoted) == 2, f"unquoted authorization value in models.yaml: {lines}"
+    quoted = [ln for ln in lines if ln.split(":", 1)[1].strip().startswith('"')]
+    assert len(quoted) == len(bypass_rows), (
+        f"expected {len(bypass_rows)} quoted authorization line(s), one per "
+        f"bypassPermissions row, found {len(quoted)}: {lines}")
+
+    for row in bypass_rows:
+        text = row["permission"]["authorization"]
+        assert text, f"{sr.row_key(row)} is bypassPermissions with no authorization text"
+        assert any(text in ln for ln in quoted), (
+            f"{sr.row_key(row)}'s authorization text is not present verbatim, "
+            f"quoted, in the file")
 
 
 @pytest.mark.parametrize("bad,why", [
@@ -543,27 +559,54 @@ def test_check_dispatch_refuses_a_pair_that_is_not_in_the_registry():
 # --------------------------------------------------------------------------- #
 # Seam 4 -- the shipped rows are the rows the panel measured
 # --------------------------------------------------------------------------- #
-def test_the_registry_ships_both_glm_rows():
+def test_the_registry_ships_the_glm_rows():
+    """The subject is "the two panel-measured GLM rows are still shipped", not
+    "the registry ships exactly these two rows and no others". A later row for
+    a different model (e.g. qwen3.6-35b-a3b) is growth, not drift; only a
+    missing GLM row or an unregistered model id is a real finding here."""
     rows = sr.load_rows()
-    keys = sorted(sr.row_key(r) for r in rows)
-    assert keys == [("glm-4.7", "claude-code"), ("glm-4.7", "pi")], keys
+    keys = set(sr.row_key(r) for r in rows)
+    glm_keys = {("glm-4.7", "claude-code"), ("glm-4.7", "pi")}
+    assert glm_keys <= keys, f"missing GLM row(s): {glm_keys - keys}"
+
+    import registry
+    for row in rows:
+        registry.resolve_model(row["model"] + "-local")
 
 
 def test_every_shipped_row_names_a_model_the_model_registry_knows():
     """The anti-duplication bind. runner/registry.py stays the single roster;
     this file adds a per-driver serving LAYER over it. If the two ever drift,
-    this test is what says so."""
+    this test is what says so.
+
+    "2" was the census when this was written (both GLM rows); the subject the
+    test protects is "every shipped row resolves", so the pin is the row
+    count itself, re-derived from the registry, plus a floor that catches an
+    accidentally-empty load_rows() the same way a bare loop-count pin would."""
     import registry
+    rows = sr.load_rows()
     inspected = []
-    for row in sr.load_rows():
+    for row in rows:
         registry.resolve_model(row["model"] + "-local")
         inspected.append(row["model"])
-    assert len(inspected) == 2, f"expected 2 rows, inspected {inspected}"
+    assert len(inspected) == len(rows)
+    assert len(inspected) >= 3, f"expected at least 3 shipped rows, inspected {inspected}"
 
 
 def test_the_shipped_rows_carry_the_panels_measured_serving_config():
+    """The prefill band is measured PER ROW, not a single constant every row
+    must share: claude-code's GLM rows were clocked at 57-71 tok/s, the qwen
+    row on a different loaded model at 1442-1594 tok/s. The subject each row
+    pins against is its own entry in this table; a row with no entry, or an
+    entry with no shipped row, is the finding."""
     rows = sr.load_rows()
+    expected_timeout = {
+        ("glm-4.7", "claude-code"): (57, 71),
+        ("glm-4.7", "pi"): (57, 71),
+        ("qwen3.6-35b-a3b", "claude-code"): (1442, 1594),
+    }
     inspected = []
+    shipped_keys = set()
     for row in rows:
         s = row["serving"]
         assert s["parallel"] == 1
@@ -572,18 +615,25 @@ def test_the_shipped_rows_carry_the_panels_measured_serving_config():
         assert s["temperature"] == 0
         assert s["seed"] == 42
         # deterministic_loops is the stage-0 probe's own verdict, not the
-        # panel's config: True only where a recorded noise_probe says 5/5
-        # identical (claude-code row, 2026-08-26 re-run, issue #8); the
-        # unprobed pi row stays False with noise_probe null.
+        # panel's config: True only where a recorded noise_probe says N/N
+        # identical; an unprobed row stays False with noise_probe null.
         if row["noise_probe"] is None:
             assert row["deterministic_loops"] is False
         else:
             assert row["deterministic_loops"] is True
             assert row["noise_probe"]["identical"] == row["noise_probe"]["of"]
-        assert row["timeout"]["prefill_tok_s_min"] == 57
-        assert row["timeout"]["prefill_tok_s_max"] == 71
-        inspected.append(sr.row_key(row))
-    assert len(inspected) == 2, f"expected 2 rows, inspected {inspected}"
+        key = sr.row_key(row)
+        shipped_keys.add(key)
+        assert key in expected_timeout, (
+            f"shipped row {key} has no entry in the expected serving/timeout "
+            f"table; a new row needs a measured prefill band added here")
+        exp_min, exp_max = expected_timeout[key]
+        assert row["timeout"]["prefill_tok_s_min"] == exp_min, key
+        assert row["timeout"]["prefill_tok_s_max"] == exp_max, key
+        inspected.append(key)
+    missing = set(expected_timeout) - shipped_keys
+    assert not missing, f"table entries with no shipped row: {missing}"
+    assert len(inspected) == len(rows)
 
 
 def test_the_claude_code_row_carries_the_typed_authorization():

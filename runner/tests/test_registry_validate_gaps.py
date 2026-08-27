@@ -68,11 +68,24 @@ def test_validate_never_summarises_a_gap_as_a_bare_ok(capsys):
 
 def test_the_gap_count_is_stated_not_just_the_inspected_count(capsys):
     """Counting subjects is half of it; a reader also needs to know how many of
-    them cleared the bar."""
+    them cleared the bar.
+
+    "2" was the row census when this was written; the subject is "the printed
+    inspected-count matches the file's actual row count" and, separately, "the
+    printed gap count matches the file's actual gaps" -- both re-derived here
+    from the registry rather than hardcoded, so a third row (or a row that
+    closes a gap) does not silently detach the pin from what it protects."""
+    rows = sr.load_rows()
+    expected_gaps = sum(
+        (1 if row.get("reasoning_probe") is None else 0)
+        + (1 if row.get("noise_probe") is None else 0)
+        for row in rows
+    )
     _code, out = validate(capsys=capsys)
 
-    assert "rows inspected: 2" in out
-    assert "gap" in out.lower()
+    assert f"rows inspected: {len(rows)}" in out
+    assert f"{expected_gaps} evidence gap(s)" in out, (
+        f"expected {expected_gaps} evidence gap(s) stated in:\n{out}")
 
 
 def test_a_gap_does_not_fail_the_command(capsys):
