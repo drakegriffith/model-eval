@@ -171,6 +171,12 @@ request after load; decode 53.85 tok/s on a 600-token sample, all visible
 content, zero reasoning tokens. Drake launched the probe from his shell
 (same classifier refusal as the qwen probe).
 
+Table enumerator: results.jsonl rows filtered on sweep (glm-stage0 /
+qwen3.6-35b-a3b-stage0 / qwen3-coder-next-stage0), task t3-a, and
+exit_reason ok. The GLM sweep has 10 such t3-a rows, of which 5 are ok
+(the other 5 are cli_error aborts, pass=False, excluded from the pass
+denominator per the registered estimand); both qwen sweeps are 5 of 5 ok.
+
 | t3-a | GLM 4.7 (PR #55) | Qwen3.6-35B-A3B (PR #60) | Qwen3-Coder-Next |
 |---|---|---|---|
 | pass | 5/5, 0 flips | 5/5, 0 flips | 5/5, 0 flips |
@@ -186,9 +192,12 @@ reps (wall_s max/min ratio 6.15, the probe's own line). One rep in five
 took a 10x-turn detour and still passed; it alone sets the derived turn
 cap N=1250 (3 x max(turns), the same rule that gave Qwen3.6 N=80). The
 pass rate matches Qwen3.6; the variance does not. On the numbers
-measured so far Qwen3.6-35B-A3B stays the recommended substitute:
-roughly 30 percent faster prefill and decode, and turn counts four reps
-of five tighter, with no detour rep in its probe. The fact that would
+measured so far Qwen3.6-35B-A3B stays the recommended substitute: 37 to
+65 percent faster prefill (1442-1594 vs 875-1163 tok/s), 11 percent
+faster decode (59.8 vs 53.85; caveat: the two 600-token samples differ
+in composition, qwen's was all reasoning tokens and coder-next's all
+visible content), and turn counts four reps of five tighter, with no
+detour rep in its probe. The fact that would
 flip this: a Coder-Next stage 1 showing the detour behavior is confined
 to this one rep while its per-task pass rate beats Qwen3.6's on t4/t5.
 
