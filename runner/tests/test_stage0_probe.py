@@ -247,6 +247,27 @@ def test_tag_stage0_does_not_mutate_its_input():
     assert "stage" not in rows[0], "tag_stage0 must return a new list, not mutate in place"
 
 
+def test_sweep_filter_tags_only_rows_of_the_named_sweep_not_the_default():
+    """Generalization check (issue: make stage0_probe model-agnostic): a
+    NON-default sweep name -- distinct from DEFAULT_SWEEP/'glm-stage0' --
+    must still be the only thing tag_stage0 stamps, and a glm-stage0 row
+    living alongside it in the same results file must come back untouched.
+    Catches a hardcode to the literal 'glm-stage0' that the identically-
+    named fixture in test_tag_stage0_stamps_only_matching_sweep_rows above
+    could not, because that test's own sweep argument happens to equal the
+    module's DEFAULT_SWEEP."""
+    rows = [_row(sweep="qwen3-coder-next-stage0"),
+            _row(sweep="qwen3-coder-next-stage0"),
+            _row(sweep="glm-stage0")]
+    assert len(rows) == 3, f"expected 3 fixture rows, built {len(rows)}"
+    tagged = stage0_probe.tag_stage0(rows, sweep="qwen3-coder-next-stage0")
+    stamped = [r for r in tagged if r.get("stage") == 0]
+    untouched = [r for r in tagged if "stage" not in r]
+    assert len(stamped) == 2, f"expected 2 stamped rows, saw {len(stamped)}"
+    assert len(untouched) == 1, f"expected 1 untouched row, saw {len(untouched)}"
+    assert untouched[0]["sweep"] == "glm-stage0"
+
+
 # --------------------------------------------------------------------------- #
 # Seam 3 -- the #8 comment text names every derived number
 # --------------------------------------------------------------------------- #
@@ -277,6 +298,21 @@ def test_render_comment_marks_a_provisional_probe_and_states_what_was_lost():
     assert "timeout=1" in text
     assert "4/4/5" not in text  # scored/produced/dispatched, not a typo'd order
     assert "4" in text and "5" in text
+
+
+def test_render_comment_names_the_model_it_was_given():
+    """Generalization check: render_comment's model=/driver= are not decorative
+    -- a caller running this probe against a second model must see THAT
+    model's name in the #8 comment, not a 'glm-4.7' left over from the
+    function's own default."""
+    rows = [_row(pass_=True, turns=2) for _ in range(5)]
+    d = stage0_probe.derive_stage0(rows)
+    text = stage0_probe.render_comment(d, task="t3-a", date="2026-08-25",
+                                       model="qwen3-coder-next",
+                                       driver="claude-code")
+    assert "qwen3-coder-next" in text
+    assert "glm-4.7" not in text
+    assert "Recorded to registry: qwen3-coder-next x claude-code" in text
 
 
 # --------------------------------------------------------------------------- #
@@ -403,20 +439,13 @@ def live_files_untouched():
         f"{list(zip(paths, before, after))}")
 
 
-@pytest.fixture
-def stage0_fixture_matrix(tmp_path):
-    """A minimal, fast, network-free matrix that still gates against the
-    REAL glm-4.7 x claude-code registry row -- the serving block below is
-    copied verbatim from runs-glm-stage0.yaml / runs-glm-stage1.yaml, and
-    the task name deliberately does not start with t<digit>, so
-    resolve_timeout_s falls through to timeout_default_s instead of
-    requiring a tier-specific key. Graded by `exit 0`, solved by `git
-    apply`, same trick as test_corpus_pinning.py's fabricated_matrix: this
-    proves stage0_probe's OWN plumbing, not the real t3-a task's runtime
-    (that would need network for pip install; see runs-glm-stage0.yaml's
-    task-choice comment for why t3-a is still the right choice for a REAL
-    run).
-    """
+def _build_stage0_matrix(tmp_path, model_id="glm-4.7-local", sweep="glm-stage0"):
+    """The guts of `stage0_fixture_matrix` below, parameterized by
+    model/sweep so the SAME network-free plumbing proof (graded by `exit 0`,
+    solved by `git apply`, task name that deliberately does not start with
+    t<digit> so resolve_timeout_s falls through to timeout_default_s) can be
+    re-run for a second --model/--sweep pair (issue: generalize stage0_probe
+    beyond glm-4.7) without duplicating the fixture-task setup."""
     tasks_dir = tmp_path / "tasks"
     task_dir = tasks_dir / "fixture-task"
     base = task_dir / "base"
@@ -452,19 +481,52 @@ def stage0_fixture_matrix(tmp_path):
         "  seed: 1337\n"
         "  k_acceptance: 20\n"
         "sweeps:\n"
-        "  - name: glm-stage0\n"
+        f"  - name: {sweep}\n"
         "    driver: claude-code\n"
         "    harness: false\n"
         "    reps: [1, 2, 3, 4, 5]\n"
         "    tasks: [fixture-task]\n"
         "    configs:\n"
-        "      - {model: glm-4.7-local, effort: high}\n",
+        f"      - {{model: {model_id}, effort: high}}\n",
         encoding="utf-8")
 
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     return {"config": str(config), "tasks_dir": str(tasks_dir),
             "scratch": str(scratch)}
+
+
+@pytest.fixture
+def stage0_fixture_matrix(tmp_path):
+    """A minimal, fast, network-free matrix that still gates against the
+    REAL glm-4.7 x claude-code registry row -- the serving block below is
+    copied verbatim from runs-glm-stage0.yaml / runs-glm-stage1.yaml, and
+    the task name deliberately does not start with t<digit>, so
+    resolve_timeout_s falls through to timeout_default_s instead of
+    requiring a tier-specific key. Graded by `exit 0`, solved by `git
+    apply`, same trick as test_corpus_pinning.py's fabricated_matrix: this
+    proves stage0_probe's OWN plumbing, not the real t3-a task's runtime
+    (that would need network for pip install; see runs-glm-stage0.yaml's
+    task-choice comment for why t3-a is still the right choice for a REAL
+    run).
+    """
+    return _build_stage0_matrix(tmp_path, model_id="glm-4.7-local",
+                                sweep="glm-stage0")
+
+
+@pytest.fixture
+def stage0_fixture_matrix_qwen(tmp_path):
+    """Same network-free plumbing proof as `stage0_fixture_matrix`, for
+    qwen3-coder-next-local/qwen3-coder-next-stage0 instead of glm-4.7-local/
+    glm-stage0 -- proves --model/--sweep/--config are threaded through
+    run_stage0/tag_stage0, not hardcoded to the GLM defaults. qwen3-coder-
+    next-local has no row in the live registry yet (a --model with no row is
+    UNGATED, not refused -- run.py's own `if row_model in gated_models`
+    branch), so this fixture-task matrix dispatches under --mock exactly
+    like the gated glm-4.7 one above, without needing a live row at all.
+    """
+    return _build_stage0_matrix(tmp_path, model_id="qwen3-coder-next-local",
+                                sweep="qwen3-coder-next-stage0")
 
 
 def test_end_to_end_mock_run_tags_five_rows_but_refuses_to_record(
@@ -522,6 +584,122 @@ def test_end_to_end_mock_run_tags_five_rows_but_refuses_to_record(
     # teardown).
     after_registry_copy = registry_copy.read_text(encoding="utf-8")
     assert after_registry_copy == before_registry_copy
+
+
+def _scratch_registry_with_qwen_row(tmp_path, serving):
+    """A scratch registry copy carrying the REAL rows plus one fixture
+    qwen3-coder-next x claude-code row built here, never written to the live
+    models.yaml -- that row needs a measured prefill rate (rule 7,
+    sr.new_row) the conductor takes after the model loads, which is not a
+    fact this test is in a position to assert. prefill_tok_s=1.0 below is a
+    placeholder that satisfies the rule's "truthy" check only; it is not a
+    measurement of anything and must never leak into a real row.
+    """
+    rows = sr.load_rows(REAL_REGISTRY)
+    rows.append(sr.new_row(
+        "qwen3-coder-next", "claude-code", serving, prefill_tok_s=1.0))
+    registry_copy = tmp_path / "models.yaml"
+    registry_copy.write_text(sr.dump_registry_yaml({"models": rows}),
+                             encoding="utf-8")
+    return registry_copy
+
+
+def test_end_to_end_mock_run_generalizes_to_a_second_model_via_flags(
+        live_files_untouched, stage0_fixture_matrix_qwen, tmp_path, monkeypatch):
+    """The stop-condition proof for generalizing stage0_probe beyond GLM:
+    --model/--sweep/--config, all pointed at a second model
+    (qwen3-coder-next / qwen3-coder-next-stage0), drive main() through the
+    same dispatch+tag+refuse path test_end_to_end_mock_run_tags_five_rows_
+    but_refuses_to_record proves for glm-4.7/glm-stage0 -- proving the three
+    new flags are actually threaded through run_preflight/run_stage0/
+    tag_stage0/finalize_stage0/render_comment, not just accepted and
+    ignored. Still refused at exit 2: every --mock row is unscored
+    regardless of which model it names.
+    """
+    results = tmp_path / "results.jsonl"
+    registry_copy = _scratch_registry_with_qwen_row(
+        tmp_path, {"parallel": 1, "context_length": 131072,
+                  "max_tokens_floor": 8192, "temperature": 0, "seed": 42,
+                  "quant": "unknown"})
+    before_registry_copy = registry_copy.read_text(encoding="utf-8")
+
+    monkeypatch.chdir(RUNNER_DIR)
+    proc = subprocess.run(
+        [sys.executable, "stage0_probe.py",
+         "--model", "qwen3-coder-next",
+         "--driver", "claude-code",
+         "--sweep", "qwen3-coder-next-stage0",
+         "--config", stage0_fixture_matrix_qwen["config"],
+         "--tasks-dir", stage0_fixture_matrix_qwen["tasks_dir"],
+         "--scratch", stage0_fixture_matrix_qwen["scratch"],
+         "--results", str(results),
+         "--registry-path", str(registry_copy),
+         "--date", "2026-08-25",
+         "--mock"],
+        cwd=RUNNER_DIR, capture_output=True, text=True)
+
+    assert proc.returncode == stage0_probe.CANNOT_DETERMINE_EXIT, \
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    assert "0 of 5" in proc.stderr
+    assert "mock" in proc.stderr.lower()
+    assert "Stage 0 noise probe" not in proc.stdout, (
+        "no comment may print for a refused probe")
+
+    assert results.exists(), "stage0_probe did not write a results file"
+    rows = [json.loads(l) for l in results.read_text(encoding="utf-8").splitlines()
+            if l.strip()]
+    assert len(rows) == 5, f"expected 5 rows, found {len(rows)}"
+    assert all(r["stage"] == 0 for r in rows), "not every row was tagged stage: 0"
+    assert all(r["sweep"] == "qwen3-coder-next-stage0" for r in rows), (
+        "rows must be tagged with the --sweep this invocation named, not "
+        "the module's DEFAULT_SWEEP ('glm-stage0')")
+    assert all(r["exit_reason"] == "mock" for r in rows)
+
+    assert "preflight: skipped" in proc.stdout
+
+    after_registry_copy = registry_copy.read_text(encoding="utf-8")
+    assert after_registry_copy == before_registry_copy
+
+
+def test_wrong_sweep_flag_raises_the_row_count_mismatch_not_a_pass(
+        live_files_untouched, stage0_fixture_matrix_qwen, tmp_path, monkeypatch):
+    """Mutation control: a --sweep that does not match the sweep the config
+    actually declares (here, the default 'glm-stage0' against a config whose
+    sweep is 'qwen3-coder-next-stage0') must find 0 rows tagged and raise
+    the SAME 'produced N, expected M' RuntimeError main() already raises for
+    a short/long dispatch -- never silently pass with an empty derivation.
+    Proves --sweep is a real filter, not a flag that is accepted and never
+    consulted."""
+    results = tmp_path / "results.jsonl"
+    registry_copy = _scratch_registry_with_qwen_row(
+        tmp_path, {"parallel": 1, "context_length": 131072,
+                  "max_tokens_floor": 8192, "temperature": 0, "seed": 42,
+                  "quant": "unknown"})
+
+    monkeypatch.chdir(RUNNER_DIR)
+    proc = subprocess.run(
+        [sys.executable, "stage0_probe.py",
+         "--model", "qwen3-coder-next",
+         "--driver", "claude-code",
+         # --sweep deliberately omitted: defaults to DEFAULT_SWEEP
+         # ('glm-stage0'), which this config never declares.
+         "--config", stage0_fixture_matrix_qwen["config"],
+         "--tasks-dir", stage0_fixture_matrix_qwen["tasks_dir"],
+         "--scratch", stage0_fixture_matrix_qwen["scratch"],
+         "--results", str(results),
+         "--registry-path", str(registry_copy),
+         "--date", "2026-08-25",
+         "--mock"],
+        cwd=RUNNER_DIR, capture_output=True, text=True)
+
+    assert proc.returncode != 0, "a sweep-name mismatch must not exit 0"
+    assert proc.returncode != stage0_probe.CANNOT_DETERMINE_EXIT, (
+        "this is a row-count mismatch (RuntimeError raised directly in "
+        "main(), never caught), a different refusal than the ValueError/"
+        "RuntimeError finalize_stage0 raises for 0-scored rows")
+    assert "produced 0 row(s)" in proc.stderr
+    assert "expected 5" in proc.stderr
+    assert "Stage 0 noise probe" not in proc.stdout
 
 
 def test_mock_against_the_live_registry_path_is_refused(

@@ -100,6 +100,14 @@ import serving_registry as sr  # noqa: E402
 
 DEFAULT_CONFIG = os.path.join(HERE, "runs-glm-stage0.yaml")
 DEFAULT_SWEEP = "glm-stage0"
+# The model/driver this probe measures by default -- GLM stage 0, issue #26.
+# Every function below that takes model=/driver= defaults to these two so an
+# unqualified call (every existing call site, every existing test) is
+# byte-identical to before --model/--driver/--sweep existed on the CLI; a
+# second model rides the same probe by passing --model/--driver/--sweep/
+# --config, never by editing these.
+DEFAULT_MODEL = "glm-4.7"
+DEFAULT_DRIVER = "claude-code"
 K_FLIP_THRESHOLD = 10  # A1: "any rep reaching >= 10 acceptance requests"
 
 # "Could not determine" -- distinct from corpus_guard.REFUSE_EXIT (3), which
@@ -233,7 +241,7 @@ def tag_stage0(rows, sweep=DEFAULT_SWEEP):
     return out
 
 
-def render_comment(derived, task, model="glm-4.7", driver="claude-code",
+def render_comment(derived, task, model=DEFAULT_MODEL, driver=DEFAULT_DRIVER,
                    date=None, dispatched=None):
     """The text amendments A1/A3/A6 mandate be posted to model-eval issue #8
     before anything past stage 0 runs, carrying every derived number plus,
@@ -303,7 +311,7 @@ def write_jsonl(path, rows):
             f.write(json.dumps(row) + "\n")
 
 
-def run_preflight(registry_path, model="glm-4.7", driver="claude-code",
+def run_preflight(registry_path, model=DEFAULT_MODEL, driver=DEFAULT_DRIVER,
                   lms_output=None):
     """Call serving_registry.cmd_preflight in-process (no subprocess of our
     own) against the live LM Studio, and return its exit code unchanged (0
@@ -318,9 +326,11 @@ def run_preflight(registry_path, model="glm-4.7", driver="claude-code",
     return sr.cmd_preflight(ns)
 
 
-def run_stage0(config, results, scratch, tasks_dir=None, mock=False):
+def run_stage0(config, results, scratch, tasks_dir=None, mock=False,
+              sweep=DEFAULT_SWEEP):
     """Invoke run.py as a subprocess for `config`, then read back and tag
-    (in place, on disk) exactly the rows belonging to this probe's sweep.
+    (in place, on disk) exactly the rows belonging to `sweep` (default: this
+    probe's own GLM sweep).
 
     Raises rather than returning a short list: a stage-0 probe that produced
     fewer (or more) than the 5 rows its config declared is not a probe
@@ -340,10 +350,10 @@ def run_stage0(config, results, scratch, tasks_dir=None, mock=False):
             f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}")
 
     all_rows = read_jsonl(results)
-    tagged_all = tag_stage0(all_rows, sweep=DEFAULT_SWEEP)
+    tagged_all = tag_stage0(all_rows, sweep=sweep)
     write_jsonl(results, tagged_all)
 
-    probe_rows = [r for r in tagged_all if r.get("sweep") == DEFAULT_SWEEP]
+    probe_rows = [r for r in tagged_all if r.get("sweep") == sweep]
     return probe_rows
 
 
@@ -352,7 +362,7 @@ def _guess_task(rows):
     return tasks[0] if len(tasks) == 1 else "/".join(tasks) or "(unknown task)"
 
 
-def finalize_stage0(rows, registry_path, model="glm-4.7", driver="claude-code",
+def finalize_stage0(rows, registry_path, model=DEFAULT_MODEL, driver=DEFAULT_DRIVER,
                     date=None, task=None, dispatched=None):
     """Derive, decide whether to record, and render the comment -- one place
     so main() and tests share the exact same control flow.
@@ -391,6 +401,17 @@ def finalize_stage0(rows, registry_path, model="glm-4.7", driver="claude-code",
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--config", default=DEFAULT_CONFIG)
+    ap.add_argument("--model", default=DEFAULT_MODEL,
+                    help="registry model name (no -local suffix -- the "
+                         "config's own serving/configs blocks carry that, "
+                         "same convention as glm-4.7 today; default: "
+                         f"{DEFAULT_MODEL!r})")
+    ap.add_argument("--driver", default=DEFAULT_DRIVER,
+                    help=f"registry driver name (default: {DEFAULT_DRIVER!r})")
+    ap.add_argument("--sweep", default=DEFAULT_SWEEP,
+                    help="sweep name this probe's config declares -- what "
+                         "tag_stage0/run_stage0 filter results.jsonl on "
+                         f"(default: {DEFAULT_SWEEP!r})")
     ap.add_argument("--results", required=True,
                     help="where run.py writes this probe's rows (must be a "
                          "scratch path under --mock; see corpus_guard)")
@@ -441,24 +462,26 @@ def main(argv=None):
             sys.exit(corpus_guard.REFUSE_EXIT)
         print("preflight: skipped (--mock never contacts LM Studio)")
     else:
-        code = run_preflight(args.registry_path,
+        code = run_preflight(args.registry_path, model=args.model,
+                             driver=args.driver,
                              lms_output=args.preflight_lms_output)
         if code != 0:
             sys.exit(code)
 
     rows = run_stage0(args.config, args.results, args.scratch,
-                      tasks_dir=args.tasks_dir, mock=args.mock)
+                      tasks_dir=args.tasks_dir, mock=args.mock,
+                      sweep=args.sweep)
     if len(rows) != args.expected_reps:
         raise RuntimeError(
-            f"stage-0 sweep {DEFAULT_SWEEP!r} produced {len(rows)} row(s) "
+            f"stage-0 sweep {args.sweep!r} produced {len(rows)} row(s) "
             f"in {args.results!r}, expected {args.expected_reps}: rows "
             f"produced / rows dispatched must match, or this is not a "
             f"probe result")
 
     try:
         comment, _recorded = finalize_stage0(
-            rows, args.registry_path, date=args.date,
-            dispatched=args.expected_reps)
+            rows, args.registry_path, model=args.model, driver=args.driver,
+            date=args.date, dispatched=args.expected_reps)
     except (ValueError, RuntimeError) as e:
         print(f"stage0_probe: refused -- {e}", file=sys.stderr)
         sys.exit(CANNOT_DETERMINE_EXIT)
