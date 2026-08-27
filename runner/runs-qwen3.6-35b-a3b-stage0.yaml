@@ -12,27 +12,31 @@
 # runs-glm-stage1.yaml: it is the declaration runner/run.py's serving gate
 # reads before the first CLI call.
 #
-# GAP, disclosed rather than worked around: on this branch, runner/
-# stage0_probe.py (unchanged here, per this ticket's scope) still hardcodes
-# DEFAULT_CONFIG=runs-glm-stage0.yaml and DEFAULT_SWEEP="glm-stage0"; it has
-# no --model/--sweep flag yet. PR #57 (open, branch
-# feat/stage0-probe-model-flag, NOT merged and NOT the base of this file)
-# adds exactly that flag, with a documented invocation of the shape:
+# On master at or after cde2cc9 (PR #57, feat/stage0-probe-model-flag,
+# merged 2026-08-26), runner/stage0_probe.py takes --model/--driver/--sweep,
+# and the documented invocation for this file is:
 #
-#   python3 runner/stage0_probe.py --model qwen3-coder-next \
-#       --sweep qwen3-coder-next-stage0 \
-#       --config runner/runs-qwen3-coder-next-stage0.yaml \
+#   python3 runner/stage0_probe.py --model qwen3.6-35b-a3b \
+#       --sweep qwen3.6-35b-a3b-stage0 \
+#       --config runner/runs-qwen3.6-35b-a3b-stage0.yaml \
 #       --results <scratch>/results.jsonl --scratch <scratch>/.scratch \
 #       --registry-path <scratch>/models.yaml [--mock]
 #
-# Until PR #57 (or equivalent) lands, running THIS file through
-# stage0_probe.py with only --config would still tag rows under the
-# hardcoded "glm-stage0" sweep name, not "qwen3.6-35b-a3b-stage0" --
-# stage0_probe.py's --config swap alone does not follow the sweep name
-# inside it. This file registers the config and the serving gate's pinned
-# values now; wiring a runnable stage-0 invocation for this id is out of
-# scope for this ticket (no inference; stage0_probe.py untouched) and is
-# the same follow-up PR #57 already exists to do for qwen3-coder-next-local.
+# This runs end to end: under --mock, run_stage0 dispatches and tags 5 rows
+# under the "qwen3.6-35b-a3b-stage0" sweep, exactly as this file declares.
+# What still refuses, correctly, is the registry write finalize_stage0
+# attempts after those 5 rows come back: qwen3.6-35b-a3b-local has no
+# serving row in runner/models.yaml yet (registry.py only declares it
+# local-family; models.yaml itself is untouched, per this ticket's scope
+# and the no-inference constraint). sr.find_row has nothing to return for
+# that (model, driver) pair and raises; finalize_stage0 catches it and the
+# probe exits CANNOT_DETERMINE_EXIT (2) rather than fabricating a registry
+# write. There is no row to add yet either: serving_registry.py's rule 7
+# ("the timeout basis is a measured prefill rate, not a guess") requires a
+# prefill rate measured with the model actually loaded before a row for it
+# can be created at all, which this ticket does not do (no inference).
+# The exit-2 refusal is the correct floor-phase signal for a model nobody
+# has measured yet, not a defect in this file or in stage0_probe.py.
 #
 # TASK CHOICE: t3-a ("splitcost", a CLI-build task), the sole task at the
 # tier sitting in the middle of the t1-t5 gauntlet ladder. Picked over any of
