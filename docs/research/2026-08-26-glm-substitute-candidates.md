@@ -1,0 +1,121 @@
+# GLM 4.7 substitute: open-weights models ranked near it that decode faster on the Mac Studio
+
+Date: 2026-08-26. Funding sentence (Drake): "another model that at least ranked
+publicly similarly will most likely have a similar skill set - find that model,
+but it MUST run faster than GLM 4.7 locally."
+
+Method: two Sonnet research seats (leaderboards; Apple Silicon throughput), one
+Opus verify seat that re-derived every load-bearing number from primary sources
+(vendor HF cards and config.json, HF API file trees, swebench.com, tbench.ai,
+Artificial Analysis model pages, `gh api` on llama.cpp issues). Seat outputs
+and the disagreement log are in this session's transcript; only verified values
+appear below. Trailhead preflight: no prior art on candidate names in the vault,
+model-eval, or claude-harness; `runner/registry.py:122` already registers
+`qwen3-coder-next-local` (family local, no serving row), which this doc adopts.
+
+## Fixed facts (this machine)
+
+- Mac Studio, Apple M3 Ultra, 256 GB. LM Studio, llama.cpp GGUF engine,
+  PARALLEL=1, context 131072.
+- Incumbent GLM 4.7: 355B total / 32B active, GQA 96/8, 92 layers, MIT.
+  unsloth UD-Q3_K_XL, 158.74 GB (= 147.84 GiB; the "148 GB on disk" and
+  "158.74 GB loaded" figures were one number in two units). 3.58 bpw, so
+  14.3 GB of expert weights per decoded token.
+- Measured decode: 8.6 tok/s at stage-0 context (31988 tok / 61.9 min);
+  median 20 tok/s over 713 requests on 2026-08-25/26 server logs; prefill
+  58-147 tok/s on prompts over 2k tokens. 8.6 tok/s is 15% of the 819 GB/s
+  bandwidth ceiling, so most decode time is attention and MoE overhead, not
+  weight streaming. Byte ratios below are upper bounds on speedup.
+
+## What the verify seat refuted
+
+1. Every SWE-bench Verified number in circulation for these models (GLM 4.7
+   73.8, Qwen3.6-35B-A3B 73.4, Step-3.5-Flash 74.4, Qwen3-Coder-Next 70.6) is a
+   vendor self-report under an unnamed or differing scaffold. None of the four
+   is on swebench.com. They are not comparable to each other.
+2. Terminal-Bench 2.0 reverses sign on the official board: vendor cards say
+   Qwen3.6-35B-A3B 51.5 vs GLM 4.7 41.0; tbench.ai says GLM 4.7 33.4 (Terminus
+   2, verified) vs Qwen3.6-35B-A3B 24.6 (little-coder, unverified). Different
+   harnesses; no clean pair exists.
+3. Both seats' "71 tok/s" and "74 tok/s on M3 Ultra" are not llama.cpp
+   measurements: willitrunai.com computes estimates from spec sheets;
+   siliconscore's 74 tok/s is MLX, unstated context, sourced from Reddit.
+   The one primary-source benchmark (github.com/stared/benching-local-llms-on-apple-silicon)
+   is an M5 Max 128 GB: Qwen3.6-35B-A3B Q8 on llama.cpp+MTP 105 tok/s at
+   128 ctx, 97 at 8k.
+4. llama.cpp issues cited as live risks are closed: #22581 and #15012 (Qwen
+   tool-call parser) closed completed; #19081 (GLM-4.7-Flash slow) closed
+   not_planned. #26965 (DeepSeek V4 Flash tokenizer on long tool output) is
+   open, bug-unconfirmed.
+
+## The one independent board holding all candidates
+
+Artificial Analysis Intelligence Index (reasoning mode where available):
+GLM 4.7 34 · Qwen3.6-35B-A3B 32 · MiniMax-M2.7 39 · Step-3.5-Flash 27 ·
+Qwen3-Coder-Next 21 (non-thinking only). Composite includes HLE, GPQA,
+CritPt; the per-eval breakdown is client-rendered and was not extracted.
+
+## Candidate table (verified values)
+
+| Model | Total/Active | Attention | License | GGUF (repo, quant, size) | Weight bytes/tok | Ratio vs GLM 4.7 | Release |
+|---|---|---|---|---|---|---|---|
+| GLM 4.7 | 355B/32B | GQA 96/8 | MIT | unsloth UD-Q3_K_XL 158.74 GB | 14.3 GB | 1.0x | 2025-12-22 |
+| Qwen3-Coder-Next | 80B/3B | Gated DeltaNet 3:1 full attn, GQA 16/2 | Apache-2.0 | lmstudio-community Q4_K_M 48.49 GB; Q6_K 65.53 GB | 1.82 / 2.46 GB | 7.9x / 5.8x | 2026-01-30 |
+| Qwen3.6-35B-A3B | 35B/3B (vision-language) | Gated DeltaNet 3:1, GQA 16/2, MTP | Apache-2.0 | unsloth UD-Q6_K_XL 31.84 GB; Q8_0 36.90 GB; lmstudio-community present | 2.73 / 3.16 GB | 5.2x / 4.5x | 2026-04-15 |
+| MiniMax-M2.7 | 240B/~10B | not confirmed | other | lmstudio-community Q4_K_M 138.34 GB | 5.75 GB | 2.5x | 2026-04-09 |
+| Step-3.5-Flash | 196B/11B | sliding window 512, 3:1 | Apache-2.0 | ggml-org Q4_K 118.71 GB; no lmstudio-community repo | 6.63 GB | 2.2x | 2026-02-01 |
+
+Ratios are weight-byte ratios. The Gated DeltaNet models also shrink the
+attention term (2 KV heads, 1 in 4 layers full attention) which is where GLM
+loses 85% of its ceiling, so the realized speedup on the two Qwen models
+should be at least the byte ratio; unmeasured on this machine.
+
+## Tool-calling and llama.cpp state (checked 2026-08-26)
+
+- Qwen3-Coder-Next: Qwen XML tool format, vendor deploy line uses
+  `--tool-call-parser qwen3_coder`; card names Claude Code as a target
+  harness. Issues #19382, #19430, #20164 (tool-call JSON, crashes,
+  long-context tool failures) all closed. Non-thinking only.
+- Qwen3.6-35B-A3B: same tool format. Open: #27767 (tool_choice not enforced,
+  opened 2026-08-26), #26817 (temp-0 tool calling nondeterministic across
+  prompt-cache mode and restarts, 2026-08-09), #26425 (MTP build retains
+  inter-request state, nondeterministic output). Metal gated_delta_net cache
+  fusion is an open PR (#25788), affecting both Qwen models.
+- Step-3.5-Flash: three issues, all closed. Manual GGUF import required.
+- MiniMax-M2.7: beats GLM 4.7 on both independent boards (AA 39, official
+  TB2 45.1 vs 33.4) but only 2.5x, license `other`, 138 GB.
+
+## Recommendation
+
+Download two, probe both, let the existing stage-0 probe decide:
+
+1. Qwen3-Coder-Next, lmstudio-community Q6_K (65.53 GB). Fastest class,
+   purpose-built for coding agents with claude-code named on the card, seven
+   months of closed llama.cpp tool-call fixes, and the runner already names
+   `qwen3-coder-next-local`. Cost: AA index 21 vs 34, no Terminal-Bench entry,
+   no thinking mode, so it may fail t4/t5 where GLM would not.
+2. Qwen3.6-35B-A3B, unsloth UD-Q6_K_XL (31.84 GB), non-MTP build. Closest
+   public rank to GLM 4.7 (AA 32). Cost: two open temp-0 tool-calling
+   determinism bugs on exactly this stack's doctrine (deterministic loops,
+   noise probe), and it carries unused vision weights.
+
+Rejected: Step-3.5-Flash (2.2x is not materially faster; 119 GB plus KV is a
+fit risk; manual import; its only edge is a vendor SWE-bench number).
+MiniMax-M2.7 is the fallback if 5x turns out not to be realized on this
+machine and rank matters more than speed.
+
+Flips-if: the stage-0 probe on t3-a. GLM 4.7 passed 5/5 with 0 flips at
+16-81 min per rep. A candidate that fails t3-a is out regardless of speed;
+one that passes 5/5 in under 10 min per rep replaces GLM for stage 1.
+
+## Next steps (human-gated)
+
+1. Drake: download the two GGUFs, load one in LM Studio at PARALLEL=1,
+   context 131072, temp 0, seed 42. LM Studio is human-only.
+2. Agent: add a `runner/models.yaml` serving row for the loaded model with
+   quant read from the file name (no measured fields invented), then run the
+   stage-0 probe (5 sequential reps, t3-a, effort high) via
+   `runner/stage0_probe.py --model <id>`; the probe derives reps, N, and the
+   wall-clock backstop from its own rows.
+3. Repeat for the second model. Compare pass, flip rate, wall_s, tokens_out
+   in one table with the GLM 4.7 stage-0 rows from PR #55.
