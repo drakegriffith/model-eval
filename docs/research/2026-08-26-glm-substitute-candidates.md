@@ -22,8 +22,12 @@ model-eval, or claude-harness; `runner/registry.py:122` already registers
   "158.74 GB loaded" figures were one number in two units). 3.58 bpw, so
   14.3 GB of expert weights per decoded token.
 - Measured decode: 8.6 tok/s at stage-0 context (31988 tok / 61.9 min);
-  median 20 tok/s over 713 requests on 2026-08-25/26 server logs; prefill
-  58-147 tok/s on prompts over 2k tokens. 8.6 tok/s is 15% of the 819 GB/s
+  median 9.9 tok/s over the 356 llama.cpp `eval time` lines in the
+  2026-08-25/26 server logs (max 27.4; the verify seat's enumerator, which
+  replaces an earlier "median 20 over 713 lines" figure whose filter also
+  counted non-decode lines); prefill 58-147 tok/s over the 26 `prompt eval`
+  lines with prompts over 2k tokens (registry row pins 57-71 from the
+  2026-08-25 panel, a narrower enumerator). 8.6 tok/s is 15% of the 819 GB/s
   bandwidth ceiling, so most decode time is attention and MoE overhead, not
   weight streaming. Byte ratios below are upper bounds on speedup.
 
@@ -68,7 +72,8 @@ CritPt; the per-eval breakdown is client-rendered and was not extracted.
 Ratios are weight-byte ratios. The Gated DeltaNet models also shrink the
 attention term (2 KV heads, 1 in 4 layers full attention) which is where GLM
 loses 85% of its ceiling, so the realized speedup on the two Qwen models
-should be at least the byte ratio; unmeasured on this machine.
+should be at least the byte ratio; unmeasured on this machine when this
+section was written (see "Measured 2026-08-27" below for Qwen3.6-35B-A3B).
 
 ## Tool-calling and llama.cpp state (checked 2026-08-26)
 
@@ -110,15 +115,22 @@ one that passes 5/5 in under 10 min per rep replaces GLM for stage 1.
 
 ## Measured 2026-08-27: Qwen3.6-35B-A3B stage 0 (PR #60, master d75d25d)
 
-Drake lifted the LM Studio rule for this work ("You drive it on your end").
-Loaded unsloth UD-Q6_K_XL (33.63 GB) at parallel 1 / context 131072, GLM
-unloaded. Conductor-measured on the loaded model: prefill 1442 / 1563 /
-1594 tok/s on three fresh 11.4k-token prompts (GLM 57-147); decode 59.8
-tok/s short-context (GLM ~20). Registry row hand-applied (#51); Drake
-launched the probe from his shell after the permission classifier refused
-the conductor the `claude -p` spawning command.
+Drake lifted the LM Studio rule for this work ("You drive it on your end",
+typed 2026-08-26; session record in the claude-harness handoff, 122b5f6,
+which also records the two hung LM Studio downloads cited below).
+Loaded unsloth UD-Q6_K_XL (31.84 GB GGUF plus the 1.79 GB mmproj-F32 that
+LM Studio loads beside it, 33.63 GB total; the registry row's note
+"mmproj not loaded" is wrong and is corrected in a follow-up) at parallel
+1 / context 131072, GLM unloaded. Conductor-measured on the loaded model
+(server log 2026-08-26.3.log, lines after the 22:03 load): prefill 1442 /
+1563 / 1594 tok/s on three fresh 11.4k-token prompts (GLM 58-147 by the
+same log enumerator); decode 59.8 tok/s on a 600-token short-context
+sample (GLM median 9.9 by the same enumerator). Registry row hand-applied
+(#51). Drake launched the probe from his shell after the permission
+classifier refused the conductor the `claude -p` spawning command (session
+record: claude-harness handoff 122b5f6).
 
-| t3-a, effort high, bare | GLM 4.7 (PR #55) | Qwen3.6-35B-A3B (PR #60) |
+| t3-a | GLM 4.7 (PR #55), effort high, bare | Qwen3.6-35B-A3B (PR #60), effort high, bare |
 |---|---|---|
 | pass | 5/5, 0 flips | 5/5, 0 flips |
 | turns | 43 to 84 | 15 to 25 |
@@ -126,12 +138,17 @@ the conductor the `claude -p` spawning command.
 | tokens out | 5738 to 38380 | 6090 to 14190 |
 | acceptance requests, max | 1 | 2 |
 | probe decisions (A1/A3/A6) | reps 2, K unchanged, N 260 | reps 2, K unchanged, N 80 |
-| cloud models, same task | 49 to 298 s | |
+| cloud models, same task (9 exit-ok rows: sol, fable, hybrid; effort low/medium, harness on and off) | 49.7 to 298.9 s | |
 
-Verified by an Opus seat against the probe artifacts, the server log, and
-the corpus (PR #60 comments). Same verdict as GLM at 6x to 30x less wall
-time per rep, inside the cloud models' band. Depth of the comparison is
-t3-a only; t4/t5 is stage 1.
+Verified by an Opus seat against the probe artifacts and the corpus (PR
+#60 comments); the seat's hand-back also matched the prefill and decode
+lines in the server log. Same verdict as GLM. Wall time per rep, paired
+rep-for-rep (GLM rN / Qwen rN): 30.6x, 12.9x, 11.4x, 11.7x, 3.2x. Four of
+five Qwen reps fall inside the cloud models' 49.7 to 298.9 s band; rep 5
+at 301.65 s sits just above it. Depth of the comparison is t3-a only;
+t4/t5 is stage 1. This measurement reverses the 26 Aug recommendation
+order above (Coder-Next first): Qwen3.6 was probed first because its
+download landed first, and Coder-Next's stage 0 follows.
 
 Also checked on Drake's question: Qwen3.8-27B (AA 52) is dense, so at a
 usable quant it reads more bytes per token than GLM 4.7 and is not faster;
