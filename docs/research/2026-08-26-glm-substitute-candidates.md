@@ -155,11 +155,63 @@ usable quant it reads more bytes per token than GLM 4.7 and is not faster;
 Qwen3.8-Flash-Next (180B/6B, AA 56) has the right shape but its llama.cpp
 architecture PR (#27742) is unmerged, so LM Studio cannot load it yet.
 
+## Measured 2026-08-27: Qwen3-Coder-Next stage 0 (PR #62, master a3d56ad)
+
+Q6_K shards fetched by parallel ranged curl after LM Studio's downloader
+hung at 0% twice; both sha256 match the HF LFS metadata (re-hashed
+independently by the PR #62 verify seat). LM Studio 0.4.21 refused to
+index the files under models/lmstudio-community/ (its own hung download
+of that repo left zombie records); renaming the publisher directory to
+lmstudio-community-manual/ made it index within seconds. Loaded at
+parallel 1 / context 131072 (llama.cpp engine 2.29.1), Qwen3.6 unloaded.
+Conductor-measured (server log 2026-08-27.1.log after the 15:33 server
+start; verify seat re-derived every line): prefill 875 / 1159 / 1163
+tok/s on three fresh ~11.9k-token prompts, 875 being the cold first
+request after load; decode 53.85 tok/s on a 600-token sample, all visible
+content, zero reasoning tokens. Drake launched the probe from his shell
+(same classifier refusal as the qwen probe).
+
+Table enumerator: results.jsonl rows filtered on sweep (glm-stage0 /
+qwen3.6-35b-a3b-stage0 / qwen3-coder-next-stage0), task t3-a, and
+exit_reason ok. The GLM sweep has 10 such t3-a rows, of which 5 are ok
+(the other 5 are cli_error aborts, pass=False, excluded from the pass
+denominator per the registered estimand); both qwen sweeps are 5 of 5 ok.
+
+| t3-a | GLM 4.7 (PR #55) | Qwen3.6-35B-A3B (PR #60) | Qwen3-Coder-Next |
+|---|---|---|---|
+| pass | 5/5, 0 flips | 5/5, 0 flips | 5/5, 0 flips |
+| turns | 43 to 84 | 15 to 25 | 28 to 414 |
+| wall per rep | 963 to 4853 s | 158 to 302 s | 243 to 1496 s |
+| tokens out | 5738 to 38380 | 6090 to 14190 | 5534 to 33288 |
+| acceptance requests, max | 1 | 2 | 2 |
+| probe decisions (A1/A3/A6) | reps 2, K unchanged, N 260 | reps 2, K unchanged, N 80 | reps 2, K unchanged, N 1250 |
+
+Rep 3 is the row to look at before trusting the averages: 414 turns,
+1495.97 s, 33288 tokens out, against 28 to 50 turns for the other four
+reps (wall_s max/min ratio 6.15, the probe's own line). One rep in five
+took a 10x-turn detour and still passed; it alone sets the derived turn
+cap N=1250 (3 x max(turns), the same rule that gave Qwen3.6 N=80). The
+pass rate matches Qwen3.6; the variance does not. On the numbers
+measured so far Qwen3.6-35B-A3B stays the recommended substitute: 37 to
+65 percent faster prefill (1442-1594 vs 875-1163 tok/s), 11 percent
+faster decode (59.8 vs 53.85; caveat: the two 600-token samples differ
+in composition, qwen's was all reasoning tokens and coder-next's all
+visible content), and turn counts four reps of five tighter, with no
+detour rep in its probe. The fact that would
+flip this: a Coder-Next stage 1 showing the detour behavior is confined
+to this one rep while its per-task pass rate beats Qwen3.6's on t4/t5.
+
+Speed ratio caveat (issue #63, filed from the PR #62 verify seat's
+finding): the GLM 57-71 prefill band in the registry has no recorded
+enumerator (prompt size, request count, log), so GLM-relative prefill
+ratios compare a stated measurement against an unstated one. The
+qwen-relative numbers in this section share one enumerator throughout.
+
 ## Next steps
 
 1. Stage 1 for qwen3.6-35b-a3b (45 rows at 3 to 5 min each, a few hours;
    human-launched while the classifier refuses the conductor).
-2. Qwen3-Coder-Next stage 0 when its Q6_K download lands (LM Studio's
-   downloader hung twice; direct parallel ranged download in progress).
-3. Reasoning-token probe for the qwen row (validate names it as the one
-   remaining gap).
+2. Reasoning-token probe for the qwen and coder-next rows (validate names
+   them as the remaining gaps).
+3. Re-measure the GLM prefill band with a recorded enumerator (issue #63;
+   needs GLM loaded, 158 GB, human decision).

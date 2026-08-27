@@ -113,8 +113,12 @@ models:
       hooks: true
       tools: unknown
     max_harness_level: 5
-    deterministic_loops: false
-    noise_probe: null
+    deterministic_loops: true
+    noise_probe:
+      flip_rate: 0.0
+      date: 2026-08-27
+      identical: 5
+      of: 5
     reasoning_probe: null
     permission:
       mode: bypassPermissions
@@ -124,4 +128,4 @@ models:
       prefill_tok_s_min: 875.0
       prefill_tok_s_max: 1163.0
       basis: "turn cap derived from prefill rate x prompt size; wall-clock expiry logs its own status, never a task fail"
-    notes: "CONDUCTOR-MEASURED 2026-08-27 on the loaded model (lms load qwen3-coder-next --context-length 131072 --parallel 1; identifier qwen3-coder-next; llama.cpp engine 2.29.1): prefill 875 / 1159 / 1163 tok/s over three fresh ~11.9k-token prompts read from llama.cpp prompt-eval lines (server log 2026-08-27.1.log after the 15:33 server start; 875 is the first request after load); decode 53.85 tok/s on a 600-token short-context sample, all 600 tokens visible content, no reasoning channel. File: lmstudio-community/Qwen3-Coder-Next-GGUF Q6_K, two shards 39816544640 + 25711922144 bytes = 65.53 GB, sha256 of both shards equal to the HF LFS metadata; fetched with parallel ranged curl after the in-app download hung at 0%, and kept on disk under models/lmstudio-community-manual/ because LM Studio 0.4.21 hides the same files under models/lmstudio-community/ (renaming the publisher directory made it index within seconds). max_tokens_floor 8192 carried from the GLM row, not re-measured. capabilities and max_harness_level are the claude-code driver manifest values. deterministic_loops false and noise_probe null until the stage-0 probe records them. quant is the file name, not a bpw measurement."
+    notes: "CONDUCTOR-MEASURED 2026-08-27 on the loaded model (lms load qwen3-coder-next --context-length 131072 --parallel 1; identifier qwen3-coder-next; llama.cpp engine 2.29.1): prefill 875 / 1159 / 1163 tok/s over three fresh ~11.9k-token prompts read from llama.cpp prompt-eval lines (server log 2026-08-27.1.log after the 15:33 server start; 875 is the first request after load); decode 53.85 tok/s on a 600-token short-context sample, all 600 tokens visible content, no reasoning channel. File: lmstudio-community/Qwen3-Coder-Next-GGUF Q6_K, two shards 39816544640 + 25711922144 bytes = 65.53 GB, sha256 of both shards equal to the HF LFS metadata; fetched with parallel ranged curl after the in-app download hung at 0%, and kept on disk under models/lmstudio-community-manual/ because LM Studio 0.4.21 hides the same files under models/lmstudio-community/ (renaming the publisher directory made it index within seconds). max_tokens_floor 8192 carried from the GLM row, not re-measured. capabilities and max_harness_level are the claude-code driver manifest values. noise_probe recorded by the 2026-08-27 stage-0 probe (5 scored t3-a reps, 0 flips; stage0.log in the probe scratch, results rows in results.jsonl). quant is the file name, not a bpw measurement."
