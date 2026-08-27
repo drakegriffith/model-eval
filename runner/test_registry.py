@@ -137,6 +137,7 @@ def test_model_family_on_each_family_via_id_and_alias():
     assert model_family("kimi") == "kimi"
     assert model_family("glm-4.7-local") == "local"
     assert model_family("qwen3-coder-next-local") == "local"
+    assert model_family("qwen3.6-35b-a3b-local") == "local"
 
 
 def test_every_model_declares_a_family_and_a_nonempty_tier_list():

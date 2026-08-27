@@ -107,11 +107,12 @@ def test_an_unparseable_endpoint_is_not_treated_as_loopback():
 
 # --------------------------------------------------------------------------- #
 # The refusal, through the runner's own entry
-# --------------------------------------------------------------------------- #
-# Both local-family models, per the convention in test_local_family.py:36,56.
-# The second one is the case that exposed the defect: it is local family and has
-# NO serving row, and the refusal was telling it about a row it does not have.
-LOCAL_MODELS = ["glm-4.7-local", "qwen3-coder-next-local"]
+# All local-family models, per the convention in test_local_family.py:36,56.
+# qwen3-coder-next-local is the case that exposed the defect: it is local family
+# and has NO serving row, and the refusal was telling it about a row it does not
+# have. qwen3.6-35b-a3b-local, added after that fix, has the same gap: it is
+# local family with no serving row of its own either.
+LOCAL_MODELS = ["glm-4.7-local", "qwen3-coder-next-local", "qwen3.6-35b-a3b-local"]
 
 
 @pytest.mark.parametrize("model", LOCAL_MODELS)

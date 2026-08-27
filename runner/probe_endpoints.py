@@ -97,7 +97,7 @@ KIMI_CANDIDATES = ["kimi-k3", "kimi-k2.7"]
 # dispatched against a different one.
 LOCAL_BASE_URL = local_endpoint.get_local_base_url()
 LOCAL_PLACEHOLDER_TOKEN = local_endpoint.LOCAL_PLACEHOLDER_TOKEN
-LOCAL_CANDIDATES = ["glm-4.7-local", "qwen3-coder-next-local"]
+LOCAL_CANDIDATES = ["glm-4.7-local", "qwen3-coder-next-local", "qwen3.6-35b-a3b-local"]
 
 
 def load_kimi_key():

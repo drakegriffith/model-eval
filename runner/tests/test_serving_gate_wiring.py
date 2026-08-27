@@ -421,6 +421,7 @@ def test_the_modules_wiring_recipe_names_only_things_that_exist():
 @pytest.mark.parametrize("model_id,expected", [
     ("glm-4.7-local", "glm-4.7"),
     ("qwen3-coder-next-local", "qwen3-coder-next"),
+    ("qwen3.6-35b-a3b-local", "qwen3.6-35b-a3b"),
     ("claude-sonnet-5", "claude-sonnet-5"),
 ])
 def test_the_row_name_seam_is_explicit(model_id, expected):

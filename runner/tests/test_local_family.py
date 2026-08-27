@@ -33,7 +33,7 @@ PROMPT = "reply with the single word ok"
 # --------------------------------------------------------------------------- #
 # build_cli_cmd — pure, no subprocess
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("model", ["glm-4.7-local", "qwen3-coder-next-local"])
+@pytest.mark.parametrize("model", ["glm-4.7-local", "qwen3-coder-next-local", "qwen3.6-35b-a3b-local"])
 def test_build_cli_cmd_local_matches_claude_kimi_shape(model):
     """local rides the identical invocation shape as claude/kimi (run.py:467):
     same binary, same flags, only --model differs."""
@@ -53,7 +53,7 @@ def test_build_cli_cmd_local_matches_claude_kimi_shape(model):
         "local's flag set drifted from claude/kimi's shape")
 
 
-@pytest.mark.parametrize("model", ["glm-4.7-local", "qwen3-coder-next-local"])
+@pytest.mark.parametrize("model", ["glm-4.7-local", "qwen3-coder-next-local", "qwen3.6-35b-a3b-local"])
 def test_build_cli_cmd_local_passes_effort_through(model):
     """--effort passes through for local, same decision as kimi (documented in
     build_cli_cmd's own docstring): unverified whether LM Studio's server
