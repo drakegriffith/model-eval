@@ -108,14 +108,41 @@ Flips-if: the stage-0 probe on t3-a. GLM 4.7 passed 5/5 with 0 flips at
 16-81 min per rep. A candidate that fails t3-a is out regardless of speed;
 one that passes 5/5 in under 10 min per rep replaces GLM for stage 1.
 
-## Next steps (human-gated)
+## Measured 2026-08-27: Qwen3.6-35B-A3B stage 0 (PR #60, master d75d25d)
 
-1. Drake: download the two GGUFs, load one in LM Studio at PARALLEL=1,
-   context 131072, temp 0, seed 42. LM Studio is human-only.
-2. Agent: add a `runner/models.yaml` serving row for the loaded model with
-   quant read from the file name (no measured fields invented), then run the
-   stage-0 probe (5 sequential reps, t3-a, effort high) via
-   `runner/stage0_probe.py --model <id>`; the probe derives reps, N, and the
-   wall-clock backstop from its own rows.
-3. Repeat for the second model. Compare pass, flip rate, wall_s, tokens_out
-   in one table with the GLM 4.7 stage-0 rows from PR #55.
+Drake lifted the LM Studio rule for this work ("You drive it on your end").
+Loaded unsloth UD-Q6_K_XL (33.63 GB) at parallel 1 / context 131072, GLM
+unloaded. Conductor-measured on the loaded model: prefill 1442 / 1563 /
+1594 tok/s on three fresh 11.4k-token prompts (GLM 57-147); decode 59.8
+tok/s short-context (GLM ~20). Registry row hand-applied (#51); Drake
+launched the probe from his shell after the permission classifier refused
+the conductor the `claude -p` spawning command.
+
+| t3-a, effort high, bare | GLM 4.7 (PR #55) | Qwen3.6-35B-A3B (PR #60) |
+|---|---|---|
+| pass | 5/5, 0 flips | 5/5, 0 flips |
+| turns | 43 to 84 | 15 to 25 |
+| wall per rep | 963 to 4853 s | 158 to 302 s |
+| tokens out | 5738 to 38380 | 6090 to 14190 |
+| acceptance requests, max | 1 | 2 |
+| probe decisions (A1/A3/A6) | reps 2, K unchanged, N 260 | reps 2, K unchanged, N 80 |
+| cloud models, same task | 49 to 298 s | |
+
+Verified by an Opus seat against the probe artifacts, the server log, and
+the corpus (PR #60 comments). Same verdict as GLM at 6x to 30x less wall
+time per rep, inside the cloud models' band. Depth of the comparison is
+t3-a only; t4/t5 is stage 1.
+
+Also checked on Drake's question: Qwen3.8-27B (AA 52) is dense, so at a
+usable quant it reads more bytes per token than GLM 4.7 and is not faster;
+Qwen3.8-Flash-Next (180B/6B, AA 56) has the right shape but its llama.cpp
+architecture PR (#27742) is unmerged, so LM Studio cannot load it yet.
+
+## Next steps
+
+1. Stage 1 for qwen3.6-35b-a3b (45 rows at 3 to 5 min each, a few hours;
+   human-launched while the classifier refuses the conductor).
+2. Qwen3-Coder-Next stage 0 when its Q6_K download lands (LM Studio's
+   downloader hung twice; direct parallel ranged download in progress).
+3. Reasoning-token probe for the qwen row (validate names it as the one
+   remaining gap).
