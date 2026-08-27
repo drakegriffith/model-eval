@@ -1,0 +1,108 @@
+# runs-qwen3.6-35b-a3b-stage0.yaml -- the SAME stage-0 noise probe as
+# runs-glm-stage0.yaml (issue #26; studio-handoff prompt-2-run-experiment.md,
+# "Stage 0: noise probe", plus amendments A1, A3 and A6 registered
+# 2026-08-25 -- "Nothing below may change after the first stage-0 row"),
+# run against qwen3.6-35b-a3b-local instead of glm-4.7-local. Every pinned
+# value below (serving block, defaults, task, rep count) is copied verbatim
+# from runs-glm-stage0.yaml; only the sweep name and the model in `configs`
+# differ, so this file's own numbers stay comparable to the GLM stage-0 row
+# it stands beside rather than accidentally drifting to a new treatment.
+#
+# THIS FILE DISPATCHES NOTHING BY ITSELF, same convention as
+# runs-glm-stage1.yaml: it is the declaration runner/run.py's serving gate
+# reads before the first CLI call.
+#
+# On master at or after cde2cc9 (PR #57, feat/stage0-probe-model-flag,
+# merged 2026-08-26), runner/stage0_probe.py takes --model/--driver/--sweep,
+# and the documented invocation for this file is:
+#
+#   python3 runner/stage0_probe.py --model qwen3.6-35b-a3b \
+#       --sweep qwen3.6-35b-a3b-stage0 \
+#       --config runner/runs-qwen3.6-35b-a3b-stage0.yaml \
+#       --results <scratch>/results.jsonl --scratch <scratch>/.scratch \
+#       --registry-path <scratch>/models.yaml [--mock]
+#
+# Under --mock, run_stage0 dispatches and tags 5 rows under the
+# "qwen3.6-35b-a3b-stage0" sweep, exactly as this file declares -- but the
+# probe still exits CANNOT_DETERMINE_EXIT (2), and not from the registry
+# lookup. finalize_stage0 (stage0_probe.py:365-394) calls derive_stage0(rows)
+# first (line 382), and derive_stage0 partitions on SCORED rows only
+# (exit_reason "ok" or "cap_exhausted"); a --mock row is never "ok", so all 5
+# come back unscored and derive_stage0 raises ValueError
+# ("derive_stage0: 0 of 5 row(s) were SCORED (excluded: mock=5)") before
+# sr.load_rows/sr.find_row (lines 388-389) are ever reached. main()'s
+# `except (ValueError, RuntimeError)` (line 485) catches that and exits 2.
+# So --mock proves the dispatch and tagging plumbing works; it proves
+# nothing about the registry step, because it never gets there.
+#
+# In a LIVE run (all 5 reps actually scored), derive_stage0 would return
+# normally and finalize_stage0 would reach sr.find_row(registry_rows,
+# "qwen3.6-35b-a3b", "claude-code") -- and that is where it would refuse:
+# runner/models.yaml carries only glm-4.7 rows today, no
+# qwen3.6-35b-a3b-local (nor qwen3-coder-next-local) row exists, so find_row
+# has nothing to return and raises, caught by the same except at line 485,
+# same exit 2. There is no row to add ahead of that either:
+# serving_registry.py's rule 7 ("the timeout basis is a measured prefill
+# rate, not a guess") requires a prefill rate measured with the model
+# actually loaded before a row for it can be written at all, which this
+# ticket does not do (no inference).
+#
+# TASK CHOICE: t3-a ("splitcost", a CLI-build task), the sole task at the
+# tier sitting in the middle of the t1-t5 gauntlet ladder. Picked over any of
+# the four t2 variants for a reason beyond difficulty: t3-a is the LOWEST
+# tier that ships an acceptance/ suite, which is what turns the acceptance
+# broker on at all (run.py starts broker.acceptance_broker() only for a task
+# whose verify.sh it can shim through one). Stage 0 exists in part to
+# measure acceptance_requests and answer A1's K-flip question ("any rep
+# reaching >= 10 acceptance requests re-registers K before stage 1") -- a
+# t1/t2 task has no acceptance/ dir, so every rep on one reads
+# acceptance_requests=None and the K-flip question is unanswerable from the
+# probe. (Under --mock the broker never starts at all -- run.py's `if not
+# mock and broker_enabled()` -- so a --mock fixture run reads
+# acceptance_requests=None regardless of task; the task choice matters for
+# the real run this config is written for, not for the --mock plumbing
+# check.)
+#
+# 1 task, 1 harness level (harness: false), 5 SEQUENTIAL reps, no turn cap.
+# run.py's own dispatch loop (`for i, r in enumerate(pending, 1): ...`) is
+# single-threaded with no concurrency option, so "sequential" costs no extra
+# config here -- the 5 reps below execute in the order the matrix builds
+# them. Broker ON at K=20 (A1: "the closest thing to 'uncapped' the
+# pre-registration permits"). "No cap" per A3 means no TURN cap: N is
+# registered only AFTER this probe runs, derived from ITS OWN max(turns) by
+# stage0_probe.py, so nothing in this file can pre-empt that number. The
+# wall clock below is a hang backstop only (A3), reusing the t3 tier's
+# existing timeout, not a treatment this probe is measuring.
+
+serving:
+  parallel: 1
+  context_length: 131072
+  max_tokens: 8192
+  temperature: 0
+  seed: 42
+
+defaults:
+  # t3-a's own wall-clock backstop (A3: "a hang backstop only"), the same
+  # value runs-glm-stage1.yaml already pins for tier 3.
+  timeout_t3_s: 7200
+  seed: 1337
+  # A1: broker ON, K=20 -- the pre-registered ceiling (broker.K_CEILING),
+  # not a value invented for this file. See runs-glm-stage1.yaml's own
+  # k_acceptance comment for why 20 rather than a smaller number: 20 is the
+  # closest this stack gets to "uncapped" without inventing an unregistered
+  # treatment.
+  k_acceptance: 20
+
+sweeps:
+  # Stage 0, the noise probe, qwen3.6-35b-a3b-local instead of glm-4.7-local.
+  # 1 task x 5 sequential reps, bare, claude-code driver, no turn cap. sweep
+  # name "qwen3.6-35b-a3b-stage0" is what a --sweep-aware caller (see the GAP
+  # note above) filters results.jsonl on to read the 5 rows back and tag
+  # them `stage: 0`.
+  - name: qwen3.6-35b-a3b-stage0
+    driver: claude-code
+    harness: false
+    reps: [1, 2, 3, 4, 5]
+    tasks: [t3-a]
+    configs:
+      - {model: qwen3.6-35b-a3b-local, effort: high}

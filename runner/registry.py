@@ -120,6 +120,7 @@ MODELS = {
     # of sync with that measurement.
     "glm-4.7-local":             {"family": "local", "efforts": CLAUDE_TIERS},
     "qwen3-coder-next-local":    {"family": "local", "efforts": CLAUDE_TIERS},
+    "qwen3.6-35b-a3b-local":     {"family": "local", "efforts": CLAUDE_TIERS},
 }
 
 # Short names used by the existing runs.yaml files and already written into
