@@ -1,0 +1,81 @@
+# runs-qwen3-coder-next-stage0.yaml -- the SAME stage-0 noise probe as
+# runs-glm-stage0.yaml (issue #26; studio-handoff prompt-2-run-experiment.md,
+# "Stage 0: noise probe", plus amendments A1, A3 and A6 registered
+# 2026-08-25 -- "Nothing below may change after the first stage-0 row"),
+# run against qwen3-coder-next-local instead of glm-4.7-local. Every pinned
+# value below (serving block, defaults, task, rep count) is copied verbatim
+# from runs-glm-stage0.yaml; only the sweep name and the model in `configs`
+# differ, so this file's own numbers stay comparable to the GLM stage-0 row
+# it stands beside rather than accidentally drifting to a new treatment.
+#
+# THIS FILE DISPATCHES NOTHING BY ITSELF, same convention as
+# runs-glm-stage1.yaml: it is the declaration runner/run.py's serving gate
+# reads before the first CLI call. The single documented command that runs
+# it, derives the probe's numbers, records them and prints the #8 comment is
+# runner/stage0_probe.py, never run.py directly:
+#
+#   python3 runner/stage0_probe.py --model qwen3-coder-next \
+#       --sweep qwen3-coder-next-stage0 \
+#       --config runner/runs-qwen3-coder-next-stage0.yaml \
+#       --results <scratch>/results.jsonl --scratch <scratch>/.scratch \
+#       --registry-path <scratch>/models.yaml [--mock]
+#
+# TASK CHOICE: t3-a ("splitcost", a CLI-build task), the sole task at the
+# tier sitting in the middle of the t1-t5 gauntlet ladder. Picked over any of
+# the four t2 variants for a reason beyond difficulty: t3-a is the LOWEST
+# tier that ships an acceptance/ suite, which is what turns the acceptance
+# broker on at all (run.py starts broker.acceptance_broker() only for a task
+# whose verify.sh it can shim through one). Stage 0 exists in part to
+# measure acceptance_requests and answer A1's K-flip question ("any rep
+# reaching >= 10 acceptance requests re-registers K before stage 1") -- a
+# t1/t2 task has no acceptance/ dir, so every rep on one reads
+# acceptance_requests=None and the K-flip question is unanswerable from the
+# probe. (Under --mock the broker never starts at all -- run.py's `if not
+# mock and broker_enabled()` -- so a --mock fixture run reads
+# acceptance_requests=None regardless of task; the task choice matters for
+# the real run this config is written for, not for the --mock plumbing
+# check.)
+#
+# 1 task, 1 harness level (harness: false), 5 SEQUENTIAL reps, no turn cap.
+# run.py's own dispatch loop (`for i, r in enumerate(pending, 1): ...`) is
+# single-threaded with no concurrency option, so "sequential" costs no extra
+# config here -- the 5 reps below execute in the order the matrix builds
+# them. Broker ON at K=20 (A1: "the closest thing to 'uncapped' the
+# pre-registration permits"). "No cap" per A3 means no TURN cap: N is
+# registered only AFTER this probe runs, derived from ITS OWN max(turns) by
+# stage0_probe.py, so nothing in this file can pre-empt that number. The
+# wall clock below is a hang backstop only (A3), reusing the t3 tier's
+# existing timeout, not a treatment this probe is measuring.
+
+serving:
+  parallel: 1
+  context_length: 131072
+  max_tokens: 8192
+  temperature: 0
+  seed: 42
+
+defaults:
+  # t3-a's own wall-clock backstop (A3: "a hang backstop only"), the same
+  # value runs-glm-stage1.yaml already pins for tier 3.
+  timeout_t3_s: 7200
+  seed: 1337
+  # A1: broker ON, K=20 -- the pre-registered ceiling (broker.K_CEILING),
+  # not a value invented for this file. See runs-glm-stage1.yaml's own
+  # k_acceptance comment for why 20 rather than a smaller number: 20 is the
+  # closest this stack gets to "uncapped" without inventing an unregistered
+  # treatment.
+  k_acceptance: 20
+
+sweeps:
+  # Stage 0, the noise probe, qwen3-coder-next-local instead of glm-4.7-local.
+  # 1 task x 5 sequential reps, bare, claude-code driver, no turn cap. sweep
+  # name "qwen3-coder-next-stage0" is what runner/stage0_probe.py's --sweep
+  # filters results.jsonl on when it reads the 5 rows back and tags them
+  # `stage: 0`.
+  - name: qwen3-coder-next-stage0
+    driver: claude-code
+    harness: false
+    reps: [1, 2, 3, 4, 5]
+    tasks: [t3-a]
+    configs:
+      - {model: qwen3-coder-next-local, effort: high}
