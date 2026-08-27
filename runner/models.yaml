@@ -69,3 +69,33 @@ models:
       prefill_tok_s_max: 71.0
       basis: "turn cap derived from prefill rate x prompt size; wall-clock expiry logs its own status, never a task fail"
     notes: "SEAT-MEASURED 2026-08-25 panel: 7 tools (grep/find/ls off by default), --skill, --prompt-template, -e extensions, NO hooks, NO subagents. max_harness_level=2 is UNVERIFIED: no-hooks/no-subagents rules out L4-L5 by measurement, but the ceiling sitting at 2 rather than 3 carries no evidence tag in the panel record. Separately-reported vehicle contrast, never merged into the dose table."
+  - model: qwen3.6-35b-a3b
+    driver: claude-code
+    serving:
+      parallel: 1
+      context_length: 131072
+      max_tokens_floor: 8192
+      temperature: 0
+      seed: 42
+      quant: UD-Q6_K_XL
+    capabilities:
+      subagents: true
+      hooks: true
+      tools: unknown
+    max_harness_level: 5
+    deterministic_loops: true
+    noise_probe:
+      flip_rate: 0.0
+      date: 2026-08-27
+      identical: 5
+      of: 5
+    reasoning_probe: null
+    permission:
+      mode: bypassPermissions
+      authorization: "regarding this tool using Claude mode GLM seats, I want my Claude to have the ability to use models like GLM. If you want to invoke a quick Opus 5 agent in the backend to do that, I allow you to bypass and make it happen on the Mac Studio and this computer. (2026-08-25) -- extended to this model by: You drive it on your end I don't know which one. (2026-08-26)"
+      authorized_date: 2026-08-26
+    timeout:
+      prefill_tok_s_min: 1442.0
+      prefill_tok_s_max: 1594.0
+      basis: "turn cap derived from prefill rate x prompt size; wall-clock expiry logs its own status, never a task fail"
+    notes: "CONDUCTOR-MEASURED 2026-08-26 on the loaded model (lms load --context-length 131072 --parallel 1; file unsloth/Qwen3.6-35B-A3B-GGUF UD-Q6_K_XL, 33.63 GB; identifier qwen3.6-35b-a3b): prefill 1442 / 1563 / 1594 tok/s over three fresh 11.4k-token prompts read from llama.cpp prompt-eval lines; decode 59.8 tok/s on a 600-token short-context sample. A 600-token cap returned empty visible content (reasoning channel consumed it), so max_tokens_floor 8192 is carried from the GLM row, not re-measured. Vision-language checkpoint, mmproj not loaded. quant is the file name, not a bpw measurement."
