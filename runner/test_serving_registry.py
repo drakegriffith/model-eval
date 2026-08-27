@@ -596,7 +596,8 @@ def test_every_shipped_row_names_a_model_the_model_registry_knows():
 def test_the_shipped_rows_carry_the_panels_measured_serving_config():
     """The prefill band is measured PER ROW, not a single constant every row
     must share: claude-code's GLM rows were clocked at 57-71 tok/s, the qwen
-    row on a different loaded model at 1442-1594 tok/s. The subject each row
+    row on a different loaded model at 1442-1594 tok/s, the coder-next row at
+    875-1163 tok/s. The subject each row
     pins against is its own entry in this table; a row with no entry, or an
     entry with no shipped row, is the finding."""
     rows = sr.load_rows()
@@ -604,6 +605,7 @@ def test_the_shipped_rows_carry_the_panels_measured_serving_config():
         ("glm-4.7", "claude-code"): (57, 71),
         ("glm-4.7", "pi"): (57, 71),
         ("qwen3.6-35b-a3b", "claude-code"): (1442, 1594),
+        ("qwen3-coder-next", "claude-code"): (875, 1163),
     }
     inspected = []
     shipped_keys = set()
