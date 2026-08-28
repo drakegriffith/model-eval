@@ -121,6 +121,12 @@ MODELS = {
     "glm-4.7-local":             {"family": "local", "efforts": CLAUDE_TIERS},
     "qwen3-coder-next-local":    {"family": "local", "efforts": CLAUDE_TIERS},
     "qwen3.6-35b-a3b-local":     {"family": "local", "efforts": CLAUDE_TIERS},
+    # Added 2026-08-28 for the t4/t5 cross-family run. Dense 27B sibling of
+    # the qwen3.6 MoE above, served from the same LM Studio on loopback. It
+    # has NO serving row in models.yaml and is therefore ungated, exactly
+    # like qwen3.6-35b-a3b-local: this entry declares the id so a typo is
+    # still rejected, and asserts nothing about how it is served.
+    "qwen3.8-27b-local":         {"family": "local", "efforts": CLAUDE_TIERS},
 }
 
 # Short names used by the existing runs.yaml files and already written into
