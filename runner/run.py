@@ -190,6 +190,16 @@ def claude_auth_preflight(env):
     child env the model will actually receive, scoped HOME and all, and asks the
     CLI itself rather than inferring from the presence of a file.
 
+    WHAT THIS CANNOT TELL YOU. `claude auth status` reports on the credential it
+    can SEE, not one it has exercised: measured 2026-08-31, it answers
+    loggedIn=true method=oauth_token for a well-formed setup-token that the API
+    then rejects with 401. So this gate catches the absent credential -- the
+    2026-08-28 outage, where a scoped HOME had nothing at all -- and does not
+    catch an expired or revoked one. That case still costs one row, and is
+    caught after the fact by cli_auth_failed() reading api_error_status. Closing
+    it here would mean spending a real request per sweep to prove the token
+    works, which is a trade worth making only if revoked tokens become common.
+
     FAIL CLOSED, WITH ONE EXCEPTION. A CLI that answers "not logged in" is a
     refusal. A preflight that cannot RUN -- no binary, timeout, unparseable
     output -- returns True: this is an instrument check, and letting an
@@ -942,6 +952,18 @@ def cli_auth_failed(out):
             break
     if not isinstance(obj, dict) or not obj.get("is_error"):
         return False
+    # Structural signal first. Measured 2026-08-31 against claude 2.1.252 with
+    # a rejected setup-token: the CLI returns api_error_status 401 and the prose
+    # "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+    # which matches none of the four markers below -- so the row landed as
+    # cli_error, the bucket the pre-registration reads as the MODEL having
+    # failed, for a run in which the model was never asked anything.
+    #
+    # Only 401 and 403. Not "any nonzero status": a 500 or a 529 is a real
+    # server fault and relabelling those as auth would hide outages inside the
+    # one bucket nobody re-runs.
+    if obj.get("api_error_status") in (401, 403):
+        return True
     text = str(obj.get("result") or "").lower()
     return any(m in text for m in AUTH_FAILURE_MARKERS)
 

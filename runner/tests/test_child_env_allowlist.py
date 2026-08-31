@@ -66,6 +66,17 @@ ANTHROPIC_EXTRAS = {"ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_T
 # they are set for "local" only, not "kimi".
 LOCAL_TIMEOUT_EXTRAS = {"CLAUDE_STREAM_IDLE_TIMEOUT_MS", "API_TIMEOUT_MS"}
 
+# The claude family's subscription credential, injected by run_cli from a
+# secrets file OUTSIDE every repo -- never inherited. Family-scoped for the same
+# reason LOCAL_TIMEOUT_EXTRAS is: a local or kimi arm that grew this name would
+# be carrying a claude credential it has no use for, and the exact-set assertion
+# below is what would catch that.
+#
+# Present only when the operator has actually minted a token, so these tests
+# must pass on a host with no secrets file and on one with -- which is why the
+# name is PERMITTED here rather than REQUIRED.
+CLAUDE_AUTH_EXTRAS = {"CLAUDE_CODE_OAUTH_TOKEN"}
+
 # Added by the PLATFORM, not inherited: CoreFoundation stamps this into every
 # process it initialises on macOS. Verified rather than assumed -- launching a
 # child with an explicit `env={"PATH": "/usr/bin"}` still shows it, so it does
@@ -93,6 +104,10 @@ CONTAMINANTS = {
     "OPENAI_API_KEY": "leaked-openai-key",
     "AWS_SECRET_ACCESS_KEY": "should-not-travel",
     "GH_TOKEN": "should-not-travel-either",
+    # The claude arm injects a token of this name from a secrets file. A parent
+    # value must never be what arrives: without this contaminant the injection
+    # and a leak are indistinguishable, because both end with the name present.
+    "CLAUDE_CODE_OAUTH_TOKEN": "leaked-parent-oauth-token",
 }
 
 # Every family that rides a binary reading these names, plus None (the mock
@@ -178,6 +193,15 @@ def test_no_arm_inherits_a_claude_or_xdg_variable(
     excused = {"CLAUDE_CONFIG_DIR"}
     if model is not None and runner.model_family(model) == "local":
         excused.add("CLAUDE_STREAM_IDLE_TIMEOUT_MS")
+    if model is not None and runner.model_family(model) == "claude":
+        # Excused as a NAME, never as a value: run_cli sets this deliberately
+        # from the secrets file, so its presence is correct, but the parent's
+        # value arriving under it would be exactly the leak this test exists
+        # for. Assert the value first, then stop treating the name as a leak.
+        assert env.get("CLAUDE_CODE_OAUTH_TOKEN") != \
+            CONTAMINANTS["CLAUDE_CODE_OAUTH_TOKEN"], (
+                f"{model}: the PARENT's oauth token travelled into the arm")
+        excused.add("CLAUDE_CODE_OAUTH_TOKEN")
 
     leaked = sorted(k for k in env
                     if k.startswith(("CLAUDE_", "XDG_", "CLAUDECODE"))
@@ -211,6 +235,8 @@ def test_the_child_environment_is_exactly_the_allowlist_plus_declared_additions(
         permitted |= ANTHROPIC_EXTRAS
     if model is not None and runner.model_family(model) == "local":
         permitted |= LOCAL_TIMEOUT_EXTRAS
+    if model is not None and runner.model_family(model) == "claude":
+        permitted |= CLAUDE_AUTH_EXTRAS
     unexpected = sorted(set(env) - permitted)
     assert unexpected == [], (
         f"{model}: names in the child env that nothing declared: {unexpected}")

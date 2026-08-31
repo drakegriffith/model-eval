@@ -281,3 +281,63 @@ def test_live_preflight_negative_control(tmp_path):
     env["CLAUDE_CONFIG_DIR"] = str(tmp_path / ".claude")
     ok, _detail = runner.claude_auth_preflight(env)
     assert not ok, "scoped empty HOME was judged authenticated"
+
+
+# --------------------------------------------------------------------------- #
+# A rejected credential is an instrument fault, not a model failure.
+#
+# Found by running this PR's own fix end to end on 2026-08-31. The preflight
+# passed (see the docstring limit below), the CLI then returned
+#
+#   api_error_status: 401
+#   result: "Failed to authenticate. API Error: 401 OAuth access token is
+#            invalid."
+#
+# and that string matches NONE of the four AUTH_FAILURE_MARKERS, so the row
+# landed as cli_error -- the bucket the pre-registration reads as the model
+# having failed the task. The model was never asked anything; tokens_in was 0.
+#
+# Matched on api_error_status, a field the CLI sets, rather than on the prose,
+# for the reason the existing marker block already gives: a model writing about
+# authentication can print any of these words in a run that worked.
+# --------------------------------------------------------------------------- #
+def _envelope(**kw):
+    base = {"type": "result", "is_error": True, "num_turns": 1,
+            "usage": {"input_tokens": 0, "output_tokens": 0}}
+    base.update(kw)
+    return json.dumps(base)
+
+
+def test_401_is_an_auth_failure_not_a_cli_error():
+    """The exact envelope observed from claude 2.1.252 with a rejected token."""
+    out = _envelope(api_error_status=401,
+                    result="Failed to authenticate. API Error: 401 OAuth "
+                           "access token is invalid.")
+    assert runner.cli_auth_failed(out) is True
+
+
+def test_403_is_also_an_auth_failure():
+    out = _envelope(api_error_status=403, result="Forbidden")
+    assert runner.cli_auth_failed(out) is True
+
+
+def test_500_is_not_an_auth_failure():
+    """Negative control. Without this, `any nonzero api_error_status` would
+    pass the test above while quietly relabelling every server fault as an
+    auth problem -- which would hide real outages in the INFRA bucket."""
+    out = _envelope(api_error_status=500, result="Internal server error")
+    assert runner.cli_auth_failed(out) is False
+
+
+def test_a_successful_run_is_never_an_auth_failure():
+    """The other negative control: is_error false must short-circuit before
+    any status code is consulted."""
+    out = json.dumps({"type": "result", "is_error": False,
+                      "api_error_status": 401, "result": "done"})
+    assert runner.cli_auth_failed(out) is False
+
+
+def test_prose_markers_still_work():
+    """The original four markers are not regressed by the structural check."""
+    out = _envelope(result="Not logged in - Please run /login")
+    assert runner.cli_auth_failed(out) is True
