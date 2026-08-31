@@ -341,3 +341,151 @@ def test_prose_markers_still_work():
     """The original four markers are not regressed by the structural check."""
     out = _envelope(result="Not logged in - Please run /login")
     assert runner.cli_auth_failed(out) is True
+
+
+# --------------------------------------------------------------------------- #
+# API-key auth for the claude family (Drake, 2026-08-31: "I actually prefer
+# using Claude API, since it's more stable").
+#
+# This changes the COST model, which is the part that needed building rather
+# than a flag. Every claude model declares metered=False, because a subscription
+# run is $0 -- so --max-usd never capped them and nothing accumulated spend. Run
+# the same model against the first-party API and each row costs real money that
+# the harness would not have been counting.
+#
+# Metering is therefore a property of the AUTH PATH, not of the model id.
+#
+# And the dollar figure is read from the CLI's own `total_cost_usd`, never from
+# a price table in this repo: registry.py's docstring points at a `pricing`
+# module that does not exist, and a hardcoded rate for opus-5/sonnet-5/fable-5
+# would be a number with no enumerator behind it -- exactly the thing the
+# corpus is not allowed to carry. probe_endpoints.py already reads this field.
+# --------------------------------------------------------------------------- #
+def api_key_file(tmp_path, value="sk-ant-api03-TESTONLY"):
+    p = tmp_path / "claude-api.env"
+    p.write_text("ANTHROPIC_API_KEY=%s\n" % value, encoding="utf-8")
+    return str(p)
+
+
+def both_file(tmp_path):
+    p = tmp_path / "claude-both.env"
+    p.write_text("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-TESTONLY\n"
+                 "ANTHROPIC_API_KEY=sk-ant-api03-TESTONLY\n", encoding="utf-8")
+    return str(p)
+
+
+def test_api_key_read_from_secrets_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", api_key_file(tmp_path))
+    assert runner.load_claude_api_key() == "sk-ant-api03-TESTONLY"
+
+
+def test_api_key_absent_is_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", token_file(tmp_path))
+    assert runner.load_claude_api_key() is None
+
+
+def test_api_key_wins_over_oauth_token(tmp_path, monkeypatch):
+    """Precedence must be decided here, not left to whichever variable the CLI
+    happens to prefer. A file holding both should produce ONE credential."""
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", both_file(tmp_path))
+    assert runner.claude_auth_source() == "api_key"
+
+
+def test_auth_source_three_way(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", api_key_file(tmp_path))
+    assert runner.claude_auth_source() == "api_key"
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", token_file(tmp_path))
+    assert runner.claude_auth_source() == "oauth_token_env"
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", str(tmp_path / "none.env"))
+    assert runner.claude_auth_source() == "inherited_login"
+
+
+def test_api_key_injected_and_oauth_token_is_not(repo, tmp_path, monkeypatch):
+    """Exactly one credential reaches the child. Setting both would leave which
+    one authenticated the row undecidable from the row itself."""
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", both_file(tmp_path))
+    env = child_env_via_run_cli(repo, "claude-sonnet-5", monkeypatch, tmp_path,
+                                str(tmp_path / "k1"))
+    assert env.get("ANTHROPIC_API_KEY") == "sk-ant-api03-TESTONLY"
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+
+
+def test_api_key_not_injected_for_local_family(repo, tmp_path, monkeypatch):
+    """The local family sets its OWN placeholder ANTHROPIC_API_KEY for the
+    loopback endpoint. It must not receive the operator's real first-party key
+    -- that would send a paid credential at an LM Studio server."""
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", api_key_file(tmp_path))
+    env = child_env_via_run_cli(repo, "qwen3.8-27b-local", monkeypatch, tmp_path,
+                                str(tmp_path / "k2"))
+    assert env.get("ANTHROPIC_API_KEY") != "sk-ant-api03-TESTONLY"
+
+
+# --- cost, read from the CLI and never from a table in this repo ------------ #
+def test_reported_cost_is_read_from_the_envelope():
+    out = json.dumps({"type": "result", "is_error": False,
+                      "total_cost_usd": 0.0432, "result": "done"})
+    assert runner.reported_cost_usd(out) == 0.0432
+
+
+def test_reported_cost_absent_is_none():
+    out = json.dumps({"type": "result", "is_error": False, "result": "done"})
+    assert runner.reported_cost_usd(out) is None
+
+
+def test_reported_cost_unparseable_is_none():
+    assert runner.reported_cost_usd("not json at all") is None
+    assert runner.reported_cost_usd("") is None
+
+
+def test_reported_cost_reads_the_last_result_event():
+    """Same rule cli_auth_failed uses: the LAST result envelope, so both answer
+    from the same bytes."""
+    out = "\n".join([
+        json.dumps({"type": "result", "total_cost_usd": 0.01}),
+        json.dumps({"type": "assistant", "total_cost_usd": 99.0}),
+        json.dumps({"type": "result", "total_cost_usd": 0.07}),
+    ])
+    assert runner.reported_cost_usd(out) == 0.07
+
+
+# --- metering follows the auth path ----------------------------------------- #
+def test_claude_on_api_key_is_metered(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", api_key_file(tmp_path))
+    assert runner.run_is_metered("claude-opus-5") is True
+
+
+def test_claude_on_subscription_is_not_metered(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", token_file(tmp_path))
+    assert runner.run_is_metered("claude-opus-5") is False
+
+
+def test_kimi_is_metered_regardless(tmp_path, monkeypatch):
+    """Negative control on the new rule: it must not have replaced the registry
+    fact, only widened it."""
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", str(tmp_path / "none.env"))
+    assert runner.run_is_metered("kimi-k3") is True
+
+
+def test_local_is_never_metered(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", api_key_file(tmp_path))
+    assert runner.run_is_metered("qwen3.8-27b-local") is False
+
+
+def test_row_dollars_prefers_the_reported_figure(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", api_key_file(tmp_path))
+    assert runner.row_dollars("claude-opus-5", 1000, 500, 0.0432) == 0.0432
+
+
+def test_row_dollars_falls_back_to_the_kimi_table(tmp_path, monkeypatch):
+    """Kimi has a real price table and no reported cost; that path must survive."""
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", str(tmp_path / "none.env"))
+    assert runner.row_dollars("kimi-k3", 1_000_000, 0, None) == pytest.approx(
+        runner.KIMI_PRICE_IN)
+
+
+def test_row_dollars_is_zero_when_nothing_is_known(tmp_path, monkeypatch):
+    """A claude row on API auth whose CLI reported no cost must contribute 0,
+    not a guess. It is still counted as metered, so the gap is visible as a
+    row with cost_usd=None rather than as a fabricated dollar figure."""
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", api_key_file(tmp_path))
+    assert runner.row_dollars("claude-opus-5", 1000, 500, None) == 0.0

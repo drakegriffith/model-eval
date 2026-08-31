@@ -75,7 +75,7 @@ LOCAL_TIMEOUT_EXTRAS = {"CLAUDE_STREAM_IDLE_TIMEOUT_MS", "API_TIMEOUT_MS"}
 # Present only when the operator has actually minted a token, so these tests
 # must pass on a host with no secrets file and on one with -- which is why the
 # name is PERMITTED here rather than REQUIRED.
-CLAUDE_AUTH_EXTRAS = {"CLAUDE_CODE_OAUTH_TOKEN"}
+CLAUDE_AUTH_EXTRAS = {"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"}
 
 # Added by the PLATFORM, not inherited: CoreFoundation stamps this into every
 # process it initialises on macOS. Verified rather than assumed -- launching a

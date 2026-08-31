@@ -146,14 +146,41 @@ def load_claude_token():
     return None
 
 
+def load_claude_api_key():
+    """Return ANTHROPIC_API_KEY from the out-of-repo secrets file, or None.
+
+    First-party console key, distinct from the subscription setup-token above.
+    Drake runs the claude arm on this deliberately: the API is more stable than
+    a subscription session, which cannot be re-authenticated without a human.
+    The value is never logged; callers inject it into a subprocess env only.
+    """
+    try:
+        with open(CLAUDE_TOKEN_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("ANTHROPIC_API_KEY="):
+                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    return val or None
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        return None
+    return None
+
+
 def claude_auth_source():
     """Name the credential path a claude-family row ran under.
+
+    Precedence -- api_key > oauth_token_env > inherited_login -- is decided
+    HERE rather than left to whichever variable the CLI happens to prefer. A
+    secrets file holding both must produce exactly one credential, or which one
+    authenticated the row is undecidable from the row itself.
 
     Recorded on every row. The 14 auth_unavailable rows of 2026-08-28 carried no
     such field, so nothing in the corpus can say which auth arrangement produced
     which row -- the rows are not invalidated by that, but they are not
     reproducible either, and a field is cheaper than the argument.
     """
+    if load_claude_api_key():
+        return "api_key"
     return "oauth_token_env" if load_claude_token() else "inherited_login"
 
 
@@ -180,6 +207,62 @@ def claude_cli_version():
         v = None
     _CLAUDE_CLI_VERSION_CACHE["v"] = v
     return v
+
+
+def reported_cost_usd(out):
+    """The CLI's own `total_cost_usd` from the LAST result event, or None.
+
+    Read from the CLI rather than computed from a price table in this repo.
+    registry.py's docstring points at a `pricing` module that does not exist,
+    and there is no rate here for opus-5/sonnet-5/haiku-4.5/fable-5 -- inventing
+    one would put a number with no enumerator behind it into the corpus.
+    probe_endpoints.py already reads this same field.
+
+    None, not 0.0, when absent or unparseable: "the CLI did not say" and "the
+    run was free" are different facts and only one of them is measured.
+    """
+    for line in reversed([l for l in (out or "").splitlines() if l.strip()]):
+        try:
+            cand = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(cand, dict) and cand.get("type") == "result":
+            v = cand.get("total_cost_usd")
+            return v if isinstance(v, (int, float)) else None
+    return None
+
+
+def run_is_metered(model):
+    """True when THIS run costs real money, auth path included.
+
+    is_metered() answers from the registry, which is a property of the model id
+    -- and every claude model declares metered=False because a subscription run
+    is $0. Point the same model at the first-party API and each row bills.
+    Metering is therefore a property of the credential, not of the model, and
+    --max-usd was silently inert for the claude family until this existed.
+
+    Widens the registry fact, never replaces it: kimi stays metered whatever the
+    claude credential looks like.
+    """
+    if is_metered(model):
+        return True
+    return (model_family(model) == "claude"
+            and claude_auth_source() == "api_key")
+
+
+def row_dollars(model, tokens_in, tokens_out, cost_usd):
+    """What this row contributes to cumulative spend.
+
+    Prefers the figure the CLI reported. Falls back to the kimi price table,
+    which is the one family this repo actually has rates for. Otherwise 0.0 --
+    the row still counts as metered, so a missing cost shows up as
+    cost_usd=None in the corpus rather than as a fabricated dollar amount.
+    """
+    if cost_usd is not None:
+        return float(cost_usd)
+    if model_family(model) == "kimi":
+        return kimi_dollars(tokens_in, tokens_out)
+    return 0.0
 
 
 def claude_auth_preflight(env):
@@ -1385,9 +1468,16 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=Non
         # Absent token: set NOTHING. An empty-string variable is a different and
         # worse failure than a missing one -- the CLI reports "invalid" instead
         # of falling through to whatever credential it can still find.
-        _claude_token = load_claude_token()
-        if _claude_token:
-            env["CLAUDE_CODE_OAUTH_TOKEN"] = _claude_token
+        # Exactly one credential reaches the child, chosen by the precedence
+        # claude_auth_source() declares, so the row's auth_source field and the
+        # variable actually set can never disagree.
+        _api_key = load_claude_api_key()
+        if _api_key:
+            env["ANTHROPIC_API_KEY"] = _api_key
+        else:
+            _claude_token = load_claude_token()
+            if _claude_token:
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = _claude_token
     elif model is not None and model_family(model) == "local":
         # studio/local-family: same lever as the kimi arm above, pointed at an
         # LM Studio server on loopback instead of Moonshot. No key file and no
@@ -2135,6 +2225,11 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None
     # field entirely -- absent means NOT isolated, i.e. a harness=False row
     # that carried whatever global harness lived in the operator's home.
     home_isolated = None
+    # None, not 0.0, and initialised beside home_isolated for the same reason:
+    # the mock path never launches a CLI, so there is no envelope to read a cost
+    # from. "The CLI did not report one" and "the run was free" are different
+    # facts, and a mock row must not claim the second.
+    cost_usd = None
     # ticket 17: the same three questions for the acceptance cap. brokered=false
     # is a protocol-v1 row and the pre-registration forbids pooling it with v2,
     # so it is a field rather than an assumption about commit dates.
@@ -2189,6 +2284,7 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None
             home_isolated = home_isolation_enabled()
             out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir,
                                                run["model"], bk=bk)
+            cost_usd = reported_cost_usd(out)
             usage_detail = usage_ledger.parse_usage_detailed(model_family(run["model"]), out)
             tokens_in = usage_detail["tokens_in"]
             tokens_out = usage_detail["tokens_out"]
@@ -2317,6 +2413,10 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None
         # measured.
         "auth_source": (claude_auth_source()
                         if model_family(run["model"]) == "claude" else None),
+        # The CLI's own figure, never a rate table in this repo. None means the
+        # CLI did not report one -- distinct from 0.0, which means free.
+        "cost_usd": cost_usd,
+        "metered": run_is_metered(run["model"]),
         "claude_cli_version": (claude_cli_version()
                                if model_family(run["model"]) == "claude"
                                else None),
@@ -2739,20 +2839,25 @@ def main():
             print(f"  [{mark}] {r['run_id']}  (mode={r['mode']})")
         return
 
-    kimi_spent = 0.0
+    # Renamed from kimi_spent: the claude family bills too once it runs on an
+    # API key, and a variable named for one family is how --max-usd came to be
+    # inert for every other one.
+    spent = 0.0
     for i, r in enumerate(pending, 1):
-        if is_metered(r["model"]) and args.max_usd is not None and kimi_spent >= args.max_usd:
-            print(f"    [cap] kimi spend ${kimi_spent:.2f} >= --max-usd "
+        if run_is_metered(r["model"]) and args.max_usd is not None and spent >= args.max_usd:
+            print(f"    [cap] metered spend ${spent:.2f} >= --max-usd "
                   f"${args.max_usd:.2f}; skipping {r['run_id']}", flush=True)
             continue
         print(f"[{i}/{len(pending)}] {r['run_id']} ...", flush=True)
         row = execute_run(r, cfg, args.tasks_dir, args.scratch, args.results,
                           usage_path)
         cost_note = ""
-        if is_metered(r["model"]):
-            kimi_spent += kimi_dollars(row["tokens_in"], row["tokens_out"])
+        if run_is_metered(r["model"]):
+            spent += row_dollars(r["model"], row["tokens_in"],
+                                 row["tokens_out"], row.get("cost_usd"))
             cap = f"/{args.max_usd:.2f}" if args.max_usd is not None else ""
-            cost_note = f" kimi_spend=${kimi_spent:.3f}{cap}"
+            unknown = "" if row.get("cost_usd") is not None else " (cost unreported)"
+            cost_note = f" spend=${spent:.3f}{cap}{unknown}"
         acc = ""
         if row["acceptance_requests"] is not None:
             acc = f" acc={row['acceptance_requests']}/{row['k_cap']}"
