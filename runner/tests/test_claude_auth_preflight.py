@@ -489,3 +489,57 @@ def test_row_dollars_is_zero_when_nothing_is_known(tmp_path, monkeypatch):
     row with cost_usd=None rather than as a fabricated dollar figure."""
     monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", api_key_file(tmp_path))
     assert runner.row_dollars("claude-opus-5", 1000, 500, None) == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# key_source must not contradict auth_source.
+#
+# invocation_provenance() hardcoded key_source="subscription" for claude, which was
+# true while a subscription was the only claude credential. This PR made
+# api_key possible, so a single row could carry auth_source=api_key alongside
+# key_source=subscription -- two provenance fields disagreeing about how the
+# same run authenticated. Observed on the first live API row, 2026-09-01.
+#
+# key_source stays a PATH or a WORD, never a value, per its own docstring.
+# --------------------------------------------------------------------------- #
+def test_key_source_follows_the_claude_auth_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", api_key_file(tmp_path))
+    p = runner.invocation_provenance("claude-haiku-4-5")
+    assert p["key_source"] == runner.CLAUDE_TOKEN_FILE
+    assert p["key_source"] != "subscription"
+
+
+def test_key_source_still_says_subscription_without_a_secrets_file(
+        tmp_path, monkeypatch):
+    """Negative control: the original value must survive the case it was
+    written for, or this 'fix' would just be a different wrong answer."""
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", str(tmp_path / "none.env"))
+    assert runner.invocation_provenance("claude-haiku-4-5")["key_source"] == \
+        "subscription"
+
+
+def test_key_source_never_carries_the_credential_value(tmp_path, monkeypatch):
+    """The docstring's own hard rule, asserted rather than trusted."""
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", api_key_file(tmp_path))
+    ks = runner.invocation_provenance("claude-haiku-4-5")["key_source"]
+    assert "sk-ant" not in ks
+
+
+def test_key_source_and_auth_source_agree(tmp_path, monkeypatch):
+    """The property that actually matters: one row, one story about auth."""
+    for f, expect_file in ((api_key_file(tmp_path), True),
+                           (token_file(tmp_path), True),
+                           (str(tmp_path / "none.env"), False)):
+        monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", f)
+        ks = runner.invocation_provenance("claude-haiku-4-5")["key_source"]
+        src = runner.claude_auth_source()
+        if expect_file:
+            assert src in ("api_key", "oauth_token_env") and ks == f
+        else:
+            assert src == "inherited_login" and ks == "subscription"
+
+
+def test_kimi_key_source_is_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", api_key_file(tmp_path))
+    assert runner.invocation_provenance("kimi-k3")["key_source"] == \
+        runner.KIMI_KEY_FILE

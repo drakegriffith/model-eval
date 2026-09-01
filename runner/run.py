@@ -1277,7 +1277,16 @@ def invocation_provenance(model):
         # The runner sets no base URL for claude/codex, and after F1 no ambient
         # one can reach them either. None is the honest value; a synthesised URL
         # would assert a fact this code does not have.
-        endpoint, source, key_source = None, "vendor_default", "subscription"
+        endpoint, source = None, "vendor_default"
+        # Was hardcoded "subscription", which was true while a subscription was
+        # the only claude credential. Once a run can authenticate from the
+        # secrets file, that constant contradicts auth_source on the same row --
+        # observed live 2026-09-01: auth_source=api_key beside
+        # key_source=subscription. Still a PATH or a WORD, never a value.
+        if family == "claude" and (load_claude_api_key() or load_claude_token()):
+            key_source = CLAUDE_TOKEN_FILE
+        else:
+            key_source = "subscription"
 
     return {
         "serving_endpoint": endpoint,
