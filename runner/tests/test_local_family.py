@@ -181,4 +181,14 @@ def test_run_cli_claude_family_does_not_gain_local_env_vars(repo, monkeypatch):
     env = via_run_cli(repo, "claude-sonnet-5", monkeypatch)
 
     assert "ANTHROPIC_BASE_URL" not in env
-    assert "ANTHROPIC_API_KEY" not in env
+    # ANTHROPIC_API_KEY is no longer asserted absent: the claude arm sets it
+    # DELIBERATELY from the secrets file when one exists (2026-08-31), so
+    # absence is no longer the correct expectation and asserting it would make
+    # this test fail on any host where the operator has configured the arm.
+    # What must still hold is that it did not come from the LOCAL branch this
+    # test guards -- the local placeholder is paired with a loopback base URL,
+    # and that pairing is what the assertion above rules out.
+    if "ANTHROPIC_API_KEY" in env:
+        assert env["ANTHROPIC_API_KEY"] == runner.load_claude_api_key(), (
+            "claude arm carries an ANTHROPIC_API_KEY that did not come from "
+            "the secrets file")

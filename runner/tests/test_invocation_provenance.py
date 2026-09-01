@@ -129,10 +129,31 @@ def test_a_local_row_records_that_its_token_is_a_placeholder():
     assert prov["key_source"] == "placeholder"
 
 
-def test_a_subscription_row_records_no_key_file():
+def test_a_subscription_row_records_no_key_file(tmp_path, monkeypatch):
+    """Still true of a genuine subscription row -- which now has to be STATED.
+
+    This test used to pass on a hardcoded constant, so it asserted nothing about
+    the host it ran on. Once the claude arm could authenticate from a secrets
+    file, that constant became a contradiction: a row could read
+    auth_source=api_key beside key_source=subscription. The subject is now
+    pinned, so this asserts the subscription case instead of the constant.
+    """
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE",
+                        str(tmp_path / "no-secrets-here.env"))
     prov = runner.invocation_provenance("claude-sonnet-5")
 
     assert prov["key_source"] == "subscription"
+
+
+def test_a_secrets_file_row_records_the_file_not_the_word(tmp_path, monkeypatch):
+    """The other half, which is the case that actually regressed."""
+    f = tmp_path / "claude.env"
+    f.write_text("ANTHROPIC_API_KEY=sk-ant-api03-TESTONLY\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "CLAUDE_TOKEN_FILE", str(f))
+    prov = runner.invocation_provenance("claude-sonnet-5")
+
+    assert prov["key_source"] == str(f)
+    assert "sk-ant" not in prov["key_source"], "key_source leaked a credential"
 
 
 # --------------------------------------------------------------------------- #

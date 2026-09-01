@@ -76,6 +76,20 @@ KIMI_KEY_FILE = os.path.expanduser(
 # Codex 0.144 only speaks the Responses API, which Moonshot doesn't serve; instead
 # we drive K3 through Claude Code against Moonshot's Anthropic-compatible endpoint.
 MOONSHOT_ANTHROPIC_URL = "https://api.moonshot.ai/anthropic"
+# The claude family's own credential, same shape and same rules as the kimi key
+# above: read at runtime from a secrets file that lives OUTSIDE every repo,
+# injected into a child env only, never hard-coded, echoed or committed.
+#
+# WHY A TOKEN AND NOT THE KEYCHAIN. run_cli scopes both HOME and
+# CLAUDE_CONFIG_DIR (below), and the macOS subscription credential is keyed PER
+# CONFIG DIR -- see the auth-availability block further down. So there are two
+# independent severs: an unreachable login Keychain AND a per-config-dir service
+# name that cannot exist for a fresh tempdir. Linking Library/Keychains into the
+# scoped home fixes only the first, which is why that option was rejected. An
+# injected token answers both and widens the filesystem seal by nothing.
+CLAUDE_TOKEN_FILE = os.path.expanduser(
+    os.environ.get("GAUNTLET_CLAUDE_TOKEN_FILE", "~/.secrets/claude.env")
+)
 # List-price $/1M tokens. Cache-miss input is $3; cache-hit is $0.30. We charge
 # the cap at the conservative cache-miss rate.
 KIMI_PRICE_IN = 3.0
@@ -109,6 +123,188 @@ def load_kimi_key():
     except FileNotFoundError:
         return None
     return None
+
+
+def load_claude_token():
+    """Return CLAUDE_CODE_OAUTH_TOKEN from the out-of-repo secrets file, or None.
+
+    The value is never logged; callers inject it into a subprocess env only.
+    Mint one with `claude setup-token`. Absent file and present-but-keyless file
+    are both None: the caller must not set an empty variable, because an empty
+    credential and no credential are different failures and the CLI reports them
+    differently.
+    """
+    try:
+        with open(CLAUDE_TOKEN_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("CLAUDE_CODE_OAUTH_TOKEN="):
+                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    return val or None
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        return None
+    return None
+
+
+def load_claude_api_key():
+    """Return ANTHROPIC_API_KEY from the out-of-repo secrets file, or None.
+
+    First-party console key, distinct from the subscription setup-token above.
+    Drake runs the claude arm on this deliberately: the API is more stable than
+    a subscription session, which cannot be re-authenticated without a human.
+    The value is never logged; callers inject it into a subprocess env only.
+    """
+    try:
+        with open(CLAUDE_TOKEN_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("ANTHROPIC_API_KEY="):
+                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    return val or None
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        return None
+    return None
+
+
+def claude_auth_source():
+    """Name the credential path a claude-family row ran under.
+
+    Precedence -- api_key > oauth_token_env > inherited_login -- is decided
+    HERE rather than left to whichever variable the CLI happens to prefer. A
+    secrets file holding both must produce exactly one credential, or which one
+    authenticated the row is undecidable from the row itself.
+
+    Recorded on every row. The 14 auth_unavailable rows of 2026-08-28 carried no
+    such field, so nothing in the corpus can say which auth arrangement produced
+    which row -- the rows are not invalidated by that, but they are not
+    reproducible either, and a field is cheaper than the argument.
+    """
+    if load_claude_api_key():
+        return "api_key"
+    return "oauth_token_env" if load_claude_token() else "inherited_login"
+
+
+_CLAUDE_CLI_VERSION_CACHE = {}
+
+
+def claude_cli_version():
+    """The `claude` binary's own version string, or None when it cannot be read.
+
+    None, never a default. The outage rows recorded a symlinked binary PATH,
+    which names a pointer rather than a build; a fabricated version would be the
+    row asserting something nobody measured.
+    """
+    if "v" in _CLAUDE_CLI_VERSION_CACHE:
+        return _CLAUDE_CLI_VERSION_CACHE["v"]
+    v = None
+    try:
+        p = subprocess.run(["claude", "--version"], capture_output=True,
+                           text=True, timeout=30)
+        if p.returncode == 0:
+            m = re.search(r"\d+\.\d+\.\d+", p.stdout or "")
+            v = m.group(0) if m else None
+    except (OSError, subprocess.SubprocessError):
+        v = None
+    _CLAUDE_CLI_VERSION_CACHE["v"] = v
+    return v
+
+
+def reported_cost_usd(out):
+    """The CLI's own `total_cost_usd` from the LAST result event, or None.
+
+    Read from the CLI rather than computed from a price table in this repo.
+    registry.py's docstring points at a `pricing` module that does not exist,
+    and there is no rate here for opus-5/sonnet-5/haiku-4.5/fable-5 -- inventing
+    one would put a number with no enumerator behind it into the corpus.
+    probe_endpoints.py already reads this same field.
+
+    None, not 0.0, when absent or unparseable: "the CLI did not say" and "the
+    run was free" are different facts and only one of them is measured.
+    """
+    for line in reversed([l for l in (out or "").splitlines() if l.strip()]):
+        try:
+            cand = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(cand, dict) and cand.get("type") == "result":
+            v = cand.get("total_cost_usd")
+            return v if isinstance(v, (int, float)) else None
+    return None
+
+
+def run_is_metered(model):
+    """True when THIS run costs real money, auth path included.
+
+    is_metered() answers from the registry, which is a property of the model id
+    -- and every claude model declares metered=False because a subscription run
+    is $0. Point the same model at the first-party API and each row bills.
+    Metering is therefore a property of the credential, not of the model, and
+    --max-usd was silently inert for the claude family until this existed.
+
+    Widens the registry fact, never replaces it: kimi stays metered whatever the
+    claude credential looks like.
+    """
+    if is_metered(model):
+        return True
+    return (model_family(model) == "claude"
+            and claude_auth_source() == "api_key")
+
+
+def row_dollars(model, tokens_in, tokens_out, cost_usd):
+    """What this row contributes to cumulative spend.
+
+    Prefers the figure the CLI reported. Falls back to the kimi price table,
+    which is the one family this repo actually has rates for. Otherwise 0.0 --
+    the row still counts as metered, so a missing cost shows up as
+    cost_usd=None in the corpus rather than as a fabricated dollar amount.
+    """
+    if cost_usd is not None:
+        return float(cost_usd)
+    if model_family(model) == "kimi":
+        return kimi_dollars(tokens_in, tokens_out)
+    return 0.0
+
+
+def claude_auth_preflight(env):
+    """(ok, detail) for whether `claude` can authenticate under EXACTLY `env`.
+
+    The parent process is logged in -- that is precisely why the 2026-08-28
+    outage was invisible until a dispatch had been spent. So this is handed the
+    child env the model will actually receive, scoped HOME and all, and asks the
+    CLI itself rather than inferring from the presence of a file.
+
+    WHAT THIS CANNOT TELL YOU. `claude auth status` reports on the credential it
+    can SEE, not one it has exercised: measured 2026-08-31, it answers
+    loggedIn=true method=oauth_token for a well-formed setup-token that the API
+    then rejects with 401. So this gate catches the absent credential -- the
+    2026-08-28 outage, where a scoped HOME had nothing at all -- and does not
+    catch an expired or revoked one. That case still costs one row, and is
+    caught after the fact by cli_auth_failed() reading api_error_status. Closing
+    it here would mean spending a real request per sweep to prove the token
+    works, which is a trade worth making only if revoked tokens become common.
+
+    FAIL CLOSED, WITH ONE EXCEPTION. A CLI that answers "not logged in" is a
+    refusal. A preflight that cannot RUN -- no binary, timeout, unparseable
+    output -- returns True: this is an instrument check, and letting an
+    unreadable check block the sweep would convert an apparatus fault into a
+    fleet-wide outage. The run then fails the way it always did, on the CLI's
+    own envelope via cli_auth_failed(), which is no worse than before this
+    function existed.
+    """
+    try:
+        p = subprocess.run(["claude", "auth", "status", "--json"],
+                           capture_output=True, text=True, timeout=60, env=env)
+    except (OSError, subprocess.SubprocessError) as e:
+        return True, "preflight-could-not-run: %s" % type(e).__name__
+    try:
+        obj = json.loads(p.stdout or "")
+    except json.JSONDecodeError:
+        return True, "preflight-unparseable"
+    if not isinstance(obj, dict) or "loggedIn" not in obj:
+        return True, "preflight-no-verdict"
+    if obj.get("loggedIn"):
+        return True, "loggedIn=true method=%s" % (obj.get("authMethod") or "?")
+    return False, "loggedIn=false"
 
 
 def kimi_dollars(tokens_in, tokens_out):
@@ -839,6 +1035,18 @@ def cli_auth_failed(out):
             break
     if not isinstance(obj, dict) or not obj.get("is_error"):
         return False
+    # Structural signal first. Measured 2026-08-31 against claude 2.1.252 with
+    # a rejected setup-token: the CLI returns api_error_status 401 and the prose
+    # "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+    # which matches none of the four markers below -- so the row landed as
+    # cli_error, the bucket the pre-registration reads as the MODEL having
+    # failed, for a run in which the model was never asked anything.
+    #
+    # Only 401 and 403. Not "any nonzero status": a 500 or a 529 is a real
+    # server fault and relabelling those as auth would hide outages inside the
+    # one bucket nobody re-runs.
+    if obj.get("api_error_status") in (401, 403):
+        return True
     text = str(obj.get("result") or "").lower()
     return any(m in text for m in AUTH_FAILURE_MARKERS)
 
@@ -1069,7 +1277,16 @@ def invocation_provenance(model):
         # The runner sets no base URL for claude/codex, and after F1 no ambient
         # one can reach them either. None is the honest value; a synthesised URL
         # would assert a fact this code does not have.
-        endpoint, source, key_source = None, "vendor_default", "subscription"
+        endpoint, source = None, "vendor_default"
+        # Was hardcoded "subscription", which was true while a subscription was
+        # the only claude credential. Once a run can authenticate from the
+        # secrets file, that constant contradicts auth_source on the same row --
+        # observed live 2026-09-01: auth_source=api_key beside
+        # key_source=subscription. Still a PATH or a WORD, never a value.
+        if family == "claude" and (load_claude_api_key() or load_claude_token()):
+            key_source = CLAUDE_TOKEN_FILE
+        else:
+            key_source = "subscription"
 
     return {
         "serving_endpoint": endpoint,
@@ -1225,6 +1442,18 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=Non
     `broker_failed` (the counter faulted, so the run is uncounted and unusable
     under the pre-registration).
     """
+    # Wall clock for the whole call, not just the child: a preflight
+    # refusal is a real elapsed cost and a row that reports 0.0s for it
+    # would understate what the sweep spent.
+    t0_outer = time.time()
+    # Whether this call actually launches the `claude` binary. The auth
+    # preflight below asks "can `claude` log in", which is a question only worth
+    # asking when `claude` is what runs: most of this repo's tests drive
+    # run_cli() with a stand-in binary precisely so they can test env scoping,
+    # home isolation and exit labelling WITHOUT a credential, and gating those
+    # on a real login would make the instrument's own test suite depend on the
+    # operator being signed in. Read before the sandbox prefix is prepended.
+    cmd_is_claude_cli = bool(cmd) and os.path.basename(str(cmd[0])) == "claude"
     env = child_env()
     if model is not None and model_family(model) == "kimi":
         key = load_kimi_key()
@@ -1234,6 +1463,30 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=Non
         env["ANTHROPIC_BASE_URL"] = MOONSHOT_ANTHROPIC_URL
         env["ANTHROPIC_API_KEY"] = key
         env["ANTHROPIC_AUTH_TOKEN"] = key   # some Claude Code versions read this
+    elif model is not None and model_family(model) == "claude":
+        # The subscription credential, injected rather than inherited. See
+        # CLAUDE_TOKEN_FILE for why the keychain cannot be reached from a scoped
+        # HOME + CLAUDE_CONFIG_DIR no matter what is linked into it.
+        #
+        # NOT added to CHILD_ENV_ALLOWLIST. That list's stated contract is
+        # "nothing on this list can carry a credential"; this is a credential,
+        # so it is injected here per-family, exactly where the kimi key is, and
+        # only for the family it belongs to. A local or codex row must not
+        # receive a claude subscription token because one happens to be on disk.
+        #
+        # Absent token: set NOTHING. An empty-string variable is a different and
+        # worse failure than a missing one -- the CLI reports "invalid" instead
+        # of falling through to whatever credential it can still find.
+        # Exactly one credential reaches the child, chosen by the precedence
+        # claude_auth_source() declares, so the row's auth_source field and the
+        # variable actually set can never disagree.
+        _api_key = load_claude_api_key()
+        if _api_key:
+            env["ANTHROPIC_API_KEY"] = _api_key
+        else:
+            _claude_token = load_claude_token()
+            if _claude_token:
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = _claude_token
     elif model is not None and model_family(model) == "local":
         # studio/local-family: same lever as the kimi arm above, pointed at an
         # LM Studio server on loopback instead of Moonshot. No key file and no
@@ -1336,6 +1589,33 @@ def run_cli(cmd, scratch, timeout_s, task_dir, model=None, bk=None, home_dir=Non
                   "history, AND write to results.jsonl, the canonical tasks "
                   "and other runs' scratch trees; this row is marked "
                   "sealed=false write_contained=false", file=sys.stderr)
+        # ------------------------------------------------------------------ #
+        # Auth preflight -- ask once, before the dispatch, under the EXACT env
+        # the model is about to get.
+        #
+        # On 2026-08-28 a cross-family sweep spent one attempt per row to
+        # discover the same fact 14 times: opus 4, sonnet 4, haiku 3, fable 3,
+        # all exit_reason=auth_unavailable, all tokens_in=0/tokens_out=0, no
+        # request ever sent. cli_auth_failed() below still catches this after
+        # the fact and still labels it correctly; what it cannot do is decline
+        # to spend the attempt.
+        #
+        # SCOPED TO THE CLAUDE FAMILY ON PURPOSE. scoped_claude_home() is
+        # entered unconditionally for every family, so a check placed there
+        # would reject codex, kimi and local rows -- families whose credentials
+        # this preflight knows nothing about and has no standing to judge.
+        # ------------------------------------------------------------------ #
+        if (model is not None and model_family(model) == "claude"
+                and cmd_is_claude_cli):
+            _auth_ok, _auth_detail = claude_auth_preflight(env)
+            if not _auth_ok:
+                print("PREFLIGHT: claude auth unavailable under the scoped "
+                      "child environment (%s); refusing before dispatch. "
+                      "Mint a token with `claude setup-token` and store it as "
+                      "CLAUDE_CODE_OAUTH_TOKEN in %s."
+                      % (_auth_detail, CLAUDE_TOKEN_FILE), file=sys.stderr)
+                return "", "auth_unavailable", round(time.time() - t0_outer, 2)
+
         t0 = time.time()
         proc = subprocess.Popen(cmd, cwd=scratch, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1954,6 +2234,11 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None
     # field entirely -- absent means NOT isolated, i.e. a harness=False row
     # that carried whatever global harness lived in the operator's home.
     home_isolated = None
+    # None, not 0.0, and initialised beside home_isolated for the same reason:
+    # the mock path never launches a CLI, so there is no envelope to read a cost
+    # from. "The CLI did not report one" and "the run was free" are different
+    # facts, and a mock row must not claim the second.
+    cost_usd = None
     # ticket 17: the same three questions for the acceptance cap. brokered=false
     # is a protocol-v1 row and the pre-registration forbids pooling it with v2,
     # so it is a field rather than an assumption about commit dates.
@@ -2008,6 +2293,7 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None
             home_isolated = home_isolation_enabled()
             out, exit_reason, wall_s = run_cli(cmd, scratch, timeout_s, task_dir,
                                                run["model"], bk=bk)
+            cost_usd = reported_cost_usd(out)
             usage_detail = usage_ledger.parse_usage_detailed(model_family(run["model"]), out)
             tokens_in = usage_detail["tokens_in"]
             tokens_out = usage_detail["tokens_out"]
@@ -2122,6 +2408,27 @@ def execute_run(run, cfg, tasks_dir, scratch_root, results_path, usage_path=None
         "home_isolated": home_isolated,
         # ticket 32: which instrument produced this row's session shape.
         "invocation_mode": invocation_mode,
+        # 2026-08-31: which credential path, and which CLI build, produced this
+        # row. The 14 auth_unavailable rows of 2026-08-28 carried neither, so
+        # the corpus cannot say what auth arrangement any earlier claude row ran
+        # under, nor which binary ran it -- the rows record a symlinked PATH,
+        # which names a pointer and not a build. Those rows are not invalidated
+        # by the gap; they are simply not reproducible, and two fields are
+        # cheaper than that argument.
+        #
+        # None for every non-claude family, never a default string: kimi gets a
+        # Moonshot key and local gets a loopback endpoint, and labelling either
+        # with a claude auth path would be this row asserting something nobody
+        # measured.
+        "auth_source": (claude_auth_source()
+                        if model_family(run["model"]) == "claude" else None),
+        # The CLI's own figure, never a rate table in this repo. None means the
+        # CLI did not report one -- distinct from 0.0, which means free.
+        "cost_usd": cost_usd,
+        "metered": run_is_metered(run["model"]),
+        "claude_cli_version": (claude_cli_version()
+                               if model_family(run["model"]) == "claude"
+                               else None),
         # ticket 17. acceptance_requests is the design parameter K governs, and
         # it is counted by the broker rather than inferred from CLI telemetry --
         # which is what makes it comparable across families, unlike `turns`
@@ -2541,20 +2848,25 @@ def main():
             print(f"  [{mark}] {r['run_id']}  (mode={r['mode']})")
         return
 
-    kimi_spent = 0.0
+    # Renamed from kimi_spent: the claude family bills too once it runs on an
+    # API key, and a variable named for one family is how --max-usd came to be
+    # inert for every other one.
+    spent = 0.0
     for i, r in enumerate(pending, 1):
-        if is_metered(r["model"]) and args.max_usd is not None and kimi_spent >= args.max_usd:
-            print(f"    [cap] kimi spend ${kimi_spent:.2f} >= --max-usd "
+        if run_is_metered(r["model"]) and args.max_usd is not None and spent >= args.max_usd:
+            print(f"    [cap] metered spend ${spent:.2f} >= --max-usd "
                   f"${args.max_usd:.2f}; skipping {r['run_id']}", flush=True)
             continue
         print(f"[{i}/{len(pending)}] {r['run_id']} ...", flush=True)
         row = execute_run(r, cfg, args.tasks_dir, args.scratch, args.results,
                           usage_path)
         cost_note = ""
-        if is_metered(r["model"]):
-            kimi_spent += kimi_dollars(row["tokens_in"], row["tokens_out"])
+        if run_is_metered(r["model"]):
+            spent += row_dollars(r["model"], row["tokens_in"],
+                                 row["tokens_out"], row.get("cost_usd"))
             cap = f"/{args.max_usd:.2f}" if args.max_usd is not None else ""
-            cost_note = f" kimi_spend=${kimi_spent:.3f}{cap}"
+            unknown = "" if row.get("cost_usd") is not None else " (cost unreported)"
+            cost_note = f" spend=${spent:.3f}{cap}{unknown}"
         acc = ""
         if row["acceptance_requests"] is not None:
             acc = f" acc={row['acceptance_requests']}/{row['k_cap']}"
